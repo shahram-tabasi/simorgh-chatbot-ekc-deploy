@@ -139,6 +139,20 @@ export interface Pen {
    * along without knowing it exists.
    */
   pin?: string;
+  /**
+   * Which way the wire leaves this connection point.
+   *
+   * The draughtsman's answer, carried from the symbol page. It used to be
+   * inferred — a point near the top of the box was fed from above — and the
+   * inference is right for a breaker and wrong for everything tapped from the
+   * side, which is a wire drawn back through the middle of the device it is
+   * meant to reach.
+   *
+   * Absent on every terminal placed before this existed, and on loose ones
+   * somebody dropped on a sheet; the router falls back to its own choice for
+   * those, which is what it always did.
+   */
+  pinDir?: 'up' | 'down' | 'left' | 'right';
 }
 
 export type Pt = [number, number];

@@ -22,6 +22,10 @@ export function toSymbolOverrides(
       height: art.height,
       pinX: art.pinX,
       cells: art.cells,
+      // The connection points travel with the drawing they were placed on.
+      // Left behind, the library falls back to inventing two on the conductor
+      // — which is the drawing the office has just finished correcting.
+      terminals: art.terminals,
       title: 'Redrawn for this project',
     };
   }

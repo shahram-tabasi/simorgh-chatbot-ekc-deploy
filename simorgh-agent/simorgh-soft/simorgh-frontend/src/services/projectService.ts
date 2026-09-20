@@ -143,8 +143,14 @@ export interface OfficeSymbol {
   art: string;
   width: number;
   height: number;
-  /** Where a wire may land on it, and what each point is called. */
-  terminals: { x: number; y: number; name: string }[];
+  /**
+   * Where a wire may land on it, what each point is called, and which way the
+   * wire leaves it.
+   *
+   * `dir` is optional because every symbol saved before it existed has none,
+   * and a library that will not open its own back catalogue is no library.
+   */
+  terminals: { x: number; y: number; name: string; dir?: string }[];
   /**
    * The symbol this one is a face of — its key in the library, not its name.
    *

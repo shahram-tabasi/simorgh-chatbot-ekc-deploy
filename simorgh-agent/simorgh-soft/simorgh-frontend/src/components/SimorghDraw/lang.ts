@@ -150,6 +150,26 @@ export interface Strings {
   libNotALibrary: string;
   libNewGroup: string; libNewGroupName: string; libVariant: string;
   libVariantNote: string; libRedraw: string; libRedrawNote: string;
+
+  // ── The symbol page ──
+  // Redrawing one symbol: the frame it has to be drawn in, the drawing
+  // brought in from a file, and the points a wire lands on.
+  symBack: string; symBackShort: string;
+  symSave: string; symSaveTip: string; symSaveNothing: string;
+  symLibrary: string; symLibraryTip: string;
+  symOwnDrawing: string;
+  symFrameNote: (w: string, h: string, cells: number, cell: number, pin: string) => string;
+  symOverflow: string;
+  symImport: string; symImportTip: string;
+  symImported: (file: string, percent: number, pins: number, onAxis: boolean) => string;
+  symImportEmpty: (file: string) => string;
+  symImportUnreadable: (file: string) => string;
+  symPins: string; symPinAdd: string; symPinRemove: string; symPinName: string;
+  symPinDir: (d: 'up' | 'down' | 'left' | 'right') => string;
+  symPinAdded: (name: string) => string;
+  symPinsRestore: string; symPinsRestored: string; symPinsNone: string;
+  symPinsHelp: string;
+  symFooter: string;
   libRedrawnHere: string; libPack: string;
   // The assistant panel's two tabs
   askModeDraw: string; askModePlc: string; askDrawNote: string; askPlcNote: string;
@@ -403,6 +423,42 @@ const EN: Strings = {
   libVariantNote: 'Start a new symbol from this one — same drawing, same connection points, your own name. For the LSI, the LSIG and the LI of a breaker you have already drawn once.',
   libRedraw: 'Redraw for this project',
   libRedrawNote: 'Draw your own version of this symbol, used by this project only. To give it to every project, add it as a variant instead.',
+
+  symBack: 'Back to the symbol library',
+  symBackShort: 'Symbols',
+  symSave: 'Save',
+  symSaveTip: 'Keep this drawing with the project, and put it on every sheet that uses the symbol',
+  symSaveNothing: 'Nothing drawn since the last save',
+  symLibrary: 'Library symbol',
+  symLibraryTip: "Put the library's own drawing back for this project",
+  symOwnDrawing: 'this project has its own drawing of it',
+  symFrameNote: (w, h, cells, cell, pin) =>
+    `Draw inside ${w} × ${h} — ${cells} cell${cells === 1 ? '' : 's'} of ${cell} — conductor at ${pin}`,
+  symOverflow: 'Some of the drawing is outside the frame. It will be scaled down to fit when the symbol is placed, so it will come out smaller than the ones beside it.',
+  symImport: 'Import drawing',
+  symImportTip: "Replace this symbol's drawing with a DXF or SVG, fitted to the frame",
+  symImported: (file, percent, pins, onAxis) =>
+    `${file} is now this symbol's drawing — scaled to ${percent}%, `
+    + `${onAxis ? 'lined up on its own conductor' : 'centred on the conductor'}, `
+    + `${pins} connection point${pins === 1 ? '' : 's'}. Save to put it on the sheets.`,
+  symImportEmpty: file => `${file} holds no geometry this can read.`,
+  symImportUnreadable: file => `${file} could not be read. A DXF or an SVG is what this takes.`,
+  symPins: 'Connection points',
+  symPinAdd: 'Add a connection point',
+  symPinRemove: 'Remove this connection point',
+  symPinName: 'What the device prints beside it — 1, 2, A1, 13',
+  symPinDir: d => ({
+    up: 'The wire leaves upwards',
+    down: 'The wire leaves downwards',
+    left: 'The wire leaves to the left',
+    right: 'The wire leaves to the right',
+  })[d],
+  symPinAdded: name => `Connection point ${name} added at the middle of the conductor — drag it where it goes.`,
+  symPinsRestore: 'Put the two default points back',
+  symPinsRestored: 'Back to one point at each end of the conductor.',
+  symPinsNone: 'No connection points. A symbol without them can be placed and cannot be wired: it will never appear in a connection list.',
+  symPinsHelp: 'Drag a point on the drawing to move it. The arrow is the way the wire leaves it, and a wire drawn to it will go that way.',
+  symFooter: 'Save keeps this drawing with the project — every sheet that uses this symbol picks it up, and the ones already drawn are offered the new one. The library\'s own symbol is never changed.',
   libRedrawnHere: 'redrawn for this project',
   libPack: 'DXF pack',
   askModeDraw: 'Draw',
@@ -704,6 +760,42 @@ const FA: Strings = {
   libVariantNote: 'یک سیمبل تازه از روی همین بساز — همان نقشه، همان نقاط اتصال، نام خودت. برای LSI و LSIG و LI یک کلید که یک‌بار کشیده‌ای.',
   libRedraw: 'بازکشیدن برای این پروژه',
   libRedrawNote: 'نسخه‌ی خودت از این سیمبل را بکش؛ فقط همین پروژه از آن استفاده می‌کند. اگر می‌خواهی همه‌ی پروژه‌ها داشته باشند، به‌جایش گونه اضافه کن.',
+
+  symBack: 'بازگشت به کتابخانهٔ سیمبل‌ها',
+  symBackShort: 'سیمبل‌ها',
+  symSave: 'ذخیره',
+  symSaveTip: 'این نقشه با پروژه می‌ماند و هر جا این سیمبل به کار رفته می‌نشیند',
+  symSaveNothing: 'از ذخیرهٔ قبلی چیزی کشیده نشده',
+  symLibrary: 'سیمبل کتابخانه',
+  symLibraryTip: 'نقشهٔ خود کتابخانه را برای این پروژه برگردان',
+  symOwnDrawing: 'این پروژه نقشهٔ خودش را از آن دارد',
+  symFrameNote: (w, h, cells, cell, pin) =>
+    `درون ${w} × ${h} بکشید — ${cells} خانهٔ ${cell}‌تایی — هادی روی ${pin}`,
+  symOverflow: 'بخشی از نقشه بیرون از قاب است. هنگام قرار گرفتن، کوچک می‌شود تا جا شود، پس کوچک‌تر از سیمبل‌های کنارش درمی‌آید.',
+  symImport: 'وارد کردن نقشه',
+  symImportTip: 'نقشهٔ این سیمبل را با یک DXF یا SVG جایگزین کن، جاافتاده در قاب',
+  symImported: (file, percent, pins, onAxis) =>
+    `${file} حالا نقشهٔ این سیمبل است — با مقیاس ${percent}٪، `
+    + `${onAxis ? 'روی هادی خودش تراز شد' : 'روی هادی وسط‌چین شد'}، `
+    + `${pins} نقطهٔ اتصال. برای نشاندنش روی نقشه‌ها ذخیره کنید.`,
+  symImportEmpty: file => `${file} هندسه‌ای که خوانده شود ندارد.`,
+  symImportUnreadable: file => `${file} خوانده نشد. این صفحه DXF یا SVG می‌گیرد.`,
+  symPins: 'نقاط اتصال',
+  symPinAdd: 'افزودن نقطهٔ اتصال',
+  symPinRemove: 'حذف این نقطهٔ اتصال',
+  symPinName: 'همان چیزی که روی دستگاه کنارش نوشته شده — ۱، ۲، A1، 13',
+  symPinDir: d => ({
+    up: 'سیم رو به بالا بیرون می‌رود',
+    down: 'سیم رو به پایین بیرون می‌رود',
+    left: 'سیم به چپ بیرون می‌رود',
+    right: 'سیم به راست بیرون می‌رود',
+  })[d],
+  symPinAdded: name => `نقطهٔ اتصال ${name} وسط هادی گذاشته شد — با ماوس ببریدش سر جایش.`,
+  symPinsRestore: 'دو نقطهٔ پیش‌فرض را برگردان',
+  symPinsRestored: 'برگشت به یک نقطه در هر سرِ هادی.',
+  symPinsNone: 'هیچ نقطهٔ اتصالی نیست. سیمبلی که نقطهٔ اتصال ندارد می‌نشیند اما سیم‌کشی نمی‌شود: هرگز در فهرست اتصال‌ها نمی‌آید.',
+  symPinsHelp: 'برای جابه‌جایی، نقطه را روی نقشه بکشید. فلش همان جهتی است که سیم از آن بیرون می‌رود و سیمی که به آن کشیده شود از همان راه می‌آید.',
+  symFooter: 'ذخیره این نقشه را با پروژه نگه می‌دارد — هر صفحه‌ای که این سیمبل را دارد آن را برمی‌دارد و برای صفحه‌های کشیده‌شده هم پیشنهاد می‌شود. سیمبل خودِ کتابخانه هرگز عوض نمی‌شود.',
   libRedrawnHere: 'برای این پروژه بازکشیده شده',
   libPack: 'پک DXF',
   askModeDraw: 'نقشه',
@@ -1007,6 +1099,42 @@ const TR: Strings = {
   libVariantNote: 'Bundan yeni bir sembol başlat — aynı çizim, aynı bağlantı noktaları, kendi adınız.',
   libRedraw: 'Bu proje için yeniden çiz',
   libRedrawNote: 'Bu sembolün kendi sürümünüzü çizin; yalnızca bu proje kullanır.',
+
+  symBack: 'Sembol kitaplığına dön',
+  symBackShort: 'Semboller',
+  symSave: 'Kaydet',
+  symSaveTip: 'Bu çizimi projeyle sakla ve sembolü kullanan her paftaya yerleştir',
+  symSaveNothing: 'Son kayıttan beri bir şey çizilmedi',
+  symLibrary: 'Kitaplık sembolü',
+  symLibraryTip: 'Bu proje için kitaplığın kendi çizimini geri getir',
+  symOwnDrawing: 'bu projenin kendi çizimi var',
+  symFrameNote: (w, h, cells, cell, pin) =>
+    `${w} × ${h} içine çizin — ${cell} birimlik ${cells} hücre — iletken ${pin} üzerinde`,
+  symOverflow: 'Çizimin bir kısmı çerçevenin dışında. Sembol yerleştirilirken sığdırmak için küçültülecek, yanındakilerden küçük çıkacak.',
+  symImport: 'Çizim al',
+  symImportTip: 'Bu sembolün çizimini bir DXF veya SVG ile değiştir, çerçeveye oturtulmuş olarak',
+  symImported: (file, percent, pins, onAxis) =>
+    `${file} artık bu sembolün çizimi — %${percent} ölçekli, `
+    + `${onAxis ? 'kendi iletkenine hizalandı' : 'iletkene ortalandı'}, `
+    + `${pins} bağlantı noktası. Paftalara yerleştirmek için kaydedin.`,
+  symImportEmpty: file => `${file} okunabilecek bir geometri içermiyor.`,
+  symImportUnreadable: file => `${file} okunamadı. Burası DXF veya SVG alır.`,
+  symPins: 'Bağlantı noktaları',
+  symPinAdd: 'Bağlantı noktası ekle',
+  symPinRemove: 'Bu bağlantı noktasını kaldır',
+  symPinName: 'Cihazın yanına yazdığı ad — 1, 2, A1, 13',
+  symPinDir: d => ({
+    up: 'Kablo yukarı çıkar',
+    down: 'Kablo aşağı iner',
+    left: 'Kablo sola gider',
+    right: 'Kablo sağa gider',
+  })[d],
+  symPinAdded: name => `${name} bağlantı noktası iletkenin ortasına eklendi — sürükleyip yerine koyun.`,
+  symPinsRestore: 'İki varsayılan noktayı geri koy',
+  symPinsRestored: 'İletkenin her ucunda birer noktaya dönüldü.',
+  symPinsNone: 'Bağlantı noktası yok. Noktası olmayan bir sembol yerleştirilebilir ama kablolanamaz: bağlantı listesinde hiç görünmez.',
+  symPinsHelp: 'Taşımak için noktayı çizim üzerinde sürükleyin. Ok, kablonun çıkış yönüdür; oraya çizilen kablo o yönden gelir.',
+  symFooter: 'Kaydetmek bu çizimi projeyle saklar — sembolü kullanan her pafta onu alır, çizilmiş olanlara da yenisi önerilir. Kitaplığın kendi sembolü hiç değişmez.',
   libRedrawnHere: 'bu proje için yeniden çizildi',
   libPack: 'DXF paketi',
   askModeDraw: 'Çiz',

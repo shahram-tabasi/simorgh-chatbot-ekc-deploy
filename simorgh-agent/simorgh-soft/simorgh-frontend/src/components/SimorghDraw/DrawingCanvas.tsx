@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { connectionRun } from '../../utils/cad/connect';
-import { MARK_R, nearestTerminal, terminals } from '../../utils/cad/terminals';
+import { MARK_R, REACH, nearestTerminal, terminals } from '../../utils/cad/terminals';
 import { Drawing, Layer, Pen, Pt, Shape, translateShape } from '../../utils/cad/shapes';
 import {
   Grip, dimensionShapes, gripsOf, lineMetrics, moveGrip, withWholeBlocks,
@@ -111,6 +111,21 @@ interface Props {
    * dropped in the middle of the view is a symbol that then has to be found
    * and dragged; every CAD hands it to the cursor instead, and so does this.
    */
+  /**
+   * Geometry drawn under the sheet that is not part of it.
+   *
+   * The symbol page's frame lives here: the box a symbol has to be drawn
+   * inside, the conductor it hangs on, the two ends a wire lands on. They have
+   * to be seen — a draughtsman who cannot see the boundary cannot draw inside
+   * it — and they must not be touchable, because a boundary that can be picked
+   * up is one that will be dragged, and a boundary that can be deleted is one
+   * that goes the first time somebody presses Ctrl+A and Delete.
+   *
+   * So they are not in `shapes` at all. Nothing hit-tests them, nothing selects
+   * them, nothing moves them, nothing saves them: they are the paper, not the
+   * drawing.
+   */
+  guides?: Shape[] | null;
   ghost?: Shape[] | null;
   /** The ghost, put down here. */
   onPlaceGhost: (at: Pt) => void;
@@ -187,6 +202,7 @@ export const DrawingCanvas: React.FC<Props> = ({
   drawing, shapes, selection, hidden, locked, view, grid, showGrid, tool,
   pen, textSize, objectSnap, mmPerUnit, theme: themeId = 'light',
   onView, onSelection, onMove, onCursor, onEditText, onDraw, onPlaceText, onPlacePin,
+  guides,
   ghost, onPlaceGhost,
   onPick, onGrip, onDrafting, onCancelTool,
 }) => {
@@ -362,7 +378,16 @@ export const DrawingCanvas: React.FC<Props> = ({
         // connection, and having half of them land on SYMBOL because the bar
         // was left somewhere else is the sort of thing nobody notices until
         // the DXF is open at the customer's.
-        return connectionRun(a, b, { ...pen, layer: 'WIRE' }, shapes);
+        //
+        // The two ends are looked up again rather than remembered from the
+        // click: a point may have been squared up or snapped to the grid since,
+        // and the terminal the wire actually lands on is the one that decides
+        // which way it leaves.
+        return connectionRun(
+          a, b, { ...pen, layer: 'WIRE' }, shapes,
+          nearestTerminal(pins, a[0], a[1], REACH)?.dir,
+          nearestTerminal(pins, b[0], b[1], REACH)?.dir,
+        );
       case 'rect': {
         if (!b) return null;
         const w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
@@ -405,7 +430,11 @@ export const DrawingCanvas: React.FC<Props> = ({
       default:
         return null;
     }
-  }, [pen, textSize, mmPerUnit]);
+  // `shapes` and `pins` are read, so they are declared: the connect tool asks
+  // what is already on the sheet — for the junction dots and for the direction
+  // each end leaves in — and a closure holding last render's sheet answers
+  // about a drawing that has moved on.
+  }, [pen, textSize, mmPerUnit, shapes, pins]);
 
   /** Put the draft on the sheet, if it amounts to anything, and start again. */
   const finishDraft = useCallback((pts: Pt[], tool_: Tool) => {
@@ -735,6 +764,22 @@ export const DrawingCanvas: React.FC<Props> = ({
       <rect x={0} y={0} width={drawing.width} height={drawing.height}
             fill={theme.paper} stroke={theme.edge} strokeWidth={stroke} />
       {showGrid && <rect x={0} y={0} width={drawing.width} height={drawing.height} fill="url(#sd-grid)" />}
+
+      {/* The frame, under the ink and out of reach. `pointerEvents` none is
+          not decoration here: it is what makes a guide a guide. */}
+      {guides && guides.length > 0 && (
+        <g pointerEvents="none">
+          {guides.map((sh, k) => {
+            const node = shapeToNode(sh);
+            if (!node) return null;
+            const props: Record<string, unknown> = {};
+            for (const [a, v] of Object.entries(node.attrs)) props[REACT_PROP[a] ?? a] = v;
+            return node.tag === 'text'
+              ? <text key={`guide.${k}`} {...props}>{node.body}</text>
+              : React.createElement(node.tag, { key: `guide.${k}`, ...props });
+          })}
+        </g>
+      )}
 
       <g pointerEvents="none">
         {shapes.map((s, i) => {

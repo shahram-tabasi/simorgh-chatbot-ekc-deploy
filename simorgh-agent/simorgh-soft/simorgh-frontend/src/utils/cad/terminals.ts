@@ -41,6 +41,8 @@ export interface Terminal {
   at: Pt;
   /** What the device calls this point — A1, 13, I0.0. */
   name: string;
+  /** Which way its wire leaves, where the symbol was drawn with one. */
+  dir?: 'up' | 'down' | 'left' | 'right';
   /** The block it belongs to, or '' for a loose marker somebody drew. */
   block: string;
   blockName: string;
@@ -56,6 +58,7 @@ export function terminals(shapes: Shape[]): Terminal[] {
       index,
       at: centreOf(s),
       name,
+      ...(isDir(s.pinDir) ? { dir: s.pinDir } : {}),
       block: s.block ?? '',
       blockName: s.blockName ?? '',
     });
@@ -89,7 +92,7 @@ function centreOf(s: Shape): Pt {
  * and the sheet is the sheet, switch it on and the sheet shows its terminals.
  */
 export function terminalMarks(
-  points: { x: number; y: number; name: string }[],
+  points: { x: number; y: number; name: string; dir?: string }[],
   block?: string, blockName?: string,
 ): Shape[] {
   return points.map(p => ({
@@ -98,9 +101,19 @@ export function terminalMarks(
     layer: 'PIN' as const,
     width: 0.4,
     pin: p.name,
+    // The way the wire leaves, where the symbol was drawn with one. It rides
+    // on the marker rather than in a table beside it so that moving, scaling,
+    // mirroring and exporting the block carry it without knowing it is there.
+    ...(isDir(p.dir) ? { pinDir: p.dir } : {}),
     ...(block ? { block, blockName: blockName ?? '' } : {}),
   }));
 }
+
+const DIRS = ['up', 'down', 'left', 'right'] as const;
+
+/** A direction the drawing understands, or nothing. Strings arrive from JSON. */
+export const isDir = (d: unknown): d is 'up' | 'down' | 'left' | 'right' =>
+  typeof d === 'string' && (DIRS as readonly string[]).includes(d);
 
 /** The terminal nearest (x, y) within `tolerance`, or null. */
 export function nearestTerminal(

@@ -154,6 +154,41 @@ interface Props {
    */
   saveHandle?: React.MutableRefObject<(() => void) | null>;
   onDirty?: (dirty: boolean) => void;
+  /**
+   * The sheet as it stands, every time it changes.
+   *
+   * For a host that has its own controls over the same geometry — the symbol
+   * page's terminal list, which renames and turns the very connection points
+   * that can also be dragged on the canvas. Without this the host would be
+   * editing the copy it handed in, and a terminal moved with the mouse would
+   * jump back the moment it was renamed.
+   */
+  onSheetChange?: (key: string, shapes: Shape[]) => void;
+  /**
+   * Geometry drawn under the sheet that is not part of it — see
+   * `DrawingCanvas`. The symbol page's frame comes in this way.
+   */
+  guides?: Shape[] | null;
+  /**
+   * The host has its own way of bringing a DXF in, so the ribbon's is hidden.
+   *
+   * On a sheet a DXF is *more* geometry and it belongs where the draughtsman
+   * is looking, which is what the ribbon's button does. On the symbol page the
+   * DXF **is** the symbol: it replaces the drawing and it has to land in the
+   * frame. Two buttons that look the same and do opposite things is worse than
+   * either, so the host that means the second one takes the first away.
+   */
+  ownDxfImport?: boolean;
+  /**
+   * How much room to leave round the sheet when it is fitted, as a fraction.
+   *
+   * The default is the thin margin a drawing wants. The symbol page wants more:
+   * its frame draws the conductor and the two arrows a little outside the box,
+   * and on the default margin the arrow at the bottom of the symbol was off the
+   * bottom of the canvas — which reads as the page having drawn it wrong
+   * rather than as the view being tight.
+   */
+  fitPad?: number;
 }
 
 const SNAPS = [0, 1, 5, 10, 25];
@@ -569,7 +604,9 @@ const AskPanel: React.FC<{
 export const DrawingEditor: React.FC<Props> = ({
   sheets, startAt = 0, fileBase, titleBlock, mmPerUnit = 0.5, paper: initialPaper = 'auto',
   savedEdits, onSaveEdits, canEdit = true, pages, pageGroups = [], onPages,
-  embedded = false, lean = false, saveHandle, onDirty,
+  embedded = false, lean = false, saveHandle, onDirty, guides, ownDxfImport = false,
+  fitPad,
+  onSheetChange,
 }) => {
   const [index, setIndex] = useState(startAt);
   const sheet = sheets[Math.min(index, Math.max(0, sheets.length - 1))];
@@ -616,6 +653,12 @@ export const DrawingEditor: React.FC<Props> = ({
   };
 
   const shapes = edits[index] ?? sheet?.drawing.shapes ?? [];
+  // Said out to the host every time it changes, for a host that has its own
+  // controls over the same geometry — see `onSheetChange`.
+  const key = sheet?.key;
+  useEffect(() => {
+    if (key) onSheetChange?.(key, shapes);
+  }, [key, shapes, onSheetChange]);
   const [selection, setSelection] = useState<Set<number>>(new Set());
   const [hidden, setHidden] = useState<Set<Layer>>(new Set());
   const [locked, setLocked] = useState<Set<Layer>>(new Set());
@@ -1421,10 +1464,21 @@ export const DrawingEditor: React.FC<Props> = ({
     let done = 0;
     sheets.forEach((sheet, i) => {
       const current = edits[i] ?? sheet.drawing.shapes;
+      // The connection points go down with the ink. Leaving them behind is
+      // what made a redrawn symbol impossible to wire: the sheet kept the
+      // wires and lost the terminals they ended on, so nothing joined and
+      // nothing was reported. `replaceSymbolInstances` measures on the ink and
+      // carries the points through the same transform.
       const swap = replaceSymbolInstances(
         current, symbolId, title,
-        { shapes: was.drawing.shapes, pinX: was.pinX },
-        { shapes: now.drawing.shapes, pinX: now.pinX },
+        {
+          shapes: [...was.drawing.shapes, ...terminalMarks(was.terminals)],
+          pinX: was.pinX,
+        },
+        {
+          shapes: [...now.drawing.shapes, ...terminalMarks(now.terminals)],
+          pinX: now.pinX,
+        },
       );
       if (swap.count === 0) return;
       historyFor(i).push(current);
@@ -1512,8 +1566,8 @@ export const DrawingEditor: React.FC<Props> = ({
   };
 
   const fit = useCallback(() => {
-    if (sheet) setView(fitView(sheet.drawing));
-  }, [sheet]);
+    if (sheet) setView(fitView(sheet.drawing, fitPad));
+  }, [sheet, fitPad]);
 
   // A new sheet starts fitted, with nothing picked.
   useEffect(() => { setSelection(new Set()); fit(); }, [index, sheets, fit]);
@@ -2295,6 +2349,7 @@ export const DrawingEditor: React.FC<Props> = ({
                   <TableIcon className="w-5 h-5" />
                 </Tool>
                 <Tool label title={`${T.dxfImport} — ${T.dxfImportTip}`}
+                      hide={ownDxfImport}
                       on={() => dxfInput.current?.click()}>
                   <FileInputIcon className="w-5 h-5" />
                 </Tool>
@@ -2490,18 +2545,26 @@ export const DrawingEditor: React.FC<Props> = ({
           )}
         </div>
 
-        <input
-          ref={dxfInput}
-          type="file"
-          accept=".dxf"
-          style={{ display: 'none' }}
-          onChange={e => {
-            const file = e.target.files?.[0];
-            // Cleared so choosing the same file twice still fires onChange.
-            e.target.value = '';
-            if (file) placeDxf(file);
-          }}
-        />
+        {/* Not rendered at all where the host brings its own DXF in. Hiding
+            the button would leave this behind, and a hidden file input is not
+            inert — it is still the first one on the page, still reachable, and
+            still wired to the *other* meaning of importing a DXF. On the
+            symbol page that is the exact difference between replacing the
+            drawing and dropping a second copy of it beside the first. */}
+        {!ownDxfImport && (
+          <input
+            ref={dxfInput}
+            type="file"
+            accept=".dxf"
+            style={{ display: 'none' }}
+            onChange={e => {
+              const file = e.target.files?.[0];
+              // Cleared so choosing the same file twice still fires onChange.
+              e.target.value = '';
+              if (file) placeDxf(file);
+            }}
+          />
+        )}
 
         <input
           ref={xlsxInput}
@@ -2561,6 +2624,7 @@ export const DrawingEditor: React.FC<Props> = ({
             objectSnap={objectSnap}
             mmPerUnit={mmPerUnit}
             theme={themeId}
+            guides={guides}
             onView={setView}
             onSelection={setSelection}
             onMove={(dx, dy) => nudge(dx, dy)}

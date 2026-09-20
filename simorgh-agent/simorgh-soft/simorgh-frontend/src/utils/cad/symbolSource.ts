@@ -24,7 +24,9 @@ import { drawingFromSvg } from './fromSvg';
 import { mapShape, newBlockId, scaling, translation } from './geom';
 import { boundsOfAll } from './edit';
 import { DxfSymbol, loadDxfSymbols } from './dxfSymbols';
-import { CELL, IEC_SYMBOLS, SymbolId, drawIecSymbol, symbolHeight } from '../iecSymbols';
+import {
+  CELL, IEC_SYMBOLS, SymbolId, drawIecSymbol, symbolHeight, symbolTerminals,
+} from '../iecSymbols';
 import { LibraryKind, defaultGroup, readKind } from './symbolLibraries';
 import { terminalMarks } from './terminals';
 import { wdItems } from './wdSymbols';
@@ -77,7 +79,7 @@ export interface LibraryItem {
    * means a connection to it is a connection to the *device*, which is what
    * the connection list and the terminal diagram are read from.
    */
-  terminals?: { x: number; y: number; name: string }[];
+  terminals?: { x: number; y: number; name: string; dir?: string }[];
   /**
    * The geometry, where it is already known.
    *
@@ -151,10 +153,13 @@ export function iecItems(): LibraryItem[] {
       // at the bottom. `1` and `2` are what IEC numbers those, and they are
       // the two ends of the conductor the symbol is drawn around — not the
       // corners of its box, which is why they are taken off the pin axis.
-      terminals: [
-        { x: CELL / 2, y: 4, name: '1' },
-        { x: CELL / 2, y: 4 + h, name: '2' },
-      ],
+      //
+      // That is the *rule*, and it holds until somebody redraws the symbol and
+      // says otherwise. A CT the office draws with its tap at the side has its
+      // terminals where the office put them, and `symbolTerminals` answers
+      // from the same override and the same transform the art is drawn with —
+      // so the points and the ink cannot drift apart.
+      terminals: symbolTerminals(sym.id as SymbolId, CELL / 2, 4),
     };
   });
 }

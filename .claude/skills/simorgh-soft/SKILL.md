@@ -117,6 +117,42 @@ deleted.
 project can replace the ones already on the sheets (`utils/cad/replaceSymbol.ts`).
 Keep stamping it when adding a new way to place a symbol.
 
+**A symbol is drawn inside a frame, and the frame is not geometry.**
+`utils/cad/symbolFrame.ts` says the box a symbol must fit, where its conductor
+runs and where the current enters and leaves. The symbol page draws it through
+`DrawingCanvas`'s `guides` — outside the shape list, `pointerEvents: none` — so
+it cannot be picked, dragged, deleted or saved. It is the paper. A boundary
+that lives in `shapes` is gone the first time somebody presses Ctrl+A, Delete,
+and then nothing on screen says where to draw.
+
+**Every box in `replaceSymbolInstances` is measured on the ink.** A connection
+point is a ring on the edge of a symbol with half of it outside, so a box
+measured round the points is ~5% taller than the device — and that box is what
+the replacement is scaled to. Measured inconsistently it grew the symbol 5.5%
+per redraw (40 → 52 units over five) and walked it off its wire. `inkOnly` is
+one function for that reason: the three boxes have to be measured alike.
+
+**Importing a DXF means two opposite things, so there are two buttons.** On a
+sheet it is *more* geometry and belongs where the draughtsman is looking
+(`placeDxf`). On the symbol page the file **is** the symbol: it replaces the
+drawing, fitted to the frame (`fitIntoFrame`). Brought in through the sheet's
+button it landed beside the old drawing at the pan offset, both were saved, and
+the device came out drawn twice on every sheet. `ownDxfImport` hides the ribbon
+button **and does not render its file input** — a hidden input is still the
+first one on the page and still wired to the other meaning.
+
+**Replacing the sheet resets the editor's dirty flag.** `DrawingEditor` reports
+`onDirty` from its own `touched`, and a new `sheets` array is a sheet nobody has
+drawn on. A host that replaces the content itself has to track that — the symbol
+page keeps `rev`/`savedRev` — or Save goes grey on the one change the page
+exists to make, and `onSaveEdits` hands back nothing for that sheet.
+
+**A terminal says which way its wire leaves** (`Pen.pinDir`, set on the symbol
+page). `routeBetween` obeys it; without one it falls back to the old longest-
+axis guess. Carry `dir` wherever terminals are carried — `SymbolArtOverride`,
+`SymbolOverride`, `LibraryItem`, `OfficeSymbol` — or a redrawn symbol gets two
+invented points on its conductor and a wire drawn to a side tap joins nothing.
+
 Comments here explain *why*, in prose, and are worth keeping — match that.
 
 ## The PLC page

@@ -629,6 +629,16 @@ export interface SymbolOverride {
   height?: number;
   /** Where the conductor runs inside that box. */
   pinX?: number;
+  /**
+   * The points a wire may land on, in the symbol's own coordinates.
+   *
+   * Only a symbol somebody has drawn connection points on has these. The
+   * library's own symbols answer the question from their geometry — a
+   * single-line device is a conductor with something on it, and the two ends
+   * of that conductor are the two terminals — and that answer is right until
+   * somebody redraws the symbol as something the rule does not fit.
+   */
+  terminals?: { x: number; y: number; name: string; dir?: string }[];
   /** How many cells down the line it takes (`data-cells` in the file). */
   cells?: number;
   title?: string;
@@ -776,6 +786,45 @@ export function drawIecSymbol(id: SymbolId, x: number, y: number): string {
       `<title>${esc(o.title || IEC_SYMBOLS[id]?.title || id)}</title></image>`;
   }
   return (IEC_SYMBOLS[id] ?? IEC_SYMBOLS.link).draw(x, y);
+}
+
+/**
+ * Where a wire may land on a symbol drawn at (x, y) — the twin of
+ * `drawIecSymbol`, answering for the same placement.
+ *
+ * It is the twin deliberately. The terminals and the ink have to come out of
+ * the same arithmetic or they drift apart, and the way they drift is the worst
+ * one: everything looks right, and the wire joins nothing. So this reads the
+ * same override through the same box and applies the same transform, and
+ * anything that changes one has to walk past the other.
+ *
+ * A symbol nobody has drawn connection points on gets the two the library has
+ * always given it: a single-line device stands in the branch, current in at
+ * the top and out at the bottom, and those are the two ends of the conductor
+ * the symbol is drawn around.
+ */
+export function symbolTerminals(
+  id: SymbolId, x: number, y: number,
+): { x: number; y: number; name: string; dir?: string }[] {
+  const o = symbolOverride(id);
+  const h = symbolHeight(id);
+  if (o?.art && o.terminals?.length) {
+    const { dx } = overrideBox(o);
+    const k = h / (o.height && o.height > 0 ? o.height : 1);
+    // `dx` already carries the conductor back onto the branch — it is
+    // `-pinX * k` — so a point is its own offset in the art, at the same
+    // scale. Subtracting the pin again here is the mistake to watch for.
+    return o.terminals.map(p => ({
+      x: x + dx + p.x * k,
+      y: y + p.y * k,
+      name: p.name,
+      dir: p.dir,
+    }));
+  }
+  return [
+    { x, y, name: '1', dir: 'up' },
+    { x, y: y + h, name: '2', dir: 'down' },
+  ];
 }
 
 /** The whole library as a legend sheet, laid out like the office's own. */

@@ -127,7 +127,8 @@ const BLANK = 40;
  * opened and saved.
  */
 function symbolFromShapes(shapes: Shape[], from: string): {
-  geometry: Geometry; terminals: { x: number; y: number; name: string }[];
+  geometry: Geometry;
+  terminals: { x: number; y: number; name: string; dir?: string }[];
 } | null {
   const pins = shapes.filter(s => s.pin);
   const ink = shapes.filter(s => !s.pin);
@@ -143,6 +144,10 @@ function symbolFromShapes(shapes: Shape[], from: string): {
         x: round(p[0] - box.x),
         y: round(p[1] - box.y),
         name: String(s.pin ?? i + 1),
+        // Which way the wire leaves, where the point carries it. A symbol
+        // built out of two library symbols inherits their directions; one
+        // drawn from nothing has none and is routed as it always was.
+        ...(s.pinDir ? { dir: s.pinDir } : {}),
       };
     }),
   };
@@ -164,7 +169,8 @@ export const SymbolMaker: React.FC<Props> = ({
       : from
         ? { art: from.art, width: from.width, height: from.height, from: from.name }
         : null);
-  const [terminals, setTerminals] = useState<{ x: number; y: number; name: string }[]>(
+  const [terminals, setTerminals] = useState<
+    { x: number; y: number; name: string; dir?: string }[]>(
     editing?.terminals ?? from?.terminals ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -211,7 +217,10 @@ export const SymbolMaker: React.FC<Props> = ({
         .filter(s => s.pin)
         .map(s => {
           const p = pointOf(s);
-          return { x: p[0] - box.x, y: p[1] - box.y, name: String(s.pin) };
+          return {
+            x: p[0] - box.x, y: p[1] - box.y, name: String(s.pin),
+            ...(s.pinDir ? { dir: s.pinDir } : {}),
+          };
         });
       if (carried.length) setTerminals(carried);
     }

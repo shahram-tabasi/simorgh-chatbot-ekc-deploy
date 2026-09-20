@@ -3,6 +3,7 @@
 // ==============================
 
 // A sheet edited in Simorgh Draw is kept as its own geometry — see DrawingEdits.
+import type { SymbolPin } from '../utils/cad/symbolFrame';
 import { Shape } from '../utils/cad/shapes';
 import { DrawingGroups, DrawingPage } from '../utils/cad/pages';
 
@@ -199,6 +200,10 @@ export interface ProjectData {
 // symbol is used, exactly as a file in the symbol pack does — the difference
 // is only where it lives and how far it reaches.
 
+// `SymbolPin` is the drawing side's idea of a connection point — a place, a
+// name and the way the wire leaves it. Imported rather than restated so the
+// symbol page, the library and the project all mean the same thing by it.
+
 export interface SymbolArtOverride {
   /** The geometry, as markup with no `<svg>` around it. */
   art: string;
@@ -208,6 +213,21 @@ export interface SymbolArtOverride {
   pinX: number;
   /** How many cells down the branch it takes. */
   cells: number;
+  /**
+   * Where a wire may land on it, in the art's own coordinates.
+   *
+   * Kept with the drawing because it belongs to the drawing. Before this, a
+   * redrawn symbol had its connection points worked out for it — two, on the
+   * conductor, at the top and bottom of whatever box the new art happened to
+   * have. That is right for a breaker and wrong for everything fed from the
+   * side, and it is why a wire drawn to a redrawn CT joined nothing: the
+   * terminal the software had invented was somewhere up the middle of the
+   * symbol, not where the office draws the tap.
+   *
+   * Absent on a symbol redrawn before this existed, which still has to open —
+   * those fall back to the two the library would have given it.
+   */
+  terminals?: SymbolPin[];
   editedAt: string;
 }
 

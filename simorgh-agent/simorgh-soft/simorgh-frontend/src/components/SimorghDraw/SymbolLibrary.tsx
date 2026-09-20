@@ -484,6 +484,8 @@ export const SymbolLibrary: React.FC<Props> = ({
   const redrawer = redrawing && (
     <SymbolGraphicEditor
       inline
+      t={t}
+      lang={lang}
       symbolId={redrawing}
       override={projectData.symbolOverrides?.[redrawing]}
       onSave={art => {

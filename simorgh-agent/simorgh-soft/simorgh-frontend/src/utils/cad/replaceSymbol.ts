@@ -41,10 +41,28 @@ import { Shape } from './shapes';
 
 /** One version of a symbol: its geometry, and where the conductor runs in it. */
 export interface SymbolArt {
+  /**
+   * Everything the instance is made of — the ink *and* its connection points.
+   *
+   * The points belong in here rather than beside it because they have to go
+   * through the same scale and the same move as the ink. A replacement put
+   * down without them is a device that looks right and cannot be wired: the
+   * wires on the sheet still end where they ended, and there is no longer
+   * anything there for them to end *on*, so the connection list goes quiet.
+   */
   shapes: Shape[];
   /** The conductor's x in the geometry's own coordinates. */
   pinX: number;
 }
+
+/**
+ * The ink of a symbol — everything that is not a connection point.
+ *
+ * One function rather than three copies of the same filter, because the whole
+ * of the arithmetic below depends on the three boxes it measures being
+ * measured alike.
+ */
+const inkOnly = (run: Shape[]): Shape[] => run.filter(sh => !sh.pin);
 
 /** Every shape of `shapes` that was placed from this symbol, by block. */
 function instances(
@@ -87,8 +105,16 @@ export function replaceSymbolInstances(
   const found = instances(shapes, symbolId, name);
   if (found.size === 0) return { shapes, count: 0 };
 
-  const fromBox = boundsOfAll(from.shapes);
-  const toBox = boundsOfAll(to.shapes);
+  // **Every box here is measured the same way: on the ink, never on the
+  // connection points.** That is not a detail. The instance on the sheet is
+  // measured below against these two, and a box measured one way compared with
+  // a box measured the other is a difference that turns into a shift — the
+  // symbol lands a little to the side, and a little further every time it is
+  // redrawn, until it is off its wire. A connection point is a ring drawn on
+  // the edge of a symbol with half of it hanging outside, so including them
+  // would be exactly that mismatch.
+  const fromBox = boundsOfAll(inkOnly(from.shapes));
+  const toBox = boundsOfAll(inkOnly(to.shapes));
   if (!fromBox || !toBox || toBox.h <= 0 || fromBox.h <= 0) return { shapes, count: 0 };
 
   // Where the two versions keep the conductor inside their own boxes.
@@ -108,7 +134,10 @@ export function replaceSymbolInstances(
     if (done.has(block)) return;
     done.add(block);
 
-    const placed = boundsOfAll(group.map(j => shapes[j]));
+    // The instance's ink, measured the same way as the two drawings above.
+    const mine = group.map(j => shapes[j]);
+    const ink = inkOnly(mine);
+    const placed = boundsOfAll(ink.length ? ink : mine);
     if (!placed || placed.h <= 0) { group.forEach(j => out.push(shapes[j])); return; }
 
     // As tall as what it replaces, and its own shape across.
