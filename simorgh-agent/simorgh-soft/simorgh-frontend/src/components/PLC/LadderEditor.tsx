@@ -505,9 +505,21 @@ export const LadderEditor: React.FC<Props> = ({
   const coilSelected = (netId: string, index: number): boolean =>
     selCoil?.netId === netId && selCoil.index === index;
 
-  /** A coil picked. The element cursor stays where it is: it is where the
-   *  catalogue puts the next instruction, and a coil is not a place for one. */
-  const selectCoil = (netId: string, index: number) => setSelCoil({ netId, index });
+  /**
+   * A coil picked. The element cursor stays where it is: it is where the
+   * catalogue puts the next instruction, and a coil is not a place for one.
+   *
+   * It stops being a *selection*, though. `onElement` is what rings an element,
+   * and leaving it set while a coil is picked put two rings on the rung at
+   * once — and Delete takes the coil, so the ring the engineer was looking at
+   * was the one it did not touch. Picking an element already clears the coil;
+   * this is the other half of the same rule, and without it the rule only
+   * holds in one direction.
+   */
+  const selectCoil = (netId: string, index: number) => {
+    setSelCoil({ netId, index });
+    if (cursor?.onElement) setCursor({ ...cursor, onElement: false });
+  };
 
   /** The picked element, or nothing when what is picked is a gap. */
   const elementAtCursor = (at: LadderCursor | null = cursor): Element | null => {
