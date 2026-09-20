@@ -857,11 +857,19 @@ export function registerTpmsImportRoutes(app, getPool) {
     const projectId = Number(req.query.projectId);
     const scopeId = Number(req.query.scopeId);
     const revisionId = Number(req.query.revisionId);
+    // A revision is optional. A panel TPMS holds no revision for yet is a real
+    // panel with a real specification — the feeder lines are simply not drawn
+    // up. Everything else on this route (the project, the scope, the panel,
+    // the identity, the columns) is read without a revision anyway; only the
+    // lines are revision by revision. Refusing the whole import for the want
+    // of a revision left the engineer with nothing to carry on from, when what
+    // they wanted was to carry on by hand.
+    const hasRevision = Number.isFinite(revisionId);
 
-    if (!Number.isFinite(projectId) || !Number.isFinite(scopeId) || !Number.isFinite(revisionId)) {
+    if (!Number.isFinite(projectId) || !Number.isFinite(scopeId)) {
       return res.status(400).json({
         success: false,
-        error: 'projectId, scopeId and revisionId are required',
+        error: 'projectId and scopeId are required',
       });
     }
 
@@ -876,7 +884,7 @@ export function registerTpmsImportRoutes(app, getPool) {
           one(SQL.scope, [projectId, scopeId]),
           one(SQL.panel, [projectId, scopeId]),
           one(SQL.projectIdentity, [projectId]),
-          many(SQL.lines, [projectId, scopeId, revisionId]),
+          hasRevision ? many(SQL.lines, [projectId, scopeId, revisionId]) : Promise.resolve([]),
           many(SQL.columns, [projectId]),
         ]);
 
@@ -898,10 +906,10 @@ export function registerTpmsImportRoutes(app, getPool) {
 
       const payload = buildImportPayload({
         projectRow, scopeRow, panelRow, projectIdentityRow, propertyTitles,
-        joinedRows, columnRows, revisionId,
+        joinedRows, columnRows, revisionId: hasRevision ? revisionId : null,
       });
 
-      console.log(`✅ TPMS import: project ${projectId} / scope ${scopeId} / rev ${revisionId} — ` +
+      console.log(`✅ TPMS import: project ${projectId} / scope ${scopeId} / rev ${hasRevision ? revisionId : 'none'} — ` +
         `${payload.counts.lines} lines, ${payload.counts.parts} parts`);
       res.json({ success: true, ...payload });
     } catch (err) {

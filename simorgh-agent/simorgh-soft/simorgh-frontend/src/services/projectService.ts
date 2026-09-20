@@ -79,9 +79,17 @@ export const tpmsService = {
 
   // The whole switchgear: project, technical settings, panel specification,
   // every feeder line and the parts on it.
-  async getImport(projectId: number, scopeId: number, revisionId: number): Promise<any> {
+  /**
+   * One switchgear out of TPMS. `revisionId` is optional: a panel TPMS holds
+   * no revision for yet has a specification and no feeder lines, and that is a
+   * project the engineer carries on with by hand rather than one they cannot
+   * open.
+   */
+  async getImport(projectId: number, scopeId: number, revisionId?: number | null): Promise<any> {
+    const rev = revisionId == null || !Number.isFinite(revisionId)
+      ? '' : `&revisionId=${revisionId}`;
     const r = await fetch(
-      `${API_BASE_URL}/tpms/import?projectId=${projectId}&scopeId=${scopeId}&revisionId=${revisionId}`);
+      `${API_BASE_URL}/tpms/import?projectId=${projectId}&scopeId=${scopeId}${rev}`);
     const body = await r.json().catch(() => ({}));
     if (!r.ok || body.success === false) {
       throw new Error(body.error || 'Could not read this switchgear from TPMS');

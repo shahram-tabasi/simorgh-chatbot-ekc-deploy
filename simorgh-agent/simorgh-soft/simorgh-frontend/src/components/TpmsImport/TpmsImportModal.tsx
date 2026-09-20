@@ -74,10 +74,11 @@ export const TpmsImportModal: React.FC<TpmsImportModalProps> = ({ onClose, onImp
   };
 
   const loadPreview = async () => {
-    if (projectId === '' || scopeId === '' || revisionId === '') return;
+    if (projectId === '' || scopeId === '') return;
     setLoading('preview'); setPreview(null); setDone(null);
     try {
-      const payload = await tpmsService.getImport(Number(projectId), Number(scopeId), Number(revisionId));
+      const payload = await tpmsService.getImport(
+        Number(projectId), Number(scopeId), revisionId === '' ? null : Number(revisionId));
       setPreview(payload);
       setError(null);
     } catch (err) { setError((err as Error).message); }
@@ -104,7 +105,13 @@ export const TpmsImportModal: React.FC<TpmsImportModalProps> = ({ onClose, onImp
     onImported?.(equipmentId);
   };
 
-  const ready = projectId !== '' && scopeId !== '' && revisionId !== '';
+  // A revision is not required. A panel TPMS holds none for yet is a real
+  // panel with a real specification and no feeder lines drawn up — the
+  // engineer carries on from here, enters the rest, and the switchgear is in
+  // the Device Library to build templates against. Demanding a revision left
+  // them with a dialog that could not be pressed.
+  const ready = projectId !== '' && scopeId !== '';
+  const noRevisions = scopeId !== '' && revisions.length === 0 && loading !== 'revisions';
   const selectClass = 'w-full border border-gray-400 rounded px-3 py-2 text-sm bg-white disabled:bg-gray-100 disabled:text-gray-400';
 
   return (
@@ -164,11 +171,27 @@ export const TpmsImportModal: React.FC<TpmsImportModalProps> = ({ onClose, onImp
                 className={selectClass}
                 value={revisionId}
                 disabled={scopeId === '' || loading === 'revisions'}
-                onChange={e => { setRevisionId(Number(e.target.value)); setPreview(null); setDone(null); }}
+                onChange={e => {
+                  setRevisionId(e.target.value === '' ? '' : Number(e.target.value));
+                  setPreview(null); setDone(null);
+                }}
               >
-                <option value="">{loading === 'revisions' ? 'Loading…' : '-- Select revision --'}</option>
+                <option value="">
+                  {loading === 'revisions' ? 'Loading…'
+                    : noRevisions ? 'No revision yet — bring in the specification'
+                    : 'No revision — specification only'}
+                </option>
                 {revisions.map(r => <option key={r.value} value={r.value}>Rev {r.text}</option>)}
               </select>
+              {/* Said where the choice is made, because "no revision" reads as
+                  a mistake until somebody says it is not one. */}
+              {scopeId !== '' && revisionId === '' && loading !== 'revisions' && (
+                <p className="mt-1 text-[11px] text-gray-500">
+                  {noRevisions
+                    ? 'TPMS has no revision for this switchgear. Its specification comes in and the feeder lines are yours to enter.'
+                    : 'The specification comes in without any feeder lines.'}
+                </p>
+              )}
             </div>
           </div>
 
@@ -193,7 +216,8 @@ export const TpmsImportModal: React.FC<TpmsImportModalProps> = ({ onClose, onImp
                     ['Project', `${preview.project.oeNumber} ${preview.project.projectName}`.trim()],
                     ['Switchgear', `${preview.scope.scopeName}${preview.scope.switchgearType ? ` — ${preview.scope.switchgearType}` : ''}`],
                     ['Voltage level', preview.scope.panelType],
-                    ['Revision', `Rev ${preview.scope.revision}`],
+                    ['Revision', preview.scope.revision == null
+                      ? 'None — specification only' : `Rev ${preview.scope.revision}`],
                     ['Feeder lines', String(preview.counts.lines)],
                     ['Parts on those lines', String(preview.counts.parts)],
                     ['Cells', preview.scope.cellCount || '—'],
