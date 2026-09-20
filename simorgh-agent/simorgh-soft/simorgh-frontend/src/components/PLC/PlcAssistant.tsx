@@ -29,7 +29,7 @@
 
 import React, { useMemo, useState } from 'react';
 import {
-  SparklesIcon, SendIcon, AlertTriangleIcon, CheckIcon, XIcon, RotateCcwIcon,
+  SendIcon, AlertTriangleIcon, CheckIcon, XIcon, RotateCcwIcon,
   ClipboardCopyIcon, FileTextIcon,
 } from 'lucide-react';
 import { LadderQuestion, plcService } from '../../services/projectService';
@@ -40,6 +40,7 @@ import {
 } from '../../utils/plc/aiContext';
 import { briefing } from '../../utils/plc/instructions';
 import { blockToScl } from '../../utils/plc/sclExport';
+import { SimorghMark } from '../shared/SimorghMark';
 import { Lang, Strings } from './lang';
 
 interface Props {
@@ -208,7 +209,7 @@ export const PlcAssistant: React.FC<Props> = ({
   return (
     <div className="h-full flex flex-col bg-white text-[12px]">
       <div className="px-3 py-2 border-b flex items-center gap-2 shrink-0">
-        <SparklesIcon className="w-4 h-4 text-violet-600" />
+        <SimorghMark className="w-4 h-4" />
         <span className="font-semibold">{t.assistantTitle}</span>
         {model && <span className="text-[10px] text-gray-400 truncate">{model}</span>}
         <button

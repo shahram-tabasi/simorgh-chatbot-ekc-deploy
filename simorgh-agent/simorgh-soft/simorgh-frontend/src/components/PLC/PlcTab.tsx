@@ -25,7 +25,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  PlayIcon, DownloadIcon, MaximizeIcon, MinimizeIcon, SparklesIcon, ListIcon,
+  PlayIcon, DownloadIcon, MaximizeIcon, MinimizeIcon, ListIcon,
   AlertCircleIcon, AlertTriangleIcon, InfoIcon, XIcon, WandSparklesIcon,
   SearchIcon, ReplaceIcon, CpuIcon, SaveIcon, TerminalIcon, PanelLeftIcon, LanguagesIcon,
 } from 'lucide-react';
@@ -36,6 +36,7 @@ import { PlcProjectTree, TreeSelection } from './PlcProjectTree';
 import { InstructionCatalog } from './InstructionCatalog';
 import { InterfaceTable } from './InterfaceTable';
 import { TagTable } from './TagTable';
+import { SimorghMark } from '../shared/SimorghMark';
 import { LadderEditor } from './LadderEditor';
 import { CodeEditor, EditorActions } from './CodeEditor';
 import { NewBlockDialog } from './NewBlockDialog';
@@ -382,7 +383,7 @@ export const PlcTab: React.FC = () => {
             className={`px-2 py-1 rounded text-[12px] inline-flex items-center gap-1.5
               ${rightPanel === 'assistant' ? 'bg-purple-100 text-purple-800' : 'hover:bg-gray-100'}`}
           >
-            <SparklesIcon className="w-3.5 h-3.5" /> {t.assistant}
+            <SimorghMark className="w-4 h-4" /> {t.assistant}
           </button>
           {/* The language, as the two words themselves.
               A flag would be wrong twice over — Persian is not one country's,

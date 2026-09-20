@@ -21,10 +21,11 @@
 // returns a rung that is still legal. Nothing in this file reaches into a
 // group's branches to splice something.
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   ChevronDownIcon, ChevronRightIcon, PlusIcon, TrashIcon, GitBranchIcon,
   EyeOffIcon, EyeIcon, CopyIcon, ArrowUpIcon, ArrowDownIcon, ZapIcon,
+  ScissorsIcon, ClipboardIcon,
 } from 'lucide-react';
 import { MenuBox } from '../shared/MenuBox';
 import { Strings } from './lang';
@@ -34,8 +35,9 @@ import {
   Instruction, helpOf, instructionById, instructionByName, titleOf,
 } from '../../utils/plc/instructions';
 import {
-  ElementPatch, LadderCursor, LadderPos, addOutput, addParallelBranch, patchElement,
-  patchOutput, patchPin, placeInstruction, removeBranch, removeElement, removeOutput, samePos,
+  ElementPatch, LadderCursor, LadderPos, addOutput, addParallelBranch, elementAt,
+  insertElement, moveElement, moveOutput, patchElement, patchOutput, patchPin,
+  placeInstruction, positions, removeBranch, removeElement, removeOutput, samePos,
 } from '../../utils/plc/ladderEdit';
 
 // ── Layout numbers ──────────────────────────────────────────────────────────
@@ -64,6 +66,34 @@ const RAIL_PAD = 14;
 const WIRE_W = 2;         // how thick a wire is drawn, in the SVG and out of it
 
 interface Geometry { width: number; height: number; wireY: number; }
+
+/** What is being dragged: an element at a position, or one of the coils. */
+interface Dragged {
+  netId: string;
+  pos?: LadderPos;
+  output?: number;
+}
+
+/**
+ * What a slot needs to be a place something can be dropped.
+ *
+ * Passed down as one object rather than six props because it is threaded
+ * through the group to every slot on it, and because a slot either takes a
+ * drop or it does not — the parts of that are not separate decisions. The
+ * positions inside a group carry `group: 0` and the group's own call site
+ * puts its index back, exactly as `onSlot` and `onPatch` already do.
+ */
+interface Dnd {
+  /** True while a drag is in flight, so a slot can show it will take it. */
+  active: boolean;
+  /** The slot the pointer is over now. */
+  over: string | null;
+  keyOf: (pos: LadderPos) => string;
+  begin: (e: React.DragEvent, pos: LadderPos) => void;
+  end: () => void;
+  hover: (e: React.DragEvent, key: string) => void;
+  drop: (e: React.DragEvent, pos: LadderPos) => void;
+}
 
 function boxPins(b: Block): { ins: Block['pins']; outs: Block['pins'] } {
   return { ins: b.pins.filter(p => !p.out), outs: b.pins.filter(p => p.out) };
@@ -126,6 +156,14 @@ interface RungLayout {
   /** The y of each row's wire — where contacts sit and bars are drawn to. */
   rowWire: number[];
   rowHeight: number[];
+  /**
+   * The y of each stacked coil's wire.
+   *
+   * Their own stack, not the branch rows: a row made tall by a timer box says
+   * nothing about where the second coil belongs, and every package draws a
+   * column of coils at one tight pitch whatever is to the left of it.
+   */
+  outputWire: number[];
   height: number;
   /** The main wire: row 0, which is what the rails and the coils join. */
   wireY: number;
@@ -179,15 +217,31 @@ function layoutRung(rung: Rung): RungLayout {
     y += rowHeight[r] + BRANCH_GAP;
   }
 
+  // The coils, stacked down the right-hand end from the rung's own wire. The
+  // first one is *on* it; the rest hang below it on the drop wire, which is
+  // what the rung's height has to cover — a rung driving three coils off one
+  // contact is taller than its condition, and a height measured from the
+  // condition alone left the lower coils hanging past the rails.
+  const wireY = rowWire[0];
+  const outputWire: number[] = [];
+  for (let i = 0; i < Math.max(1, rung.outputs.length); i += 1) {
+    outputWire.push(wireY + i * (CONTACT_H + BRANCH_GAP));
+  }
+  const outputsBottom = outputWire[outputWire.length - 1] + (CONTACT_H - CONTACT_WIRE);
+
   return {
     groups,
     rowTop,
     rowWire,
     rowHeight,
-    height: Math.max(CONTACT_H, y - BRANCH_GAP),
-    wireY: rowWire[0],
+    outputWire,
+    height: Math.max(CONTACT_H, y - BRANCH_GAP, outputsBottom),
+    wireY,
   };
 }
+
+/** The slot past the last group — where a new column goes. */
+const endPos = (rung: Rung): LadderPos => ({ group: rung.groups.length, branch: 0, slot: 0 });
 
 // ── The drawn parts ─────────────────────────────────────────────────────────
 
@@ -306,6 +360,18 @@ export const LadderEditor: React.FC<Props> = ({
   const setCursor = onCursor;
   const [menu, setMenu] = useState<
   { x: number; y: number; netId: string; pos?: LadderPos; output?: number } | null>(null);
+  /** Which coil is picked, if it is a coil that is picked and not an element. */
+  const [selCoil, setSelCoil] = useState<{ netId: string; index: number } | null>(null);
+  /** The editor's own clipboard. One element, which is what Ctrl+C copies. */
+  const [clip, setClip] = useState<Element | null>(null);
+  // What is being dragged is a ref because nothing on screen depends on *what*
+  // it is; whether a drag is happening at all is state, because every slot on
+  // the block lights up to say it will take it.
+  const drag = useRef<Dragged | null>(null);
+  /** The block's own box, which has to take the focus back off an operand. */
+  const box = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const [dropAt, setDropAt] = useState<string | null>(null);
 
   const known = useMemo(() => {
     const names = new Set<string>();
@@ -329,6 +395,9 @@ export const LadderEditor: React.FC<Props> = ({
     onChange(networks.map(n => (n.id === id ? { ...n, ...change } : n)));
 
   const patchRung = (id: string, next: Rung) => patchNetwork(id, { rung: next });
+
+  const rungOf = (netId: string): Rung | null =>
+    networks.find(n => n.id === netId)?.rung ?? null;
 
   /** Renumber after an insert or a delete, so the numbers are the order. */
   const renumber = (list: PlcNetwork[]): PlcNetwork[] =>
@@ -373,49 +442,266 @@ export const LadderEditor: React.FC<Props> = ({
   };
 
   /** The armed instruction, put where the cursor is. */
-  const place = (netId: string, pos: LadderPos, instr: Instruction) => {
+  const place = (netId: string, pos: LadderPos, instr: Instruction, onElement = false) => {
     if (readOnly) return;
-    const placed = placeInstruction(networks, { netId, pos }, instr);
+    const placed = placeInstruction(networks, { netId, pos, onElement }, instr);
     if (!placed) return;
     onChange(placed.networks);
     setCursor(placed.cursor);
     onInserted?.();
   };
 
+  /** A gap picked: the place something goes. */
   const clickSlot = (netId: string, pos: LadderPos) => {
     setCursor({ netId, pos });
+    // One thing is picked at a time: a coil left ringed while a contact is
+    // selected is a Delete key that takes off whichever the engineer is not
+    // looking at.
+    setSelCoil(null);
     if (armed) place(netId, pos, armed);
+  };
+
+  /** An element picked — and what is armed goes in after it, not in front. */
+  const clickElement = (netId: string, pos: LadderPos) => {
+    setCursor({ netId, pos, onElement: true });
+    setSelCoil(null);
+    if (armed) place(netId, pos, armed, true);
   };
 
   /** A toolbar button's instruction, put in at the cursor straight away. */
   const insertNow = (id: string) => {
     const instr = instructionById(id);
     if (!instr || readOnly) return;
+    // A branch opened with a **coil** picked is another coil beside it. That
+    // is the gesture this command has on every ladder editor — select the
+    // output, open a branch, get a second output on the same condition — and
+    // it is the one the rung on the sheet actually shows: the drop wire after
+    // the last contact with two coils hanging off it.
+    if (id === 'gen.branch.open' && selCoil) {
+      const rung = rungOf(selCoil.netId);
+      if (!rung) return;
+      patchRung(selCoil.netId, addOutput(rung, { k: 'coil', at: '' }, selCoil.index + 1));
+      setSelCoil({ ...selCoil, index: selCoil.index + 1 });
+      return;
+    }
     const placed = placeInstruction(networks, cursor ?? null, instr);
     if (!placed) return;
     onChange(placed.networks);
     setCursor(placed.cursor);
   };
 
-  /** What the cursor is on, taken off the rung. */
-  const deleteAtCursor = () => {
-    if (!cursor || readOnly) return;
-    const net = networks.find(n => n.id === cursor.netId);
-    if (!net) return;
-    patchRung(cursor.netId, removeElement(net.rung, cursor.pos));
+  // ── Editing it the way anything else on a screen is edited ───────────────
+  //
+  // Pick something up and drop it somewhere else; press Delete to take it off;
+  // Ctrl+C and Ctrl+V; the arrows to move along the rung. None of this is
+  // ladder-specific and all of it is what somebody arrives already knowing,
+  // which is exactly why its absence reads as the editor being broken rather
+  // than as a feature not being there. Every one of them goes through
+  // `ladderEdit`, so a drag can no more make an illegal rung than a menu can.
+
+  /** A copy that shares nothing: two boxes must not hold one array of pins. */
+  const dup = (el: Element): Element => JSON.parse(JSON.stringify(el)) as Element;
+
+  const coilSelected = (netId: string, index: number): boolean =>
+    selCoil?.netId === netId && selCoil.index === index;
+
+  /** A coil picked. The element cursor stays where it is: it is where the
+   *  catalogue puts the next instruction, and a coil is not a place for one. */
+  const selectCoil = (netId: string, index: number) => setSelCoil({ netId, index });
+
+  /** The picked element, or nothing when what is picked is a gap. */
+  const elementAtCursor = (at: LadderCursor | null = cursor): Element | null => {
+    if (!at || !at.onElement) return null;
+    const rung = rungOf(at.netId);
+    return rung ? elementAt(rung, at.pos) : null;
   };
 
-  const onCursorElement = (() => {
-    if (!cursor) return false;
-    const net = networks.find(n => n.id === cursor.netId);
-    const branch = net?.rung.groups[cursor.pos.group]?.branches[cursor.pos.branch];
-    return !!branch?.elements[cursor.pos.slot];
-  })();
+  const onCursorElement = elementAtCursor() !== null;
+  const hasSelection = onCursorElement || selCoil !== null;
+
+  /** Whatever is picked, taken off the rung — the Delete key and the button. */
+  const deleteSelection = () => {
+    if (readOnly) return;
+    if (selCoil) {
+      const rung = rungOf(selCoil.netId);
+      if (rung) patchRung(selCoil.netId, removeOutput(rung, selCoil.index));
+      setSelCoil(null);
+      return;
+    }
+    // A gap is not a picked element: the cursor sitting in front of a contact
+    // must not delete the contact it is in front of.
+    if (!cursor?.onElement) return;
+    const rung = rungOf(cursor.netId);
+    if (rung) patchRung(cursor.netId, removeElement(rung, cursor.pos));
+  };
+
+  // Both take where to work explicitly, because the menu sets the cursor and
+  // copies in the same handler: React has not given the new cursor back by
+  // then, and read from the prop these would have copied whatever was picked
+  // before the menu was opened.
+  const copySelection = (cut: boolean, at: LadderCursor | null = cursor) => {
+    const el = elementAtCursor(at);
+    if (!el || !at) return;
+    setClip(dup(el));
+    if (cut && !readOnly) {
+      const rung = rungOf(at.netId);
+      if (rung) patchRung(at.netId, removeElement(rung, at.pos));
+    }
+  };
+
+  const pasteAtCursor = (at: LadderCursor | null = cursor) => {
+    if (!clip || !at || readOnly) return;
+    const rung = rungOf(at.netId);
+    if (!rung) return;
+    // After the picked element, or into the picked gap — the same rule the
+    // catalogue and the toolbar follow.
+    const to = at.onElement ? { ...at.pos, slot: at.pos.slot + 1 } : at.pos;
+    patchRung(at.netId, insertElement(rung, to, dup(clip)));
+    setCursor({ netId: at.netId, pos: { ...to, slot: to.slot + 1 } });
+  };
+
+  /** Left and right: along the rung, slot by slot, in reading order. */
+  const stepCursor = (by: -1 | 1) => {
+    if (!cursor) return;
+    const rung = rungOf(cursor.netId);
+    if (!rung) return;
+    const all = positions(rung);
+    const at = all.findIndex(p => samePos(p, cursor.pos));
+    const next = all[Math.min(all.length - 1, Math.max(0, (at < 0 ? 0 : at) + by))];
+    if (next) setCursor({ netId: cursor.netId, pos: next, onElement: !!elementAt(rung, next) });
+  };
+
+  /** Up and down: between the parallel branches, or down the coils. */
+  const stepRow = (by: -1 | 1) => {
+    if (selCoil) {
+      const rung = rungOf(selCoil.netId);
+      if (!rung) return;
+      const index = Math.min(rung.outputs.length - 1, Math.max(0, selCoil.index + by));
+      setSelCoil({ ...selCoil, index });
+      return;
+    }
+    if (!cursor) return;
+    const group = rungOf(cursor.netId)?.groups[cursor.pos.group];
+    if (!group) return;
+    const branch = Math.min(group.branches.length - 1, Math.max(0, cursor.pos.branch + by));
+    const slot = Math.min(cursor.pos.slot, group.branches[branch].elements.length);
+    const pos = { ...cursor.pos, branch, slot };
+    setCursor({ netId: cursor.netId, pos, onElement: !!group.branches[branch].elements[slot] });
+  };
+
+  /**
+   * The keys — and every one of them stays out of the way of an operand.
+   *
+   * Each address on the ladder is a real text input, so while one has the
+   * focus Delete, Backspace and the arrows belong to the text being typed: an
+   * editor that deleted a contact because somebody was correcting `%I0.1`
+   * would be worse than one with no shortcuts at all. Escape is the one key
+   * that means the same in both places — leave what I am in.
+   */
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const target = e.target as HTMLElement;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable;
+    if (e.key === 'Escape') {
+      // Out of the operand and back onto the ladder — not out of the editor
+      // altogether. Blurring alone left the focus on the document body, where
+      // the next Delete went nowhere and the ladder looked like it had
+      // stopped listening.
+      if (typing) { target.blur(); box.current?.focus(); } else { setCursor(null); setSelCoil(null); }
+      return;
+    }
+    if (typing) return;
+
+    const ctrl = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+    if (ctrl && key === 'c') { copySelection(false); e.preventDefault(); return; }
+    if (ctrl && key === 'x') { copySelection(true); e.preventDefault(); return; }
+    if (ctrl && key === 'v') { pasteAtCursor(); e.preventDefault(); return; }
+    if (ctrl) return;
+
+    if (e.key === 'Delete' || e.key === 'Backspace') { deleteSelection(); e.preventDefault(); return; }
+    if (e.key === 'ArrowLeft') { stepCursor(-1); e.preventDefault(); return; }
+    if (e.key === 'ArrowRight') { stepCursor(1); e.preventDefault(); return; }
+    if (e.key === 'ArrowUp') { stepRow(-1); e.preventDefault(); return; }
+    if (e.key === 'ArrowDown') { stepRow(1); e.preventDefault(); }
+  };
+
+  // ── Dragging ─────────────────────────────────────────────────────────────
+
+  const slotKey = (netId: string, pos: LadderPos) =>
+    `${netId}:${pos.group}:${pos.branch}:${pos.slot}`;
+  const outKey = (netId: string, index: number) => `${netId}:coil:${index}`;
+
+  const beginDrag = (e: React.DragEvent, what: Dragged) => {
+    if (readOnly) return;
+    drag.current = what;
+    setDragging(true);
+    e.dataTransfer.effectAllowed = 'move';
+    // Something has to be on the transfer or the browser starts no drag.
+    e.dataTransfer.setData('text/plain', 'ladder');
+    e.stopPropagation();
+  };
+
+  const endDrag = () => { drag.current = null; setDragging(false); setDropAt(null); };
+
+  const hoverDrop = (e: React.DragEvent, key: string) => {
+    if (!drag.current) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dropAt !== key) setDropAt(key);
+  };
+
+  /** An element dropped on a slot — from this rung, or from another one. */
+  const dropOnSlot = (e: React.DragEvent, netId: string, pos: LadderPos) => {
+    const from = drag.current;
+    endDrag();
+    if (!from || readOnly) return;
+    const fromPos = from.pos;
+    if (!fromPos) return;
+    e.preventDefault(); e.stopPropagation();
+
+    if (from.netId === netId) {
+      const rung = rungOf(netId);
+      if (rung) patchRung(netId, moveElement(rung, fromPos, pos));
+      setCursor({ netId, pos, onElement: true });
+      return;
+    }
+    // Across two networks: out of one rung and into the other in one change,
+    // so the block is never left holding the element twice or not at all.
+    const source = rungOf(from.netId);
+    const element = source ? elementAt(source, fromPos) : null;
+    if (!element) return;
+    onChange(networks.map(n => {
+      if (n.id === from.netId) return { ...n, rung: removeElement(n.rung, fromPos) };
+      if (n.id === netId) return { ...n, rung: insertElement(n.rung, pos, dup(element)) };
+      return n;
+    }));
+    setCursor({ netId, pos, onElement: true });
+  };
+
+  /** A coil dropped on a coil: the stack put in another order. */
+  const dropOnOutput = (e: React.DragEvent, netId: string, index: number) => {
+    const from = drag.current;
+    endDrag();
+    if (!from || readOnly || from.output === undefined || from.netId !== netId) return;
+    e.preventDefault(); e.stopPropagation();
+    const rung = rungOf(netId);
+    if (rung) patchRung(netId, moveOutput(rung, from.output, index));
+    setSelCoil({ netId, index });
+  };
 
   return (
     <div
       dir="ltr"
-      className="h-full overflow-auto bg-white"
+      ref={box}
+      // The keys are handled here, on the block, rather than on the window:
+      // this page has a code editor, a tag table and a tree on it, and a
+      // Delete key caught globally would take a contact off the rung while
+      // somebody was clearing a row of the tag table. `tabIndex` is what lets
+      // a div have the focus at all; the outline is left to the selection
+      // ring, which says the same thing in the place it matters.
+      tabIndex={0}
+      className="h-full overflow-auto bg-white focus:outline-none"
+      onKeyDown={onKeyDown}
       onClick={() => menu && setMenu(null)}
     >
       {/* ── The rung toolbar ─────────────────────────────────────────────
@@ -445,15 +731,18 @@ export const LadderEditor: React.FC<Props> = ({
           />
           <span className="w-px h-5 bg-gray-300 mx-1" />
           <RungTool
-            onClick={deleteAtCursor}
+            onClick={deleteSelection}
             title={t.deleteElement}
             glyph="delete"
-            disabled={!onCursorElement}
+            disabled={!hasSelection}
           />
           <span className="ms-2 text-[11px] text-gray-500 truncate">
             {cursor
               ? `${t.network} ${networks.find(n => n.id === cursor.netId)?.rung.number ?? ''}`
               : t.clickThenPick}
+          </span>
+          <span className="ms-auto text-[11px] text-gray-400 truncate hidden md:inline">
+            {t.editKeysHint}
           </span>
         </div>
       )}
@@ -577,8 +866,14 @@ export const LadderEditor: React.FC<Props> = ({
                         // position in every column of the rung.
                         cursor={cursor?.netId === net.id && cursor.pos.group === gi
                           ? cursor.pos : null}
+                        onElement={cursor?.onElement === true}
                         isKnown={isKnown}
                         onSlot={pos => clickSlot(net.id, { ...pos, group: gi })}
+                        onPick={pos => clickElement(net.id, { ...pos, group: gi })}
+                        onSelect={pos => {
+                          setCursor({ netId: net.id, pos: { ...pos, group: gi }, onElement: true });
+                          setSelCoil(null);
+                        }}
                         onPatch={(pos, patch) =>
                           patchRung(net.id, patchElement(net.rung, { ...pos, group: gi }, patch))}
                         onPin={(pos, pin, value) =>
@@ -586,6 +881,15 @@ export const LadderEditor: React.FC<Props> = ({
                         onMenu={(e, pos) => {
                           e.preventDefault(); e.stopPropagation();
                           setMenu({ x: e.clientX, y: e.clientY, netId: net.id, pos: { ...pos, group: gi } });
+                        }}
+                        dnd={{
+                          active: dragging,
+                          over: dropAt,
+                          keyOf: pos => slotKey(net.id, { ...pos, group: gi }),
+                          begin: (e, pos) => beginDrag(e, { netId: net.id, pos: { ...pos, group: gi } }),
+                          end: endDrag,
+                          hover: hoverDrop,
+                          drop: (e, pos) => dropOnSlot(e, net.id, { ...pos, group: gi }),
                         }}
                       />
                     ))}
@@ -599,6 +903,9 @@ export const LadderEditor: React.FC<Props> = ({
                       height={layout.height}
                       hint={armed ? t.placeHere : t.clickThenPick}
                       onClick={() => clickSlot(net.id, { group: net.rung.groups.length, branch: 0, slot: 0 })}
+                      dropping={dropAt === slotKey(net.id, endPos(net.rung))}
+                      onDragOver={e => hoverDrop(e, slotKey(net.id, endPos(net.rung)))}
+                      onDrop={e => dropOnSlot(e, net.id, endPos(net.rung))}
                     />
 
                     {/* The wire across to the outputs.
@@ -611,32 +918,89 @@ export const LadderEditor: React.FC<Props> = ({
                       style={{ minWidth: 24, height: 2, background: WIRE, marginTop: layout.wireY - 1 }}
                     />
 
-                    <div className="flex flex-col" style={{ gap: BRANCH_GAP }}>
-                      {net.rung.outputs.map((out, oi) => (
-                        <div
-                          key={oi}
-                          className="flex flex-col items-center"
-                          style={{ width: CELL_W, marginTop: oi === 0 ? layout.wireY - CONTACT_WIRE : 0 }}
-                          onContextMenu={e => {
-                            if (readOnly) return;
-                            e.preventDefault(); e.stopPropagation();
-                            setMenu({ x: e.clientX, y: e.clientY, netId: net.id, output: oi });
-                          }}
-                        >
-                          <Operand
-                            value={out.at}
-                            readOnly={readOnly}
-                            known={isKnown(out.at)}
-                            title={out.label}
-                            onChange={v => patchRung(net.id, patchOutput(net.rung, oi, { at: v }))}
+                    {/* The coils, and the wire that feeds them.
+
+                        Coils after the first hang off a **drop wire down the
+                        left of the column**, and each one's own lead carries
+                        the current from that drop across to the right rail.
+                        That drop is the whole picture of a rung with two
+                        outputs — without it the second coil sat on the sheet
+                        joined to nothing, which is a drawing that says the
+                        opposite of what the program does. It is drawn here
+                        the way `utils/ladder/render.ts` has always drawn it
+                        on a printed sheet. */}
+                    <div className="shrink-0" style={{ width: CELL_W }}>
+                      {/* As tall as the coils are, not as tall as the rung:
+                          `+ coil` belongs under the last coil, and hung off
+                          the full height it drifted half a rung away from the
+                          thing it adds to whenever the condition was taller
+                          than the output stack. */}
+                      <div
+                        className="relative"
+                        style={{
+                          width: CELL_W,
+                          height: layout.outputWire[Math.max(0, net.rung.outputs.length - 1)]
+                            + (CONTACT_H - CONTACT_WIRE),
+                        }}
+                      >
+                        {/* A rung with nothing on the right yet still has a
+                            wire running to the rail: the column keeps its
+                            width whether or not a coil is in it, and an
+                            unfinished rung should read as unfinished, not as
+                            a wire that stops in mid-air. */}
+                        {net.rung.outputs.length === 0 && (
+                          <span
+                            className="absolute"
+                            style={{ left: 0, right: 0, top: layout.wireY - 1, height: 2, background: WIRE }}
                           />
-                          <CoilGlyph kind={out.k} />
-                        </div>
-                      ))}
+                        )}
+                        {net.rung.outputs.length > 1 && (
+                          <span
+                            className="absolute"
+                            style={{
+                              left: 0,
+                              top: layout.wireY,
+                              height: layout.outputWire[net.rung.outputs.length - 1] - layout.wireY,
+                              width: 2,
+                              background: WIRE,
+                            }}
+                          />
+                        )}
+                        {net.rung.outputs.map((out, oi) => (
+                          <div
+                            key={oi}
+                            className={`absolute flex flex-col items-center rounded
+                              ${coilSelected(net.id, oi) ? 'ring-2 ring-blue-400' : ''}
+                              ${readOnly ? '' : 'cursor-grab'}`}
+                            style={{ left: 0, width: CELL_W, top: layout.outputWire[oi] - CONTACT_WIRE }}
+                            draggable={!readOnly}
+                            onDragStart={e => beginDrag(e, { netId: net.id, output: oi })}
+                            onDragEnd={endDrag}
+                            onDragOver={e => hoverDrop(e, outKey(net.id, oi))}
+                            onDrop={e => dropOnOutput(e, net.id, oi)}
+                            onClick={() => selectCoil(net.id, oi)}
+                            onFocus={() => selectCoil(net.id, oi)}
+                            onContextMenu={e => {
+                              if (readOnly) return;
+                              e.preventDefault(); e.stopPropagation();
+                              selectCoil(net.id, oi);
+                              setMenu({ x: e.clientX, y: e.clientY, netId: net.id, output: oi });
+                            }}
+                          >
+                            <Operand
+                              value={out.at}
+                              readOnly={readOnly}
+                              known={isKnown(out.at)}
+                              title={out.label}
+                              onChange={v => patchRung(net.id, patchOutput(net.rung, oi, { at: v }))}
+                            />
+                            <CoilGlyph kind={out.k} />
+                          </div>
+                        ))}
+                      </div>
                       {!readOnly && (
                         <button
                           className="text-[10px] text-blue-600 hover:underline px-1"
-                          style={{ marginTop: net.rung.outputs.length === 0 ? layout.wireY - 8 : 0 }}
                           title={t.addCoil}
                           onClick={() => patchRung(net.id, addOutput(net.rung, { k: 'coil', at: '' }))}
                         >
@@ -645,9 +1009,11 @@ export const LadderEditor: React.FC<Props> = ({
                       )}
                     </div>
 
-                    {/* The right rail. */}
+                    {/* The right rail, which the coils' leads run into — so no
+                        gap between it and the column: a lead that stops short
+                        of the rail is a coil wired to nothing. */}
                     <div
-                      className="shrink-0 ms-2"
+                      className="shrink-0"
                       style={{ width: 2, background: WIRE, height: layout.height }}
                     />
                   </div>
@@ -685,18 +1051,39 @@ export const LadderEditor: React.FC<Props> = ({
                 <Item
                   icon={<GitBranchIcon className="w-3.5 h-3.5" />}
                   label={t.openBranch}
-                  hint={t.openBranchNote}
+                  hint={elementAt(net.rung, pos) ? t.openBranchHere : t.openBranchNote}
                   onClick={() => {
-                    patchRung(menu.netId, addParallelBranch(net.rung, pos.group));
-                    // The cursor goes into the new branch. The next thing
-                    // picked belongs there and nowhere else, and leaving the
-                    // cursor where it was put it back in series with what the
-                    // branch was opened beside.
-                    const branches = net.rung.groups[pos.group]?.branches.length ?? 1;
-                    setCursor({ netId: menu.netId, pos: { group: pos.group, branch: branches, slot: 0 } });
+                    // The menu is only ever opened on an element, so the
+                    // branch is opened around that element.
+                    const opened = addParallelBranch(net.rung, pos, true);
+                    patchRung(menu.netId, opened.rung);
+                    // The cursor goes into the new branch — which the edit
+                    // itself says where it is, because opening a branch around
+                    // one contact splits the column and renumbers the groups
+                    // after it. The next thing picked belongs in that branch
+                    // and nowhere else; left where it was, it landed back in
+                    // series with what the branch was opened beside.
+                    setCursor({ netId: menu.netId, pos: opened.cursor });
                     setMenu(null);
                   }}
                 />
+                <div className="border-t border-gray-100 my-1" />
+                <Item
+                  icon={<CopyIcon className="w-3.5 h-3.5" />}
+                  label={t.copyElement}
+                  onClick={() => { copySelection(false, { netId: menu.netId, pos }); setMenu(null); }}
+                />
+                <Item
+                  icon={<ScissorsIcon className="w-3.5 h-3.5" />}
+                  label={t.cutElement}
+                  onClick={() => { copySelection(true, { netId: menu.netId, pos }); setMenu(null); }}
+                />
+                <Item
+                  icon={<ClipboardIcon className="w-3.5 h-3.5" />}
+                  label={t.pasteElement}
+                  onClick={() => { pasteAtCursor({ netId: menu.netId, pos }); setMenu(null); }}
+                />
+                <div className="border-t border-gray-100 my-1" />
                 <Item
                   icon={<TrashIcon className="w-3.5 h-3.5" />}
                   label={t.deleteElement}
@@ -796,17 +1183,25 @@ const GroupView: React.FC<{
   atRail: boolean;
   readOnly?: boolean;
   cursor: LadderPos | null;
+  /** Whether the cursor is on the element at that position or the gap. */
+  onElement: boolean;
   isKnown: (v: string) => boolean;
   onSlot: (pos: Omit<LadderPos, 'group'> & { group: number }) => void;
+  /** An element picked, which is not the same place as the gap before it. */
+  onPick: (pos: Omit<LadderPos, 'group'> & { group: number }) => void;
+  /** Picked without placing anything — what the focus landing on it means. */
+  onSelect: (pos: Omit<LadderPos, 'group'> & { group: number }) => void;
   onPatch: (pos: Omit<LadderPos, 'group'> & { group: number }, patch: ElementPatch) => void;
   onPin: (pos: Omit<LadderPos, 'group'> & { group: number }, pin: string, value: string) => void;
   onMenu: (e: React.MouseEvent, pos: Omit<LadderPos, 'group'> & { group: number }) => void;
+  /** Picking things up and putting them down. */
+  dnd: Dnd;
   /** What a slot says when the pointer rests on it. */
   hint: string;
   t: Strings;
 }> = ({
-  group, layout, rung, atRail, readOnly, cursor, isKnown,
-  onSlot, onPatch, onPin, onMenu, hint, t,
+  group, layout, rung, atRail, readOnly, cursor, onElement, isKnown,
+  onSlot, onPick, onSelect, onPatch, onPin, onMenu, dnd, hint, t,
 }) => {
   const parallel = group.branches.length > 1;
   const topWire = rung.rowWire[0];
@@ -850,9 +1245,13 @@ const GroupView: React.FC<{
             />
 
             <SlotInline
-              active={!!cursor && cursor.branch === bi && cursor.slot === 0}
+              active={!!cursor && !onElement && cursor.branch === bi && cursor.slot === 0}
               readOnly={readOnly} wireY={wire - rung.rowTop[bi]} hint={hint}
               onClick={() => onSlot({ group: 0, branch: bi, slot: 0 })}
+              dragging={dnd.active}
+              dropping={dnd.over === dnd.keyOf({ group: 0, branch: bi, slot: 0 })}
+              onDragOver={e => dnd.hover(e, dnd.keyOf({ group: 0, branch: bi, slot: 0 }))}
+              onDrop={e => dnd.drop(e, { group: 0, branch: bi, slot: 0 })}
             />
 
             {branch.elements.map((el, ei) => {
@@ -860,10 +1259,27 @@ const GroupView: React.FC<{
               return (
                 <React.Fragment key={ei}>
                   <div
-                    className={`relative z-10 ${cursor && cursor.branch === bi && cursor.slot === ei
+                    className={`relative z-10 ${readOnly ? '' : 'cursor-grab'}
+                      ${cursor && onElement && cursor.branch === bi && cursor.slot === ei
                       ? 'ring-2 ring-blue-400 rounded' : ''}`}
                     style={{ width: geo.width, marginTop: wire - rung.rowTop[bi] - geo.wireY }}
-                    onClick={() => onSlot({ group: 0, branch: bi, slot: ei })}
+                    draggable={!readOnly}
+                    onDragStart={e => dnd.begin(e, { group: 0, branch: bi, slot: ei })}
+                    onDragEnd={dnd.end}
+                    // Dropped on an element, it goes in *before* it — which is
+                    // what that slot number already means everywhere else here,
+                    // and what makes dropping on the left half of a rung read
+                    // the way it does in every list anybody has dragged a row
+                    // around in.
+                    onDragOver={e => dnd.hover(e, dnd.keyOf({ group: 0, branch: bi, slot: ei }))}
+                    onDrop={e => dnd.drop(e, { group: 0, branch: bi, slot: ei })}
+                    onClick={() => onPick({ group: 0, branch: bi, slot: ei })}
+                    // The operand swallows its own clicks — otherwise clicking
+                    // into an address to correct it would place whatever the
+                    // catalogue has armed on top of it. So it is the *focus*
+                    // arriving that picks the element, which is also what
+                    // tabbing along a rung should do.
+                    onFocus={() => onSelect({ group: 0, branch: bi, slot: ei })}
                     onContextMenu={e => onMenu(e, { group: 0, branch: bi, slot: ei })}
                   >
                     <ElementView
@@ -876,9 +1292,13 @@ const GroupView: React.FC<{
                     />
                   </div>
                   <SlotInline
-                    active={!!cursor && cursor.branch === bi && cursor.slot === ei + 1}
+                    active={!!cursor && !onElement && cursor.branch === bi && cursor.slot === ei + 1}
                     readOnly={readOnly} wireY={wire - rung.rowTop[bi]} hint={hint}
                     onClick={() => onSlot({ group: 0, branch: bi, slot: ei + 1 })}
+                    dragging={dnd.active}
+                    dropping={dnd.over === dnd.keyOf({ group: 0, branch: bi, slot: ei + 1 })}
+                    onDragOver={e => dnd.hover(e, dnd.keyOf({ group: 0, branch: bi, slot: ei + 1 }))}
+                    onDrop={e => dnd.drop(e, { group: 0, branch: bi, slot: ei + 1 })}
                   />
                 </React.Fragment>
               );
@@ -890,23 +1310,41 @@ const GroupView: React.FC<{
   );
 };
 
-/** A place something can be dropped, between two elements on a branch. */
+/**
+ * A place something can be dropped, between two elements on a branch.
+ *
+ * It is a hairline on the wire, which is plenty to click at and nothing to
+ * aim a drag at — so while a drag is in flight it grows to the height of a
+ * contact, centred on the same wire. The gap between two elements becomes
+ * something a hand can actually hit, and goes back to a hairline the moment
+ * the drag ends.
+ */
 const SlotInline: React.FC<{
   active: boolean; readOnly?: boolean; wireY: number;
   hint: string; onClick: () => void;
-}> = ({ active, readOnly, wireY, hint, onClick }) => (
+  dragging?: boolean; dropping?: boolean;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDrop?: (e: React.DragEvent) => void;
+}> = ({ active, readOnly, wireY, hint, onClick, dragging, dropping, onDragOver, onDrop }) => (
   <button
     type="button"
     disabled={readOnly}
     onClick={e => { e.stopPropagation(); onClick(); }}
+    onDragOver={onDragOver}
+    onDrop={onDrop}
     className={`relative z-10 shrink-0 group/slot ${readOnly ? 'cursor-default' : 'cursor-pointer'}`}
-    style={{ width: GAP, height: 1, marginTop: wireY }}
+    style={dragging
+      ? { width: GAP, height: GLYPH_H, marginTop: wireY - GLYPH_H / 2 }
+      : { width: GAP, height: 1, marginTop: wireY }}
     title={hint}
   >
     <span
       className={`absolute left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full transition-all
-        ${active ? 'w-3 h-3 bg-blue-500 ring-2 ring-blue-200'
+        ${dropping ? 'w-3.5 h-3.5 bg-blue-600 ring-2 ring-blue-300'
+        : active ? 'w-3 h-3 bg-blue-500 ring-2 ring-blue-200'
+        : dragging ? 'w-2 h-2 bg-blue-200'
         : 'w-1.5 h-1.5 bg-transparent group-hover/slot:bg-blue-400'}`}
+      style={dragging ? { top: GLYPH_H / 2 } : undefined}
     />
   </button>
 );
@@ -915,11 +1353,18 @@ const SlotInline: React.FC<{
 const Slot: React.FC<{
   active: boolean; readOnly?: boolean; wireY: number; height: number;
   hint: string; onClick: () => void;
-}> = ({ active, readOnly, wireY, height, hint, onClick }) => (
+  // The end slot is already 28 pixels of rung wide, so unlike the inline ones
+  // it needs nothing extra to be droppable.
+  dropping?: boolean;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDrop?: (e: React.DragEvent) => void;
+}> = ({ active, readOnly, wireY, height, hint, onClick, dropping, onDragOver, onDrop }) => (
   <button
     type="button"
     disabled={readOnly}
     onClick={onClick}
+    onDragOver={onDragOver}
+    onDrop={onDrop}
     className="relative shrink-0 group/end"
     style={{ width: 28, height }}
     title={hint}
@@ -927,7 +1372,9 @@ const Slot: React.FC<{
     <span className="absolute" style={{ left: 0, right: 0, top: wireY - 1, height: 2, background: WIRE }} />
     <span
       className={`absolute left-1/2 -translate-x-1/2 rounded-full transition-all
-        ${active ? 'w-3 h-3 bg-blue-500 ring-2 ring-blue-200' : 'w-1.5 h-1.5 bg-transparent group-hover/end:bg-blue-400'}`}
+        ${dropping ? 'w-3.5 h-3.5 bg-blue-600 ring-2 ring-blue-300'
+        : active ? 'w-3 h-3 bg-blue-500 ring-2 ring-blue-200'
+        : 'w-1.5 h-1.5 bg-transparent group-hover/end:bg-blue-400'}`}
       style={{ top: wireY - 6 }}
     />
   </button>

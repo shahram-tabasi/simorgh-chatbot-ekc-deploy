@@ -107,8 +107,10 @@ export interface Strings {
   deleteNetwork: string; deleteNetworkAsk: string;
   networkOff: string; networkOn: string;
   noNetworks: string; addFirstNetwork: string; addCoil: string;
-  openBranch: string; openBranchNote: string; closeBranch: string; closeBranchNote: string;
+  openBranch: string; openBranchNote: string; openBranchHere: string;
+  closeBranch: string; closeBranchNote: string;
   deleteElement: string; deleteBranch: string; deleteCoil: string;
+  copyElement: string; cutElement: string; pasteElement: string; editKeysHint: string;
   contactNo: string; contactNc: string; coil: string; emptyBox: string;
   clickThenPlace: string; putItBack: string; placeHere: string; clickThenPick: string;
   instancePlaceholder: string; instanceTip: string; boxTypeTip: string;
@@ -304,11 +306,16 @@ const EN: Strings = {
   addCoil: '+ coil',
   openBranch: 'Open branch',
   openBranchNote: 'Everything in this column becomes an OR',
+  openBranchHere: 'A parallel path around this element alone',
   closeBranch: 'Close branch',
   closeBranchNote: 'Carry on after the parallel group',
   deleteElement: 'Delete this element',
   deleteBranch: 'Delete this branch',
   deleteCoil: 'Delete this coil',
+  copyElement: 'Copy',
+  cutElement: 'Cut',
+  pasteElement: 'Paste here',
+  editKeysHint: 'Drag to move · Del removes · Ctrl+C / Ctrl+V · arrows move along the rung',
   contactNo: 'Normally open contact',
   contactNc: 'Normally closed contact',
   coil: 'Assignment',
@@ -576,11 +583,16 @@ const FA: Strings = {
   addCoil: '+ کویل',
   openBranch: 'باز کردن شاخه',
   openBranchNote: 'هر چه در این ستون است OR می‌شود',
+  openBranchHere: 'مسیر موازی فقط دور همین المان',
   closeBranch: 'بستن شاخه',
   closeBranchNote: 'ادامه دادن بعد از گروه موازی',
   deleteElement: 'حذف این المان',
   deleteBranch: 'حذف این شاخه',
   deleteCoil: 'حذف این کویل',
+  copyElement: 'کپی',
+  cutElement: 'برش',
+  pasteElement: 'چسباندن اینجا',
+  editKeysHint: 'با درگ جابه‌جا کنید · Del حذف می‌کند · Ctrl+C / Ctrl+V · کلیدهای جهت روی ریل حرکت می‌کنند',
   contactNo: 'کنتاکت باز (NO)',
   contactNc: 'کنتاکت بسته (NC)',
   coil: 'کویل — انتساب',

@@ -143,20 +143,88 @@ export function insertGroup(rung: Rung, at: number, element?: Element): Rung {
 }
 
 /**
- * A branch in parallel with the one the cursor is in.
+ * A branch in parallel with **what is selected**, and where the cursor goes.
  *
  * This is the open-branch command, and it is the one edit that changes what a
- * rung *means* rather than what is on it: everything in the group is now an
- * OR. So it adds an empty branch and leaves the cursor free to fill it, rather
- * than guessing at a contact to put there.
+ * rung *means* rather than what is on it: whatever the branch is opened
+ * around becomes an OR. So it adds an empty branch and leaves the cursor in
+ * it, rather than guessing at a contact to put there.
+ *
+ * **What it parallels is what the cursor is on**, which is the whole
+ * difference between this and paralleling the column. Contacts typed one
+ * after another land in one branch in series (see `insertElement`), so a
+ * command that could only parallel the whole group could never write the one
+ * circuit every ladder program contains: start OR seal-in, in series with
+ * stop. With a contact selected the group is split around it — what is before
+ * it stays in series before it, what is after stays in series after it — and
+ * only that contact gets the parallel path. With a slot selected, or a branch
+ * holding one element, there is nothing to split and the group itself is
+ * paralleled, which is what it meant before.
+ *
+ * The cursor comes back with the rung because a split renumbers the groups,
+ * and a caller that worked the new position out for itself would be working
+ * it out from the rung this replaces.
  */
-export function addParallelBranch(rung: Rung, group: number): Rung {
+export function addParallelBranch(
+  rung: Rung, pos: LadderPos, aroundElement: boolean,
+): { rung: Rung; cursor: LadderPos } {
   const next = clone(rung);
-  if (group >= next.groups.length) {
+
+  // Past the last group: a new column, opened as a parallel pair.
+  if (pos.group >= next.groups.length) {
     next.groups.push({ branches: [{ elements: [] }, { elements: [] }] });
-    return next;
+    return { rung: next, cursor: { group: next.groups.length - 1, branch: 1, slot: 0 } };
   }
-  next.groups[group].branches.push({ elements: [] });
+
+  const group = next.groups[pos.group];
+  const bi = Math.max(0, Math.min(pos.branch, group.branches.length - 1));
+  const branch = group.branches[bi];
+  const element = aroundElement ? branch.elements[pos.slot] : undefined;
+
+  // One contact of several, selected inside a branch of its own: split the
+  // column so the parallel is around that contact and nothing else.
+  if (element && branch.elements.length > 1 && group.branches.length === 1) {
+    const before = branch.elements.slice(0, pos.slot);
+    const after = branch.elements.slice(pos.slot + 1);
+    const made: Group[] = [];
+    if (before.length > 0) made.push({ branches: [{ elements: before }] });
+    made.push({ branches: [{ elements: [element] }, { elements: [] }] });
+    if (after.length > 0) made.push({ branches: [{ elements: after }] });
+    next.groups.splice(pos.group, 1, ...made);
+    const at = pos.group + (before.length > 0 ? 1 : 0);
+    return { rung: next, cursor: { group: at, branch: 1, slot: 0 } };
+  }
+
+  group.branches.push({ elements: [] });
+  return { rung: next, cursor: { group: pos.group, branch: group.branches.length - 1, slot: 0 } };
+}
+
+/**
+ * An element picked up from one place on the rung and put down at another.
+ *
+ * Inserted first and removed afterwards, which is the order that survives its
+ * own side effects: removing empties a branch, an emptied branch goes with its
+ * group (`removeElement`), and a group going away renumbers every group after
+ * it — including the one being dropped into. Done the other way round, a
+ * contact dragged out of the last branch of a column landed in whatever group
+ * had shuffled into that number.
+ */
+export function moveElement(rung: Rung, from: LadderPos, to: LadderPos): Rung {
+  const element = elementAt(rung, from);
+  if (!element || samePos(from, to)) return rung;
+  const next = insertElement(rung, to, { ...element });
+  // The insert pushed the original along, where both are on the same branch.
+  const sameBranch = from.group === to.group && from.branch === to.branch;
+  const source = sameBranch && to.slot <= from.slot ? { ...from, slot: from.slot + 1 } : from;
+  return removeElement(next, source);
+}
+
+/** One of the stacked coils moved up or down the right-hand end. */
+export function moveOutput(rung: Rung, from: number, to: number): Rung {
+  if (from === to || from < 0 || from >= rung.outputs.length) return rung;
+  const next = clone(rung);
+  const [coil] = next.outputs.splice(from, 1);
+  next.outputs.splice(Math.max(0, Math.min(to, next.outputs.length)), 0, coil);
   return next;
 }
 
@@ -309,10 +377,23 @@ export function copyBranch(rung: Rung, group: number, branch: number): Branch | 
 
 // ── Putting an instruction on a rung ────────────────────────────────────────
 
-/** Where the ladder cursor is: which network, and where in its rung. */
+/**
+ * Where the ladder cursor is: which network, and where in its rung.
+ *
+ * `onElement` is the difference between *the element at this slot* and *the
+ * gap in front of it*, which share a number and are not the same place. A
+ * picked contact is something to delete, copy or open a branch around, and
+ * the next instruction goes in **after** it — that is the direction a rung is
+ * built in. A picked gap is a place to put something, and the next
+ * instruction goes in there. Without the distinction, typing an address into
+ * a contact and then pressing the contact button put the new one in front of
+ * the one just typed, walking the rung backwards.
+ */
 export interface LadderCursor {
   netId: string;
   pos: LadderPos;
+  /** True when what is picked is the element at `pos`, not the gap before it. */
+  onElement?: boolean;
 }
 
 /**
@@ -341,6 +422,9 @@ export function placeInstruction(
   if (index < 0) return null;
   const net = networks[index];
   const pos = cursor?.pos ?? { group: net.rung.groups.length, branch: 0, slot: 0 };
+  // What is picked decides where the new element lands: after a picked
+  // element, in a picked gap. See `LadderCursor`.
+  const at: LadderPos = cursor?.onElement ? { ...pos, slot: pos.slot + 1 } : pos;
 
   const replace = (rung: Rung, next: LadderCursor | null) => ({
     networks: networks.map((n, i) => (i === index ? { ...n, rung } : n)),
@@ -352,10 +436,16 @@ export function placeInstruction(
     return coil ? replace(addOutput(net.rung, coil), cursor) : null;
   }
   if (instr.id === 'gen.branch.open') {
-    const branches = net.rung.groups[pos.group]?.branches.length ?? 1;
-    return replace(addParallelBranch(net.rung, pos.group), {
-      netId, pos: { group: pos.group, branch: branches, slot: 0 },
-    });
+    // A branch opened at the right-hand end of a rung that already drives
+    // something is a second coil, not a second column: that is what the
+    // gesture means on the sheet — the drop wire after the last contact,
+    // with another output hanging off it — and a column of two empty
+    // branches beyond the last contact is not a thing anybody draws.
+    if (pos.group >= net.rung.groups.length && net.rung.outputs.length > 0) {
+      return replace(addOutput(net.rung, { k: 'coil', at: '' }), cursor);
+    }
+    const opened = addParallelBranch(net.rung, pos, cursor?.onElement === true);
+    return replace(opened.rung, { netId, pos: opened.cursor });
   }
   /**
    * Close branch: leave the parallel path and carry on after it.
@@ -388,12 +478,14 @@ export function placeInstruction(
 
   const element = elementFor(instr);
   if (!element) return null;
-  const branch = net.rung.groups[pos.group]?.branches[pos.branch];
+  const branch = net.rung.groups[at.group]?.branches[at.branch];
   const rung = branch
-    ? insertElement(net.rung, pos, element)
-    : insertGroup(net.rung, pos.group, element);
+    ? insertElement(net.rung, at, element)
+    : insertGroup(net.rung, at.group, element);
+  // The cursor lands in the gap after what was just put in, so the next
+  // instruction carries on to the right of it.
   const after: LadderCursor = branch
-    ? { netId, pos: { ...pos, slot: pos.slot + 1 } }
-    : { netId, pos: { group: pos.group, branch: 0, slot: 1 } };
+    ? { netId, pos: { ...at, slot: at.slot + 1 } }
+    : { netId, pos: { group: at.group, branch: 0, slot: 1 } };
   return replace(rung, after);
 }
