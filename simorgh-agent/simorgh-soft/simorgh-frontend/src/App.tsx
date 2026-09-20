@@ -38,6 +38,7 @@ const PlcTab = React.lazy(() => import('./components/PLC/PlcTab'));
 import { findFeederDuplicates, DuplicateGroup } from './utils/feederDuplicates';
 import { DesktopInstallerInfo } from './services/projectService';
 import { Revision } from './types/project';
+import { useSymbolLibrary } from './utils/cad/useSymbols';
 
 // The build shown in Help → About.
 const APP_VERSION = '1.0.0';
@@ -253,6 +254,14 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
     saveNeedsYou, saveFailures, downloadProjectCopy, restoreFromFile, restoreOneSwitchgear,
   } = useProject();
   const [showHistory, setShowHistory] = useState(false);
+  // The symbol library, loaded once for the whole app.
+  //
+  // It used to be loaded by whichever tab happened to want it, from that tab's
+  // own effect — so the office's DXF pack reached the drawings and not the
+  // template previews, and a symbol redrawn on one screen was still the old
+  // one on another until something unrelated made it render again. Up here it
+  // is loaded before any tab opens and changed in one place.
+  useSymbolLibrary(projectData.symbolOverrides);
   const desktopInstaller = useDesktopInstaller();
   // Everything on screen that can be put away, so View can bring it back.
   // Null outside a provider — the menu simply shows no panel section then.

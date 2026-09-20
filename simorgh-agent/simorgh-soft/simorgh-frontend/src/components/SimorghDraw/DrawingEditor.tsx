@@ -47,8 +47,12 @@ import { Lang, LANGS, STRINGS, Strings, dirOf, loadLang, saveLang } from './lang
 import { DrawingHelp } from './DrawingHelp';
 import { SymbolLibrary } from './SymbolLibrary';
 import { symbolDrawing } from '../../utils/cad/symbolArt';
-import { countInstances, replaceSymbolInstances } from '../../utils/cad/replaceSymbol';
-import { IEC_SYMBOLS, SymbolId, packSymbolOverride } from '../../utils/iecSymbols';
+import {
+  SymbolArt, countInstances, replaceSymbolInstances,
+} from '../../utils/cad/replaceSymbol';
+import {
+  IEC_SYMBOLS, SymbolId, packSymbolOverride, redrawnSymbolIds,
+} from '../../utils/iecSymbols';
 import { SymbolArtOverride } from '../../types/project';
 import { LibraryKind } from '../../utils/cad/symbolLibraries';
 import { CpuIcon, PencilRulerIcon } from 'lucide-react';
@@ -1420,6 +1424,19 @@ export const DrawingEditor: React.FC<Props> = ({
    * is not a thing to do quietly, and because an instance that was turned or
    * mirrored after it was placed comes back the way the library draws it.
    */
+  /**
+   * A symbol's drawing as one object, ink and connection points together.
+   *
+   * They have to go through the same scale and the same move, so they are
+   * handed over as one run. Left behind, the replacement is a device that
+   * looks right and cannot be wired: the wires on the sheet still end where
+   * they ended and there is nothing there for them to end on.
+   */
+  const art = (d: ReturnType<typeof symbolDrawing>): SymbolArt => ({
+    shapes: [...d.drawing.shapes, ...terminalMarks(d.terminals)],
+    pinX: d.pinX,
+  });
+
   const applyRedrawnSymbol = (
     symbolId: SymbolId,
     before: SymbolArtOverride | undefined,
@@ -1464,22 +1481,8 @@ export const DrawingEditor: React.FC<Props> = ({
     let done = 0;
     sheets.forEach((sheet, i) => {
       const current = edits[i] ?? sheet.drawing.shapes;
-      // The connection points go down with the ink. Leaving them behind is
-      // what made a redrawn symbol impossible to wire: the sheet kept the
-      // wires and lost the terminals they ended on, so nothing joined and
-      // nothing was reported. `replaceSymbolInstances` measures on the ink and
-      // carries the points through the same transform.
-      const swap = replaceSymbolInstances(
-        current, symbolId, title,
-        {
-          shapes: [...was.drawing.shapes, ...terminalMarks(was.terminals)],
-          pinX: was.pinX,
-        },
-        {
-          shapes: [...now.drawing.shapes, ...terminalMarks(now.terminals)],
-          pinX: now.pinX,
-        },
-      );
+      // The connection points go down with the ink — see `art`.
+      const swap = replaceSymbolInstances(current, symbolId, title, art(was), art(now));
       if (swap.count === 0) return;
       historyFor(i).push(current);
       next[i] = swap.shapes;
@@ -1602,6 +1605,73 @@ export const DrawingEditor: React.FC<Props> = ({
     setSelection(new Set());
     touch(index);
     forceRender(n => n + 1);
+  };
+
+  /**
+   * Every symbol this project draws its own way, put on every page of the set.
+   *
+   * The office redraws a symbol and asks for the whole job to be laid out
+   * again with it. Until now that could not be done and, worse, it could not
+   * be *reported* as not done: the single line is generated as SVG and read
+   * back as geometry, so a breaker on a sheet was eleven lines that had
+   * stopped being a breaker, and the command to replace it searched every page
+   * and truthfully found nothing. The pages are stamped now (see
+   * `eplanSingleLine`), so every device on them can be found again by what it
+   * is.
+   *
+   * `from` is the library's own drawing and `to` is whatever is drawn for that
+   * id now. That pairing is what a page holds: a page drawn before the symbol
+   * was redrawn has the built-in one on it. A page that already has an older
+   * *override* on it is the one case this does not place exactly — the
+   * conductor is worked out from the drawing being replaced, and that one is
+   * a drawing nobody kept. Redrawing a symbol offers to update the pages at
+   * the time, which is the moment both versions are still known, and this is
+   * for catching up everything that was not there for it.
+   */
+  const redrawAllSymbols = () => {
+    const ids = redrawnSymbolIds();
+    if (ids.length === 0) { setNotice(T.redrawAllNothingRedrawn); return; }
+
+    const work = ids.map(id => ({
+      id,
+      title: IEC_SYMBOLS[id]?.title ?? id,
+      was: symbolDrawing(id, undefined, true),
+      now: symbolDrawing(id, undefined, false),
+    }));
+
+    const counts = sheets.map((sheet, i) => {
+      const run = edits[i] ?? sheet.drawing.shapes;
+      return work.reduce((n, w) => n + countInstances(run, w.id, w.title), 0);
+    });
+    const places = counts.reduce((n, c) => n + c, 0);
+    if (places === 0) { setNotice(T.redrawAllNone); return; }
+    const pageCount = counts.filter(c => c > 0).length;
+    if (!window.confirm(T.redrawAllAsk(work.length, places, pageCount))) return;
+
+    const next: Record<number, Shape[]> = { ...edits };
+    const changed = new Set<number>(touched);
+    let done = 0;
+    sheets.forEach((sheet, i) => {
+      let run = edits[i] ?? sheet.drawing.shapes;
+      const started = run;
+      for (const w of work) {
+        const swap = replaceSymbolInstances(run, w.id, w.title, art(w.was), art(w.now));
+        if (swap.count === 0) continue;
+        run = swap.shapes;
+        done += swap.count;
+      }
+      if (run === started) return;
+      historyFor(i).push(started);
+      next[i] = run;
+      changed.add(i);
+    });
+    if (done === 0) { setNotice(T.redrawAllNone); return; }
+
+    setEdits(next);
+    setTouched(changed);
+    setSelection(new Set());
+    forceRender(n => n + 1);
+    setNotice(T.redrawAllDone(done, changed.size));
   };
 
   /**
@@ -2031,6 +2101,7 @@ export const DrawingEditor: React.FC<Props> = ({
               <RedoIcon className="w-4 h-4" />
             </Tool>
             <Tool
+              tag="save"
               title={
                 !onSaveEdits ? T.cannotKeep
                 : !canEdit ? T.readOnly
@@ -2239,6 +2310,14 @@ export const DrawingEditor: React.FC<Props> = ({
                 <Tool tag="library" label title={T.openLibrary} hide={lean} on={() => setShowLibrary(true)}>
                   <LibraryBigIcon className="w-5 h-5" />
                 </Tool>
+                {/* Beside the library, because it is the library this puts on
+                    the pages: redraw a symbol, then bring the whole set up to
+                    it in one go. In both ribbons the library is in, for the
+                    same reason the library is in both. */}
+                <Tool tag="redraw-all" label title={`${T.redrawAll} — ${T.redrawAllTip}`}
+                      hide={lean} on={redrawAllSymbols}>
+                  <RefreshCwIcon className="w-5 h-5" />
+                </Tool>
                 <Stack>
                   <Tool tag="group" title={T.group} keyHint="Ctrl+G"
                         disabled={selection.size < 2} on={group}>
@@ -2373,6 +2452,10 @@ export const DrawingEditor: React.FC<Props> = ({
               <RibbonPanel name={T.panBlock}>
                 <Tool tag="library" label title={T.openLibrary} hide={lean} on={() => setShowLibrary(true)}>
                   <LibraryBigIcon className="w-5 h-5" />
+                </Tool>
+                <Tool tag="redraw-all" label title={`${T.redrawAll} — ${T.redrawAllTip}`}
+                      hide={lean} on={redrawAllSymbols}>
+                  <RefreshCwIcon className="w-5 h-5" />
                 </Tool>
               </RibbonPanel>
             </>

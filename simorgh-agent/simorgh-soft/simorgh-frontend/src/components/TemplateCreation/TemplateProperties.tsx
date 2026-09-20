@@ -7,8 +7,7 @@ import { PanelFrame } from '../shared/PanelFrame';
 import { PartCell } from './PartCell';
 import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
 import { EplanSymbolMap } from '../../utils/eplanSingleLine';
-import { setProjectSymbolOverrides } from '../../utils/iecSymbols';
-import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
+import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import { templateMeta } from '../../utils/templateMeta';
 
 // Reserved keys inside template.properties used to carry per-template metadata.
@@ -523,12 +522,14 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     setProperties(template.properties || {});
   }, [template]);
 
-  // The symbols this project draws its own way, so the previews here are the
-  // drawings the sheets will use. Its own layer in the library, above the
-  // symbol pack, so the drawing tab setting the pack cannot throw it away.
-  useEffect(() => {
-    setProjectSymbolOverrides(toSymbolOverrides(projectData.symbolOverrides));
-  }, [projectData.symbolOverrides]);
+  // The previews here draw from the same symbol library the sheets do, and are
+  // redrawn when any of it changes — the project's own drawing of a device,
+  // the office's DXF pack, whichever screen changed it. Loading it was this
+  // screen's job once, from here, and that is how a symbol redrawn in the
+  // drawing tab could be the new one on the sheet and the old one in this
+  // preview at the same moment.
+  // Called for what it subscribes to, not for what it returns.
+  useSymbolVersion();
 
   // ── LV property layout (per spec) ──────────────────────────────────────────
   // All LV rows are now renamable (user can edit all property names)

@@ -644,42 +644,92 @@ export interface SymbolOverride {
   title?: string;
 }
 
-let OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
+// ── What is standing in for a symbol, and who said so ───────────────────────
+//
+// Three layers, and they are three because three different places answer the
+// question and none of them knows about the others:
+//
+//   **project** — this job's own drawing of the device, redrawn on the symbol
+//                 page. The most particular thing anybody has said, so it wins.
+//   **pack**    — the office's DXF symbol pack, kept in this browser.
+//   **eplan**   — symbols exported from EPLAN for the parts on this project.
+//
+// They used to be two, and the pack and EPLAN shared one slot that whichever
+// screen ran last overwrote. Worse, every screen set the layers from its own
+// effect, so what a symbol looked like depended on which tab had been opened
+// and in what order: the library showed the new drawing, the template preview
+// showed the old one, and the sheet showed whichever it had last been told.
+// "It is somehow not in sync" is that, exactly.
+//
+// So the layers are separate, each has one writer, and **anything that changes
+// them says so**. Drawing from a module-level variable is fine; drawing from
+// one that can change without React hearing about it is not, and that is what
+// `onSymbols` is for.
+
+let PROJECT_OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
+let PACK_OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
+let EPLAN_OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
+
+let VERSION = 0;
+const watchers = new Set<() => void>();
+
+/** Everything that draws a symbol, told that one has changed. */
+function announce(): void {
+  VERSION += 1;
+  for (const fn of watchers) fn();
+}
 
 /**
- * Symbols this project draws its own way, redrawn on the graphic page.
+ * How many times the symbols have changed.
  *
- * Kept apart from the pack's rather than merged into it, for two reasons. It
- * wins: a drawing made for this job is the most particular thing anybody has
- * said about how the device is drawn. And the screens that set the two layers
- * are different screens — the template tab knows the project, the drawing tab
- * knows the pack — so keeping them separate is what stops whichever loaded
- * last from throwing the other away.
+ * A number rather than the maps themselves: a screen only needs to know that
+ * it has to draw again, and comparing two nested maps on every render to learn
+ * that is work for nothing. Pairs with `onSymbols` for `useSyncExternalStore`.
  */
-let PROJECT_OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
+export const symbolsVersion = (): number => VERSION;
 
-/** Hand the library the pack's own symbols. Passing {} goes back to these. */
-export function setSymbolOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
-  OVERRIDES = map ?? {};
+/** Called whenever any layer changes. Returns the way to stop listening. */
+export function onSymbols(fn: () => void): () => void {
+  watchers.add(fn);
+  return () => { watchers.delete(fn); };
+}
+
+/** Hand the library the office's DXF pack. Passing {} clears that layer. */
+export function setPackSymbolOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
+  PACK_OVERRIDES = map ?? {};
+  announce();
+}
+
+/** Hand the library the symbols EPLAN exported for this project's parts. */
+export function setEplanSymbolOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
+  EPLAN_OVERRIDES = map ?? {};
+  announce();
 }
 
 /** Hand the library the project's own drawings. Passing {} clears them. */
 export function setProjectSymbolOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
   PROJECT_OVERRIDES = map ?? {};
+  announce();
 }
 
 /** What the library will draw for an id, when something has replaced it. */
 export function symbolOverride(id: string): SymbolOverride | undefined {
-  return PROJECT_OVERRIDES[id as SymbolId] ?? OVERRIDES[id as SymbolId];
+  return PROJECT_OVERRIDES[id as SymbolId]
+    ?? PACK_OVERRIDES[id as SymbolId]
+    ?? EPLAN_OVERRIDES[id as SymbolId];
 }
 
 /**
- * Only the pack's — what the symbol falls back to when the project's own
- * drawing of it is put away again.
+ * Everything except the project's own — what a symbol falls back to when the
+ * project's drawing of it is put away again.
  */
 export function packSymbolOverride(id: string): SymbolOverride | undefined {
-  return OVERRIDES[id as SymbolId];
+  return PACK_OVERRIDES[id as SymbolId] ?? EPLAN_OVERRIDES[id as SymbolId];
 }
+
+/** Which symbols this project draws its own way, for a screen that lists them. */
+export const redrawnSymbolIds = (): SymbolId[] =>
+  Object.keys(PROJECT_OVERRIDES) as SymbolId[];
 
 /**
  * The geometry an overriding symbol is drawn with.

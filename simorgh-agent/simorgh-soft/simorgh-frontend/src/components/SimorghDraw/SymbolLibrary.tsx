@@ -29,9 +29,9 @@ import { SymbolMaker } from './SymbolMaker';
 import { DxfSymbolPack } from './DxfSymbolPack';
 import { SymbolGraphicEditor } from './SymbolGraphicEditor';
 import { DxfSymbol, loadDxfSymbols, saveDxfSymbols } from '../../utils/cad/dxfSymbols';
-import { SymbolId, setProjectSymbolOverrides } from '../../utils/iecSymbols';
+import { SymbolId } from '../../utils/iecSymbols';
 import { SymbolArtOverride } from '../../types/project';
-import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
+import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import { useProject } from '../../context/ProjectContext';
 import { Strings, dirOf, Lang } from './lang';
 import { useOverlayHost } from './overlayHost';
@@ -191,12 +191,10 @@ export const SymbolLibrary: React.FC<Props> = ({
   const [more, setMore] = useState(false);
 
   // A symbol redrawn for this project replaces the library's everywhere the
-  // project draws — so the override map is pushed into the symbol module
-  // whenever it changes, exactly as the old tab did.
-  useEffect(() => {
-    setProjectSymbolOverrides(toSymbolOverrides(projectData.symbolOverrides));
-    setBeat(b => b + 1);
-  }, [projectData.symbolOverrides]);
+  // project draws. Pushing the map into the symbol module is the app's job now
+  // (`useSymbolLibrary`, mounted at the top) — this panel only has to be drawn
+  // again when it lands, which reading the version does.
+  useSymbolVersion();
 
   // The office's library comes off the server, so it arrives after the first
   // draw. `beat` is what says "it is here now" — without it the list would be

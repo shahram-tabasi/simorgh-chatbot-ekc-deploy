@@ -72,6 +72,12 @@ export interface Strings {
   symbolRedrawnDone: (name: string, places: number, pages: number) => string;
   symbolRedrawnNone: (name: string) => string;
   symbolRedrawnKept: (name: string) => string;
+  // Laying the whole set out again with the library as it now stands
+  redrawAll: string; redrawAllTip: string;
+  redrawAllAsk: (symbols: number, places: number, pages: number) => string;
+  redrawAllDone: (places: number, pages: number) => string;
+  redrawAllNone: string;
+  redrawAllNothingRedrawn: string;
   pageRenameAsk: string; pageNoteAsk: string;
   pageAdded: (name: string) => string;
   pageDeleteAsk: (name: string) => string;
@@ -243,6 +249,19 @@ const EN: Strings = {
     + 'it is what will be drawn from now on.',
   symbolRedrawnKept: name =>
     `${name} is kept with the project. The pages already drawn were left as they are.`,
+  redrawAll: 'Redraw from the library',
+  redrawAllTip: 'Put the symbols as they are drawn now into every place they appear, on every page of this set',
+  redrawAllAsk: (symbols, places, pages) =>
+    `${symbols} symbol(s) are drawn differently for this project than the library draws them, `
+    + `and they appear in ${places} place(s) on ${pages} page(s).\n\n`
+    + 'Put the drawings as they now stand into all of them?\n\n'
+    + 'Each one keeps its wire and its height, and everything else on the pages '
+    + 'is left alone. One that was turned or mirrored after it was placed comes '
+    + 'back the way the library draws it. Ctrl+Z takes it all back off.',
+  redrawAllDone: (places, pages) =>
+    `Redrawn in ${places} place(s) on ${pages} page(s).`,
+  redrawAllNone: 'Nothing on these pages uses a symbol this project has redrawn — they are already drawn the way the library draws them now.',
+  redrawAllNothingRedrawn: 'This project has not redrawn any symbol yet, so the pages already draw what the library draws.',
   pageRenameAsk: 'What is this page called?',
   pageNoteAsk: 'What is this page for? (the line under the name)',
   pageAdded: name => `${name} added — it is open, and what you had drawn is kept`,
@@ -580,6 +599,19 @@ const FA: Strings = {
     + 'پس از این پس همین کشیده می‌شود.',
   symbolRedrawnKept: name =>
     `${name} با پروژه نگه داشته شد. صفحه‌هایی که پیش‌تر کشیده شده‌اند دست‌نخورده ماندند.`,
+  redrawAll: 'بازکشیدن از کتابخانه',
+  redrawAllTip: 'سیمبل‌ها را همان‌طور که اکنون کشیده می‌شوند، در هر جایی از این مجموعه که آمده‌اند بنشان',
+  redrawAllAsk: (symbols, places, pages) =>
+    `${symbols} سیمبل در این پروژه جور دیگری کشیده شده‌اند تا آنچه کتابخانه می‌کشد، `
+    + `و در ${places} جا روی ${pages} صفحه آمده‌اند.\n\n`
+    + 'نقشه‌ها همان‌طور که اکنون هستند در همهٔ آن‌ها نشانده شوند؟\n\n'
+    + 'هرکدام روی سیم و با ارتفاع خودش می‌ماند و بقیهٔ صفحه دست‌نخورده می‌ماند. '
+    + 'نمونه‌ای که پس از قرار گرفتن چرخانده یا قرینه شده، به شکل کتابخانه برمی‌گردد. '
+    + 'با Ctrl+Z همه‌اش برمی‌گردد.',
+  redrawAllDone: (places, pages) =>
+    `در ${places} جا روی ${pages} صفحه از نو کشیده شد.`,
+  redrawAllNone: 'هیچ‌چیز در این صفحه‌ها از سیمبلی که این پروژه بازکشیده استفاده نمی‌کند — همین حالا هم همان‌طورند که کتابخانه می‌کشد.',
+  redrawAllNothingRedrawn: 'این پروژه هنوز هیچ سیمبلی را بازنکشیده، پس صفحه‌ها همان را می‌کشند که کتابخانه می‌کشد.',
   pageRenameAsk: 'نام این صفحه چیست؟',
   pageNoteAsk: 'این صفحه برای چیست؟ (خط زیر نام)',
   pageAdded: name => `${name} اضافه شد — باز است و آنچه کشیده بودید نگه داشته شد`,
@@ -918,6 +950,19 @@ const TR: Strings = {
     + 'bundan sonra bu çizilecek.',
   symbolRedrawnKept: name =>
     `${name} projeyle birlikte saklandı. Önceden çizilmiş sayfalara dokunulmadı.`,
+  redrawAll: 'Kitaplıktan yeniden çiz',
+  redrawAllTip: 'Sembolleri şu anki çizimleriyle, bu setin her sayfasında göründükleri her yere yerleştir',
+  redrawAllAsk: (symbols, places, pages) =>
+    `${symbols} sembol bu projede kitaplıktakinden farklı çiziliyor `
+    + `ve ${pages} sayfada ${places} yerde geçiyor.\n\n`
+    + 'Çizimler şu anki halleriyle hepsine yerleştirilsin mi?\n\n'
+    + 'Her biri kendi kablosunda ve kendi yüksekliğinde kalır; sayfalardaki '
+    + 'diğer her şeye dokunulmaz. Yerleştirildikten sonra döndürülmüş ya da '
+    + 'aynalanmış olan, kitaplığın çizdiği gibi geri gelir. Ctrl+Z geri alır.',
+  redrawAllDone: (places, pages) =>
+    `${pages} sayfada ${places} yerde yeniden çizildi.`,
+  redrawAllNone: 'Bu sayfalarda bu projenin yeniden çizdiği bir sembol kullanılmıyor — zaten kitaplığın şu anki çizimindeler.',
+  redrawAllNothingRedrawn: 'Bu proje henüz hiçbir sembolü yeniden çizmedi, bu yüzden sayfalar kitaplığın çizdiğini çiziyor.',
   pageRenameAsk: 'Bu sayfanın adı nedir?',
   pageNoteAsk: 'Bu sayfa ne için? (adın altındaki satır)',
   pageAdded: name => `${name} eklendi — açık, ve çizdikleriniz duruyor`,

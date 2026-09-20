@@ -12,7 +12,7 @@ import {
   partKeys,
 } from '../../utils/eplanSingleLine';
 import {
-  IEC_SYMBOLS, SymbolId, SymbolOverride, setSymbolOverrides, setProjectSymbolOverrides,
+  IEC_SYMBOLS, SymbolId, SymbolOverride, setEplanSymbolOverrides,
 } from '../../utils/iecSymbols';
 
 // The library's own ids, to match a file in the pack against by name.
@@ -27,9 +27,9 @@ import { drawingFromSvg, svgSize } from '../../utils/cad/fromSvg';
 import { fingerprint } from '../../utils/cad/edit';
 import { EditorSheet } from '../SimorghDraw/DrawingEditor';
 import { SheetEditorWindow } from '../SimorghDraw/SheetEditorWindow';
-import { DxfSymbol, loadDxfSymbols, onDxfSymbols, symbolFromDxf } from '../../utils/cad/dxfSymbols';
+import { onDxfSymbols, symbolFromDxf } from '../../utils/cad/dxfSymbols';
+import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
-import { toSymbolOverrides } from '../../utils/cad/projectSymbols';
 import { DrawingEdits } from '../../types/project';
 import { downloadText, fileSafe } from '../../utils/download';
 import {
@@ -140,19 +140,15 @@ export const EplanixTab: React.FC = () => {
   // The pack's own symbols and the office's DXF ones are separate sources that
   // have to reach the library as one map, or whichever arrives last wins.
   const [packOverrides, setPackOverrides] = useState<Partial<Record<SymbolId, SymbolOverride>>>({});
-  const [dxfSymbols, setDxfSymbols] = useState<DxfSymbol[]>(loadDxfSymbols);
-  // The library keeps its overrides outside React, so the sheet needs telling
-  // when they change.
-  const [symbolVersion, setSymbolVersion] = useState(0);
+  // The library keeps its symbols outside React, so the sheet is redrawn when
+  // any of them changes — whoever changed it and from whichever screen.
+  const symbolVersion = useSymbolVersion();
   const [paper, setPaper] = useState<PaperChoice>('auto');
   // Bumped when the pack changes, so it is read again without waiting for the
   // parts on the sheet to change. The pack is edited in the symbol library
   // now — a different screen — so this listens rather than being told.
   const [packVersion, setPackVersion] = useState(0);
-  useEffect(() => onDxfSymbols(() => {
-    setDxfSymbols(loadDxfSymbols());
-    setPackVersion(v => v + 1);
-  }), []);
+  useEffect(() => onDxfSymbols(() => setPackVersion(v => v + 1)), []);
   const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
 
   const equipments = projectData.equipments ?? [];
@@ -252,30 +248,14 @@ export const EplanixTab: React.FC = () => {
     })();
     return () => { cancelled = true; };
   }, [partCodes, packVersion]);
+  // What EPLAN exported for this project's parts — this screen's own layer,
+  // and the only one it sets. The office's DXF pack and the project's own
+  // drawings are loaded once at the top of the app (`useSymbolLibrary`); this
+  // screen used to load them too, from here, which is how the template
+  // previews ended up drawing from a different library than the sheets.
   useEffect(() => {
-    const fromDxf: Partial<Record<SymbolId, SymbolOverride>> = {};
-    for (const s of dxfSymbols) {
-      fromDxf[s.id as SymbolId] = {
-        url: '', art: s.art, width: s.width, height: s.height,
-        pinX: s.pinX, cells: s.cells, title: s.fileName,
-      };
-    }
-    // The office's own drawing wins over the pack's picture of the same device.
-    setSymbolOverrides({ ...packOverrides, ...fromDxf });
-    setSymbolVersion(v => v + 1);
-    // Not saved from here any more: the pack is edited in the symbol library
-    // and saved there. Writing it back on every merge would have this screen
-    // overwrite the store it is only reading — and would fire the change
-    // notice it is itself listening to.
-  }, [packOverrides, dxfSymbols]);
-
-  // Symbols this project draws its own way, redrawn on the graphic page in the
-  // template tab. Its own layer above the pack, so neither screen's symbols
-  // depend on which of the two was opened last.
-  useEffect(() => {
-    setProjectSymbolOverrides(toSymbolOverrides(projectData.symbolOverrides));
-    setSymbolVersion(v => v + 1);
-  }, [projectData.symbolOverrides]);
+    setEplanSymbolOverrides(packOverrides);
+  }, [packOverrides]);
 
   const withLines = equipments.filter(e => (e.devices ?? []).length > 0);
   const chosen = selected ? equipments.filter(e => e.id === selected) : equipments;

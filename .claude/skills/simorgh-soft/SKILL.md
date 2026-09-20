@@ -147,6 +147,33 @@ drawn on. A host that replaces the content itself has to track that — the symb
 page keeps `rev`/`savedRev` — or Save goes grey on the one change the page
 exists to make, and `onSaveEdits` hands back nothing for that sheet.
 
+**A generated sheet is written as SVG and read back as geometry**
+(`eplanSingleLine` → `cad/fromSvg`), and that round trip drops everything
+except the lines unless the markup says otherwise. Every device is wrapped in
+`<g data-block data-symbol data-name>`; `fromSvg` stamps those onto each shape
+inside. Without it a breaker on a sheet is eleven lines that stopped being a
+breaker: it cannot be picked as one object and `replaceSymbolInstances` finds
+nothing, so redrawing a symbol searched every page in the project and
+truthfully reported it was drawn nowhere. The block id is `d.<symbol>.<x>.<y>`
+— unique on a sheet and stable across layouts, which an incrementing counter
+would not be. Anything new that draws a symbol onto a generated sheet wraps it
+the same way.
+
+**The symbol library is module-level, so anything that draws from it must
+subscribe.** `useSymbolLibrary()` is mounted once in `App` and owns loading all
+three layers (project redraws, the office DXF pack, EPLAN's exported symbols —
+`iecSymbols` keeps them separate, project first). Every screen that draws a
+symbol calls `useSymbolVersion()`. Each tab used to load the layers from its own
+effect and nothing re-rendered when they changed, so what a symbol looked like
+depended on which tabs had been opened and in what order — the library showed
+the new drawing and the template preview showed the old one.
+
+**"Redraw from the library"** (`redrawAllSymbols`) puts every redrawn symbol on
+every page of the set, keeping everything else drawn on them. It pairs the
+library's own drawing as `from` with what is drawn now as `to`, which is what a
+page holds; a page carrying an *older override* is the one case it cannot place
+exactly, because the conductor is worked out from a drawing nobody kept.
+
 **A terminal says which way its wire leaves** (`Pen.pinDir`, set on the symbol
 page). `routeBetween` obeys it; without one it falls back to the old longest-
 axis guess. Carry `dir` wherever terminals are carried — `SymbolArtOverride`,

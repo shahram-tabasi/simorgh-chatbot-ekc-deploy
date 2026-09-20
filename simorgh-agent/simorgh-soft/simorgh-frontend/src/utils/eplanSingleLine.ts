@@ -465,10 +465,41 @@ export function buildSingleLinePages(
   }));
 }
 
+/**
+ * A device, wrapped so the sheet remembers what it is.
+ *
+ * The sheet goes out as SVG and comes back as geometry (`cad/fromSvg`), and
+ * without these three attributes that round trip threw away everything except
+ * the lines. A breaker became eleven lines near each other: it could not be
+ * picked as one object, and — the part that actually hurt — it could not be
+ * *found* again. Redrawing the disconnector in the symbol library searched
+ * every sheet in the project, matched nothing, and said so, while the old
+ * disconnector sat on all of them. "It does not get replaced and it does not
+ * get fixed" is exactly this, and no amount of redrawing could have fixed it.
+ *
+ * The block id is built from the symbol and the point it is drawn at. That is
+ * unique on a sheet — two devices cannot occupy one place — and it is stable,
+ * because the same project laid out again puts the same device at the same
+ * coordinate. A counter would have been unique and not stable, and an
+ * unstable id means the edits kept against one sheet stop matching the next
+ * time it is drawn.
+ */
+function symbolBlock(id: SymbolId, x: number, y: number): string {
+  return `data-block="d.${esc(id)}.${Math.round(x * 10)}.${Math.round(y * 10)}" `
+    + `data-symbol="${esc(id)}" `
+    + `data-name="${esc(IEC_SYMBOLS[id]?.title ?? id)}"`;
+}
+
+/** A library symbol drawn on the sheet, as one object the sheet remembers. */
+function drawBlock(id: SymbolId, x: number, y: number): string {
+  return `<g ${symbolBlock(id, x, y)}>${drawIecSymbol(id, x, y)}</g>`;
+}
+
 // A device is drawn with the symbol exported from EPLAN when the pack has one,
 // and with the library's IEC symbol otherwise.
 function drawDevice(item: ChainItem, x: number, y: number): string {
   const url = item.eplan?.packUrl;
+  const open = `<g ${symbolBlock(item.id, x, y)}>`;
   if (url) {
     const { w, h, dx } = overrideBox({
       url,
@@ -476,11 +507,11 @@ function drawDevice(item: ChainItem, x: number, y: number): string {
       height: item.eplan?.packHeight,
       pinX: item.eplan?.packPinX,
     });
-    return `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + CELL}" stroke="#111" stroke-width="0.8"/>` +
+    return `${open}<line x1="${x}" y1="${y}" x2="${x}" y2="${y + CELL}" stroke="#111" stroke-width="0.8"/>` +
       `<image href="${esc(url)}" x="${x + dx}" y="${y}" width="${w}" height="${h}" ` +
-      `preserveAspectRatio="xMidYMid meet"><title>${esc(item.eplan?.symbol || '')}</title></image>`;
+      `preserveAspectRatio="xMidYMid meet"><title>${esc(item.eplan?.symbol || '')}</title></image></g>`;
   }
-  return drawIecSymbol(item.id, x, y);
+  return `${open}${drawIecSymbol(item.id, x, y)}</g>`;
 }
 
 // Where the text beside a device starts: clear of a symbol exported from
@@ -978,7 +1009,7 @@ function drawSheet(o: {
     out.push(drawn.svg);
     out.push(`<line x1="${supplyX}" y1="${drawn.bottom}" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
   } else {
-    out.push(drawIecSymbol('incoming', supplyX, 92));
+    out.push(drawBlock('incoming', supplyX, 92));
     out.push(`<line x1="${supplyX}" y1="132" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
     out.push(`<text x="${supplyX}" y="84" font-size="9" text-anchor="middle" fill="#555">supply</text>`);
   }
@@ -992,7 +1023,7 @@ function drawSheet(o: {
     const drawn = drawBranch(branches[i], x, chainTop);
     out.push(drawn.svg);
     out.push(`<line x1="${x}" y1="${drawn.bottom}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
-    out.push(drawIecSymbol(isMotorLoad(line_) ? 'motor' : 'outgoing', x, loadY));
+    out.push(drawBlock(isMotorLoad(line_) ? 'motor' : 'outgoing', x, loadY));
   });
 
   // ── The block under the drawing ───────────────────────────────────────

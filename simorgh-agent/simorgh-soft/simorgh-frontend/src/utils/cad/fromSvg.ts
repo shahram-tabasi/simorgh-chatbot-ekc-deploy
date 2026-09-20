@@ -69,6 +69,54 @@ function layerFor(el: Element, kind: 'geometry' | 'text', width: number, dashed:
   return 'SYMBOL';
 }
 
+// ── Blocks ──────────────────────────────────────────────────────────────────
+
+/**
+ * What a `<g>` can say about the geometry inside it.
+ *
+ * A sheet drawn by this app is written as SVG and read back here, and until
+ * now everything about *what* a piece of geometry was got lost in that round
+ * trip. A breaker went out as eleven lines and an arc and came back as eleven
+ * lines and an arc — near each other, on the right layer, and no longer a
+ * breaker. So nothing on a generated sheet could be picked as one object, and
+ * nothing could be found again when the office redrew that symbol: the command
+ * to put the new drawing in its place searched every sheet in the project and
+ * reported, truthfully, that the symbol was drawn nowhere.
+ *
+ * Three attributes fix that, and they cost nothing to write:
+ *
+ *   `data-block`   this geometry is one object, and this is which one
+ *   `data-symbol`  the library symbol it was drawn from — `vcb`, `contactor`
+ *   `data-name`    what to call it, for the layer list and the DXF block table
+ *
+ * They nest: a `<g>` inside a block belongs to the block. The outermost one
+ * wins, because that is the object a draughtsman means when they click on it.
+ */
+interface BlockRef {
+  block: string;
+  blockName: string;
+  symbol?: string;
+}
+
+function blockOf(el: Element, parent?: BlockRef): BlockRef | undefined {
+  // Already inside one: the outer block is the object, and a group drawn
+  // inside it is part of that object rather than a smaller one.
+  if (parent) return parent;
+  const block = el.getAttribute('data-block');
+  if (!block) return undefined;
+  return {
+    block,
+    blockName: el.getAttribute('data-name') ?? '',
+    symbol: el.getAttribute('data-symbol') ?? undefined,
+  };
+}
+
+/** A pen, with whatever block the geometry sits inside. */
+const inBlock = <T extends Pen>(pen: T, group?: BlockRef): T => (group
+  ? { ...pen, block: group.block, blockName: group.blockName,
+      ...(group.symbol ? { symbol: group.symbol } : {}) }
+  : pen);
+
 function penOf(el: Element, m: Matrix): Pen & { widthRaw: number } {
   const stroke = el.getAttribute('stroke');
   const fill = el.getAttribute('fill');
@@ -151,8 +199,8 @@ const cubic = (p0: Pt, p1: Pt, p2: Pt, p3: Pt, n = 14): Pt[] => {
 };
 
 /** One `<path>` as shapes: straight runs become polylines, arcs stay arcs. */
-function readPath(d: Drawing, el: Element, m: Matrix) {
-  const pen = penOf(el, m);
+function readPath(d: Drawing, el: Element, m: Matrix, group?: BlockRef) {
+  const pen = inBlock(penOf(el, m), group);
   const data = el.getAttribute('d') ?? '';
   let cx = 0, cy = 0, startX = 0, startY = 0;
   let run: Pt[] = [];
@@ -249,18 +297,19 @@ function readPath(d: Drawing, el: Element, m: Matrix) {
 
 // ── Elements ────────────────────────────────────────────────────────────────
 
-function readElement(d: Drawing, el: Element, m: Matrix) {
+function readElement(d: Drawing, el: Element, m: Matrix, parent?: BlockRef) {
   const here = compose(m, parseTransform(el.getAttribute('transform')));
   const tag = el.tagName.toLowerCase();
+  const group = blockOf(el, parent);
 
   switch (tag) {
     case 'g':
     case 'svg':
-      for (const child of Array.from(el.children)) readElement(d, child, here);
+      for (const child of Array.from(el.children)) readElement(d, child, here, group);
       return;
 
     case 'line': {
-      const pen = penOf(el, here);
+      const pen = inBlock(penOf(el, here), group);
       const [x1, y1] = apply(here, num(el.getAttribute('x1')), num(el.getAttribute('y1')));
       const [x2, y2] = apply(here, num(el.getAttribute('x2')), num(el.getAttribute('y2')));
       d.line(x1, y1, x2, y2, pen);
@@ -268,7 +317,7 @@ function readElement(d: Drawing, el: Element, m: Matrix) {
     }
 
     case 'rect': {
-      const pen = penOf(el, here);
+      const pen = inBlock(penOf(el, here), group);
       const x = num(el.getAttribute('x')), y = num(el.getAttribute('y'));
       const w = num(el.getAttribute('width')), h = num(el.getAttribute('height'));
       const [px1, py1] = apply(here, x, y);
@@ -281,14 +330,14 @@ function readElement(d: Drawing, el: Element, m: Matrix) {
     }
 
     case 'circle': {
-      const pen = penOf(el, here);
+      const pen = inBlock(penOf(el, here), group);
       const [cx, cy] = apply(here, num(el.getAttribute('cx')), num(el.getAttribute('cy')));
       d.circle(cx, cy, num(el.getAttribute('r')) * scaleOf(here), pen);
       return;
     }
 
     case 'ellipse': {
-      const pen = penOf(el, here);
+      const pen = inBlock(penOf(el, here), group);
       const [cx, cy] = apply(here, num(el.getAttribute('cx')), num(el.getAttribute('cy')));
       d.ellipse(cx, cy, num(el.getAttribute('rx')) * Math.abs(here.a),
         num(el.getAttribute('ry')) * Math.abs(here.d), pen);
@@ -296,7 +345,7 @@ function readElement(d: Drawing, el: Element, m: Matrix) {
     }
 
     case 'path':
-      readPath(d, el, here);
+      readPath(d, el, here, group);
       return;
 
     case 'text': {
@@ -309,13 +358,13 @@ function readElement(d: Drawing, el: Element, m: Matrix) {
       const shown = Array.from(el.childNodes)
         .filter(node => node.nodeType === 3)
         .map(node => node.textContent ?? '').join('').trim();
-      d.text(x, y, shown, size, {
+      d.text(x, y, shown, size, inBlock({
         layer: layerFor(el, 'text', 0, false),
         color: el.getAttribute('fill') ?? undefined,
         anchor: anchor === 'middle' ? 'middle' : anchor === 'end' ? 'end' : 'start',
         bold: weight === '700' || weight === '600' || weight === 'bold',
         title,
-      });
+      }, group));
       return;
     }
 
@@ -327,12 +376,12 @@ function readElement(d: Drawing, el: Element, m: Matrix) {
       const [px1, py1] = apply(here, x, y);
       const [px2, py2] = apply(here, x + w, y + h);
       d.rect(Math.min(px1, px2), Math.min(py1, py2), Math.abs(px2 - px1), Math.abs(py2 - py1),
-        { layer: 'FREE', color: '#111', width: 0.8, dash: '3 2' });
+        inBlock({ layer: 'FREE', color: '#111', width: 0.8, dash: '3 2' }, group));
       return;
     }
 
     default:
-      for (const child of Array.from(el.children)) readElement(d, child, here);
+      for (const child of Array.from(el.children)) readElement(d, child, here, group);
   }
 }
 

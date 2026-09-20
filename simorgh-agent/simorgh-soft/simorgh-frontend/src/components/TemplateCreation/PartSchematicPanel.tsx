@@ -4,6 +4,7 @@ import {
   CELL, IEC_SYMBOLS, SYMBOL_GROUPS, SymbolId, drawIecSymbol, symbolHeight,
   symbolLeft, symbolRight,
 } from '../../utils/iecSymbols';
+import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import {
   EplanSymbolMap, SymbolSource, TemplateLike, buildTemplateSvg, partKeys, symbolForPart,
 } from '../../utils/eplanSingleLine';
@@ -67,6 +68,12 @@ const SymbolArt: React.FC<{ id: SymbolId; height: number }> = ({ id, height }) =
 export const PartSchematicPanel: React.FC<Props> = ({
   template, tier, parts, selected, onSelect, onSymbolChange, onOpenGraphic, bare,
 }) => {
+  // Every symbol on this panel is drawn from the library, which lives outside
+  // React. Read the version and this panel is drawn again the moment a symbol
+  // changes — on any screen. Without it the previews here kept whatever the
+  // library held when the panel first rendered, which is the half of "it is
+  // not in sync" that showed up in the template tab.
+  useSymbolVersion();
   // What EPLAN says these parts are. Without it the symbol still comes out —
   // from the description, then the row — which is exactly what the drawing
   // falls back to when the parts database is out of reach.
