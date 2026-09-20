@@ -383,10 +383,41 @@ function chainOfTemplate(
 
     const label = stripLocaleTags(primary?.label) || SLOT_LETTER[slot] || 'A';
     counters[label] = (counters[label] ?? 0) + 1;
+    const tag = `-${label}${page}${counters[label] > 1 ? `.${counters[label]}` : ''}`;
+
+    // **An accessory is not a device on the branch.**
+    //
+    // Nothing could say what this part is — not the symbol somebody chose for
+    // it, not EPLAN, not its description, not the slot it sits in — so the
+    // drawing fell back to the `accessory` symbol, which is an empty dashed
+    // square on the conductor. That is the software writing "I do not know
+    // what this is" into the middle of a customer's drawing, and this office's
+    // templates have two such slots on every feeder: sixteen empty boxes on an
+    // eight-way board, in the place a reader looks for devices.
+    //
+    // A slot's own rule already says where the parts that are not the device
+    // go — written beside a device rather than drawn as one. These are written
+    // against the **first** device on the branch, which is its principal one:
+    // earthing tools and a power connector belong to the unit the breaker is
+    // in, not to whichever slot happened to be read last. Attaching them to
+    // the last one put the earthing tools against the current transformer,
+    // which is a different claim and a wrong one.
+    //
+    // The tag comes with them, so nothing the sheet used to say is lost — it
+    // is said in the place that is true.
+    //
+    // Unless there is no device yet, because this slot is the first thing on
+    // the branch. Then it is drawn, since a feeder that starts with nothing
+    // is worse than one that starts with a box.
+    if (id === 'accessory' && out.length > 0) {
+      out[0].accessories.push(
+        ...inSlot.map(part => [tag, formatPartEntry(part)].filter(Boolean).join(' ')));
+      continue;
+    }
 
     out.push({
       id,
-      tag: `-${label}${page}${counters[label] > 1 ? `.${counters[label]}` : ''}`,
+      tag,
       code: formatPartEntry(primary),
       slot,
       accessories: inSlot.slice(1).map(p => formatPartEntry(p)),
@@ -527,12 +558,43 @@ function labelOffset(item: ChainItem): number {
   return symbolRight(item.id) + 6;
 }
 
+// ── The block of text beside a device ───────────────────────────────────────
+//
+// Where each line of it sits, relative to the top of the device's cell. These
+// are stated once because two pieces of code need them and they must agree:
+// `deviceText` writes the lines, and `stepFor` decides how far down the branch
+// the next device goes. When they disagreed — the spacing said 26 + 9 a line
+// and the markup wrote the first accessory at 35 — the last line of one
+// device's text sat exactly on the next device's symbol. Two crowded rows a
+// feeder, on every feeder, which is the sort of thing that reads as sloppiness
+// long before anybody can say what is wrong with it.
+const TEXT = {
+  /** The tag, below the top of the cell. Less when the cell is fed midway. */
+  top: 14,
+  topWhenFed: 2,
+  /** The part code, under the tag. */
+  code: 11,
+  /** The first accessory line, and the step between them. */
+  firstAccessory: 21,
+  accessoryStep: 9,
+  /** Clear of the bottom line, before the next device may start. */
+  gap: 6,
+};
+
+/** How tall the text beside a device is, from the top of its cell. */
+function textRoom(item: ChainItem): number {
+  const lines = Math.min(item.accessories.length, 3);
+  const last = lines === 0
+    ? TEXT.code
+    : TEXT.firstAccessory + (lines - 1) * TEXT.accessoryStep;
+  return TEXT.top + last + TEXT.gap;
+}
+
 // How much room a device needs down the line: its own cell, and enough for the
 // accessory lines written beside it, so one device's text never runs into the
 // next device's tag.
 function stepFor(item: ChainItem): number {
-  const lines = Math.min(item.accessories.length, 3);
-  return Math.max(symbolHeight(item.id), CELL, 26 + lines * 9);
+  return Math.max(symbolHeight(item.id), CELL, textRoom(item));
 }
 
 // ── The order of a cell, and what hangs off it ──────────────────────────────
@@ -784,15 +846,16 @@ function deviceText(item: ChainItem, tx: number, y: number, codeChars = 17, anch
   const a = anchor === 'start' ? '' : ` text-anchor="${anchor}"`;
   const out = [
     `<text x="${tx}" y="${y}" font-size="9" font-weight="600" fill="#111"${a}>${esc(item.tag)}</text>`,
-    `<text x="${tx}" y="${y + 11}" font-size="8.5" fill="#1d4ed8"${a}><title>${esc(item.code)}</title>${
+    `<text x="${tx}" y="${y + TEXT.code}" font-size="8.5" fill="#1d4ed8"${a}><title>${esc(item.code)}</title>${
       esc(clip(item.code, codeChars))}</text>`,
   ];
+  const line = (n: number) => y + TEXT.firstAccessory + n * TEXT.accessoryStep;
   item.accessories.slice(0, 2).forEach((ac, ai) => {
-    out.push(`<text x="${tx}" y="${y + 21 + ai * 9}" font-size="7.5" fill="#6b7280"${a}><title>${
+    out.push(`<text x="${tx}" y="${line(ai)}" font-size="7.5" fill="#6b7280"${a}><title>${
       esc(ac)}</title>+ ${esc(clip(ac, codeChars))}</text>`);
   });
   if (item.accessories.length > 2) {
-    out.push(`<text x="${tx}" y="${y + 39}" font-size="7.5" fill="#6b7280"${a}>+ ${
+    out.push(`<text x="${tx}" y="${line(2)}" font-size="7.5" fill="#6b7280"${a}>+ ${
       item.accessories.length - 2} more</text>`);
   }
   return out.join('');
@@ -822,13 +885,25 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
   const controlFrom = groups.some(g => g.source == null) && branch.series.length > 0 ? 0 : null;
   if (controlFrom != null) feeds.add(controlFrom);
 
+  // Where the text beside this branch starts.
+  //
+  // One column for the whole branch, set by the widest symbol on it. It used
+  // to be a flat 40 units from the conductor whatever was drawn there, and
+  // most of these symbols reach 16: the labels floated in the gap, nearer the
+  // next feeder than their own device, which is exactly how a reader comes to
+  // attribute a rating to the wrong branch. Hugging each symbol separately
+  // would be worse again — a ragged column of text down a schematic reads as
+  // carelessness. So: as close as the widest symbol allows, and level.
+  const labelX = x + Math.max(
+    24, ...branch.series.map(item => labelOffset(item)));
+
   // The power path: the line first, so the white boxes of the symbols sit on
   // top of it.
   if (branch.series.length > 0) out.push(line(x, top, x, seriesBottom));
   branch.series.forEach((item, index) => {
     out.push(drawDevice(item, x, ys[index]));
-    out.push(deviceText(item, x + Math.max(40, labelOffset(item)),
-      ys[index] + (feeds.has(index) ? 2 : 14), 15));
+    out.push(deviceText(
+      item, labelX, ys[index] + (feeds.has(index) ? TEXT.topWhenFed : TEXT.top), 15));
   });
 
   // The shunts: beside the line, down to earth. The magnet is the exception —
