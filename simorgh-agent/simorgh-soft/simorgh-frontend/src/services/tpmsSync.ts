@@ -158,8 +158,8 @@ export async function syncProjectFromTpms(
   const projectToSave: ProjectData = {
     ...newest.data,
     tpmsSync: sync,
-    projectName: header.project.projectName || existing?.projectName || 'TPMS Project',
-    projectNumber: header.project.oeNumber || existing?.projectNumber || '',
+    projectName: header.project.projectName || existing?.projectName || newest.data?.projectName || 'TPMS Project',
+    projectNumber: header.project.oeNumber || existing?.projectNumber || newest.data?.projectNumber || '',
   };
 
   // ── The project document ────────────────────────────────────────────────

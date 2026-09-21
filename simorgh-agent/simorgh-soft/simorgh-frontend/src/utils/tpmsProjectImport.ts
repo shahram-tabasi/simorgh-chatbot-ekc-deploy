@@ -109,6 +109,31 @@ export function buildTpmsRevisionSnapshot(
   const linesByScope = new Map<number, TpmsRevisionData['switchgears'][number]>();
   for (const entry of revisionData.switchgears ?? []) linesByScope.set(entry.scopeId, entry);
 
+  // Apply project master data and tech settings even if no switchgear has lines.
+  // This ensures projectName, projectNumber, etc. are always set from TPMS.
+  const emptyPayload: TpmsPayload = {
+    project: header.project,
+    scope: {
+      scopeId: null,
+      scopeName: '',
+      switchgearType: '',
+      panelType: 'LV',
+      cellCount: '0',
+      revision: revisionData.revision,
+      tag: '',
+    },
+    techSettings: header.techSettings,
+    device: { name: '', type: 'LV', properties: {} },
+    columnNames: {},
+    slotProperties: {},
+    lines: [],
+    counts: { lines: 0, parts: 0, templates: 0 },
+  };
+  const { patch } = buildTpmsImport(data, emptyPayload, {
+    projectData: true, techSettings: true, deviceLibrary: false, equipment: false,
+  });
+  data = { ...data, ...patch };
+
   for (const sw of header.switchgears ?? []) {
     const entry = linesByScope.get(sw.scopeId);
     // A switchgear with no lines at this revision did not exist yet (or was
