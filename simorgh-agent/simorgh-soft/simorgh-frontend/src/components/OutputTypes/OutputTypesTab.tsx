@@ -14,41 +14,10 @@ import {
 } from '../../utils/tierEquipmentMatrix';
 import { BpmsTier, buildBpmsSheets, sheetName, styleBpmsSheet } from '../../utils/bpmsExport';
 import { RevisionDiff, diffProjectSnapshots, buildDiffRows } from '../../utils/revisionDiff';
+// The specification's field labels live with the specification itself, so the
+// Device Library breakdown and these sheets always read the same names.
+import { DEVICE_PROP_LABELS } from '../../utils/deviceProperties';
 
-// ── Human-readable labels for DeviceLibraryProperties fields ──
-const DEVICE_PROP_LABELS: Record<string, string> = {
-  frequency:                                    'Frequency',
-  mainBusbarConfiguration:                      'Main Busbar Configuration',
-  mainBusbarRatedCurrent:                       'Main Busbar Rated Current (A)',
-  ratedShortTimeWithstandCurrent:               'Rated Short Time Withstand Current (kA)',
-  isc:                                          'ISC (kA)',
-  height:                                       'Height (mm)',
-  width:                                        'Width (mm)',
-  depth:                                        'Depth (mm)',
-  ratedImpulseWithstandVoltage:                 'Rated Impulse Withstand Voltage (kV)',
-  controlProtectionClosingTrippingSignalling:   'Control / Protection / Closing / Tripping / Signalling',
-  ratedInsulationVoltage:                       'Rated Insulation Voltage (V)',
-  serviceVoltage:                               'Service Voltage',
-  springChargingMotor:                          'Spring Charging Motor',
-  switchgearLightingSpaceHeater:                'Switchgear Lighting / Space Heater',
-  motorsSpaceHeater:                            'Motors Space Heater',
-  ratedPowerFrequencyWithstandVoltage:          'Rated Power Frequency Withstand Voltage',
-  mainBusbarSize:                               'Main Busbar Size',
-  earthBusbarSize:                              'Earth Busbar Size',
-  neutralBusbarSize:                            'Neutral Busbar Size',
-  ral:                                          'RAL',
-  incomingConnection:                           'Incoming Connection',
-  outgoingConnection:                           'Outgoing Connection',
-  ip:                                           'IP Rating',
-  switchgearAccess:                             'Switchgear Access',
-  switchgearArrangement:                        'Switchgear Arrangement',
-  busbarType:                                   'Busbar Type',
-  thermoFitCover:                               'Thermo-Fit Cover',
-  coating:                                      'Coating',
-  padLockCbOnOff:                               'Pad Lock CB On / Off',
-  padLockCbTestService:                         'Pad Lock CB Test / Service',
-  padLockHvDoor:                                'Pad Lock HV Door',
-};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const v = (val: any) => (val == null || val === '' ? '—' : String(val));

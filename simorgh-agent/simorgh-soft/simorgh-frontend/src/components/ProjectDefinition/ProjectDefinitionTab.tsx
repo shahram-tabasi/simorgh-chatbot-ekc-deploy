@@ -8,8 +8,12 @@ import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
 import {
   PlusIcon, EditIcon, TrashIcon, XIcon,
   ChevronDownIcon, ChevronRightIcon, CheckIcon, SaveIcon, CopyIcon, ClipboardIcon,
-  Maximize2Icon, Minimize2Icon
+  Maximize2Icon, Minimize2Icon, RefreshCwIcon, DatabaseIcon
 } from 'lucide-react';
+import {
+  DEVICE_PROP_GROUPS, DEVICE_PROP_LABELS, DEVICE_PROP_TOTAL, filledPropertyCount,
+} from '../../utils/deviceProperties';
+import { readSpecUpdateFromTpms, TpmsSpecUpdate } from '../../services/tpmsSync';
 
 // ──────────────────────────────────────────────────────────────
 // Stable helper components — MUST live outside any other component
@@ -321,6 +325,18 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     itemId:   string | null;
   }>({ visible: false, x: 0, y: 0, typeNode: null, itemId: null });
 
+  // Which devices in the library have their specification open. The breakdown
+  // is the point of this screen for a project that came from TPMS: the panels
+  // arrive named and empty, and the engineer fills them in from here.
+  const [expandedDevices, setExpandedDevices] = useState<Set<string>>(new Set());
+
+  // Reading the specifications from TPMS again. Nothing is written until the
+  // engineer has seen what would change.
+  const [tpmsUpdate, setTpmsUpdate] = useState<{
+    busy: boolean; progress: string;
+    result: TpmsSpecUpdate | null; error: string | null;
+  }>({ busy: false, progress: '', result: null, error: null });
+
   const [copiedDevice, setCopiedDevice] = useState<DeviceLibraryItem | null>(null);
   const [pasteNameModal, setPasteNameModal] = useState<{
     visible: boolean; targetType: 'LV' | 'MV' | 'HV' | null; suggestedName: string;
@@ -421,6 +437,56 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     }
     updateProjectData(removeDeviceLibraryItemEverywhere(projectData, item.id, type));
     setLibDeleteTarget(null);
+  };
+
+  // ── Reading the specifications from TPMS again ───────────────────────
+  //
+  // The project was opened from TPMS and the engineer has been working in it
+  // since: specifications entered, templates defined, panels built up in
+  // Device Selection. Meanwhile TPMS may have corrected a rated voltage or an
+  // IP class. This brings those corrections across and leaves everything else
+  // exactly as it is — a field the engineer changed is never overwritten by a
+  // value TPMS has not moved. What would change is listed first.
+  const tpmsLink = projectData.tpmsSync;
+
+  const runTpmsUpdate = async () => {
+    setTpmsUpdate({ busy: true, progress: 'Reading the project from TPMS…', result: null, error: null });
+    try {
+      const result = await readSpecUpdateFromTpms(
+        projectData, message => setTpmsUpdate(prev => ({ ...prev, progress: message })));
+      setTpmsUpdate({ busy: false, progress: '', result, error: null });
+    } catch (err) {
+      setTpmsUpdate({ busy: false, progress: '', result: null, error: (err as Error).message });
+    }
+  };
+
+  const applyTpmsUpdate = () => {
+    if (tpmsUpdate.result) updateProjectData(tpmsUpdate.result.patch);
+    setTpmsUpdate({ busy: false, progress: '', result: null, error: null });
+  };
+
+  const closeTpmsUpdate = () => setTpmsUpdate({ busy: false, progress: '', result: null, error: null });
+
+  // What TPMS said about a panel beyond its ratings: the switchgear it is, how
+  // many cells, its tag. It rides on the equipment, which is where the import
+  // puts it, so the breakdown can show it beside the specification.
+  const tpmsFactsFor = (item: DeviceLibraryItem) => {
+    const equipment = (projectData.equipments ?? []).find(
+      eq => eq.properties?.deviceLibraryItemId === item.id ||
+        (item.tpmsScopeId != null && (eq.properties?.tpms as any)?.scopeId === item.tpmsScopeId));
+    const tpms = (equipment?.properties?.tpms ?? {}) as Record<string, any>;
+    return {
+      equipment,
+      switchgearType: String(tpms.switchgearType ?? equipment?.description ?? ''),
+      cellCount: String(tpms.cellCount ?? ''),
+      rows: equipment?.devices?.length ?? 0,
+    };
+  };
+
+  const toggleDevice = (id: string) => {
+    const next = new Set(expandedDevices);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setExpandedDevices(next);
   };
 
   const closeDeviceModal = () => setDeviceModal({ visible: false, item: null, mode: 'add' });
@@ -656,16 +722,84 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   );
 
   // ── Render: Device Library tab ────────────────────────────────
+  // One device, broken out: what TPMS knows about the panel, then the whole
+  // specification group by group — the fields that are filled in and the ones
+  // still to enter, because a blank the engineer cannot see is a blank that
+  // never gets filled.
+  const renderDeviceBreakdown = (item: DeviceLibraryItem) => {
+    const facts = tpmsFactsFor(item);
+    const props = (item.properties ?? {}) as Record<string, any>;
+    const show = (key: string) => {
+      const value = props[key];
+      if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+      return value == null || String(value).trim() === '' ? '' : String(value);
+    };
+
+    return (
+      <div className="pl-12 pr-4 py-3 border-b bg-gray-50/70">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-gray-600 mb-3">
+          {facts.switchgearType && <span><span className="text-gray-400">Switchgear</span> <strong>{facts.switchgearType}</strong></span>}
+          {facts.cellCount && <span><span className="text-gray-400">Cells</span> <strong>{facts.cellCount}</strong></span>}
+          <span><span className="text-gray-400">Feeders</span> <strong>{facts.rows}</strong></span>
+          {item.tpmsScopeId != null && <span><span className="text-gray-400">TPMS scope</span> <strong>{item.tpmsScopeId}</strong></span>}
+          <button
+            className="ml-auto px-2.5 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1"
+            onClick={() => setDeviceModal({ visible: true, item, mode: 'edit' })}
+          >
+            <EditIcon className="w-3 h-3" /> Enter specification
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8">
+          {DEVICE_PROP_GROUPS.map(group => (
+            <div key={group.id} className="mb-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">{group.label}</p>
+              <div className="border border-gray-200 rounded bg-white overflow-hidden">
+                {group.keys.map(key => {
+                  const value = show(key);
+                  return (
+                    <div key={key} className="grid grid-cols-2 gap-2 px-3 py-1 border-b border-gray-50 last:border-b-0 text-xs">
+                      <span className="text-gray-500">{DEVICE_PROP_LABELS[key] ?? key}</span>
+                      <span className={value ? 'text-gray-900' : 'text-gray-300 italic'}>{value || 'not entered'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   const renderDeviceLibrary = () => (
     <div>
-      <p className="text-sm text-gray-500 mb-3">
-        Right-click on a voltage category to add a device. Double-click on a device to view/edit its properties.
-      </p>
+      <div className="flex items-start justify-between gap-4 mb-3">
+        <p className="text-sm text-gray-500">
+          Right-click on a voltage category to add a device. Click a device to break out its
+          specification, double-click to open it.
+        </p>
+        {tpmsLink?.projectMainId ? (
+          <button
+            className="shrink-0 px-3 py-1.5 border border-purple-300 bg-purple-50 text-purple-800 rounded text-xs
+                       hover:bg-purple-100 disabled:opacity-50 flex items-center gap-1.5"
+            onClick={runTpmsUpdate}
+            disabled={tpmsUpdate.busy}
+            title="Bring across any specification TPMS has changed, and leave your own work alone"
+          >
+            <RefreshCwIcon className={`w-3.5 h-3.5 ${tpmsUpdate.busy ? 'animate-spin' : ''}`} />
+            {tpmsUpdate.busy ? 'Reading TPMS…' : 'Update specifications from TPMS'}
+          </button>
+        ) : null}
+      </div>
 
       <div className="border border-gray-200 rounded-md overflow-hidden">
         {/* Root header */}
         <div className="px-4 py-2 bg-gray-100 border-b font-semibold text-sm flex items-center gap-2 select-none">
           <span>📦</span> Device Library
+          <span className="ml-auto text-xs font-normal text-gray-500">
+            {(['LV', 'MV', 'HV'] as const).reduce((n, t) => n + (deviceLibrary[t] ?? []).length, 0)} device(s)
+          </span>
         </div>
 
         {(['LV', 'MV', 'HV'] as const).map(t => {
@@ -707,21 +841,46 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                       No devices — right-click to add
                     </div>
                   )}
-                  {items.map(item => (
-                    <div
-                      key={item.id}
-                      className="flex items-center justify-between pl-12 pr-4 py-2 border-b hover:bg-blue-50 cursor-pointer text-sm group"
-                      onDoubleClick={() => setDeviceModal({ visible: true, item, mode: 'view' })}
-                      onContextMenu={e => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setCtxMenu({ visible: true, x: e.clientX, y: e.clientY, typeNode: t, itemId: item.id });
-                      }}
-                    >
-                      <span>🔧 {item.name}</span>
-                      <span className="text-xs text-gray-300 group-hover:text-gray-400">dbl-click to open</span>
-                    </div>
-                  ))}
+                  {items.map(item => {
+                    const facts = tpmsFactsFor(item);
+                    const filled = filledPropertyCount(item.properties as Record<string, unknown>);
+                    const open = expandedDevices.has(item.id);
+                    return (
+                      <React.Fragment key={item.id}>
+                        <div
+                          className="flex items-center gap-3 pl-8 pr-4 py-2 border-b hover:bg-blue-50 cursor-pointer text-sm group"
+                          onClick={() => toggleDevice(item.id)}
+                          onDoubleClick={() => setDeviceModal({ visible: true, item, mode: 'view' })}
+                          onContextMenu={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setCtxMenu({ visible: true, x: e.clientX, y: e.clientY, typeNode: t, itemId: item.id });
+                          }}
+                        >
+                          {open
+                            ? <ChevronDownIcon  className="w-4 h-4 text-gray-400 shrink-0" />
+                            : <ChevronRightIcon className="w-4 h-4 text-gray-400 shrink-0" />}
+                          <span className="shrink-0">🔧 {item.name}</span>
+                          {facts.switchgearType && (
+                            <span className="text-xs text-gray-500 truncate">{facts.switchgearType}</span>
+                          )}
+                          {item.source === 'tpms' && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 shrink-0">
+                              TPMS
+                            </span>
+                          )}
+                          <span className="ml-auto flex items-center gap-3 shrink-0 text-xs">
+                            {facts.cellCount && <span className="text-gray-400">{facts.cellCount} cell(s)</span>}
+                            <span className="text-gray-400">{facts.rows} feeder(s)</span>
+                            <span className={filled === 0 ? 'text-amber-600' : 'text-gray-500'}>
+                              {filled}/{DEVICE_PROP_TOTAL} spec
+                            </span>
+                          </span>
+                        </div>
+                        {open && renderDeviceBreakdown(item)}
+                      </React.Fragment>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -914,6 +1073,100 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
       {activeSubTab === 'project-data'   && renderProjectData()}
       {activeSubTab === 'device-library' && renderDeviceLibrary()}
+
+      {/* What TPMS would change, before it changes it. */}
+      {(tpmsUpdate.busy || tpmsUpdate.result || tpmsUpdate.error) && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center gap-2 px-6 py-4 border-b">
+              <DatabaseIcon className="w-5 h-5 text-purple-600" />
+              <h3 className="font-semibold">Update specifications from TPMS</h3>
+              <button className="ml-auto text-gray-400 hover:text-gray-600" onClick={closeTpmsUpdate}>
+                <XIcon className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+              {tpmsUpdate.busy && (
+                <p className="text-sm text-gray-600 flex items-center gap-2">
+                  <RefreshCwIcon className="w-4 h-4 animate-spin" /> {tpmsUpdate.progress || 'Reading…'}
+                </p>
+              )}
+
+              {tpmsUpdate.error && (
+                <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+                  {tpmsUpdate.error}
+                </p>
+              )}
+
+              {tpmsUpdate.result && (
+                <>
+                  {tpmsUpdate.result.changes.length === 0 ? (
+                    <p className="text-sm text-gray-600">
+                      Nothing has changed in TPMS — the specifications here are up to date.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-sm text-gray-600 mb-3">
+                        {tpmsUpdate.result.changes.length} specification(s) have changed in TPMS. Everything
+                        you have entered yourself stays as it is — only these fields are written.
+                      </p>
+                      <table className="w-full text-xs border border-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left">Where</th>
+                            <th className="px-3 py-2 text-left">Field</th>
+                            <th className="px-3 py-2 text-left">Here now</th>
+                            <th className="px-3 py-2 text-left">In TPMS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tpmsUpdate.result.changes.map((c, i) => (
+                            <tr key={`${c.where}-${c.field}-${i}`} className="border-t border-gray-100">
+                              <td className="px-3 py-1.5 text-gray-500">{c.where}</td>
+                              <td className="px-3 py-1.5">{DEVICE_PROP_LABELS[c.field] ?? c.field}</td>
+                              <td className="px-3 py-1.5 text-gray-400 line-through">{c.from}</td>
+                              <td className="px-3 py-1.5 text-green-700 font-medium">{c.to}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  )}
+
+                  {tpmsUpdate.result.newSwitchgears.length > 0 && (
+                    <p className="mt-4 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                      TPMS has {tpmsUpdate.result.newSwitchgears.length} switchgear(s) this project does not:{' '}
+                      {tpmsUpdate.result.newSwitchgears.join(', ')}. Adding a panel is more than a
+                      specification change — open the project from TPMS again to bring them in.
+                    </p>
+                  )}
+
+                  {tpmsUpdate.result.problems.length > 0 && (
+                    <ul className="mt-4 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2 list-disc pl-6">
+                      {tpmsUpdate.result.problems.map((p, i) => <li key={i}>{p}</li>)}
+                    </ul>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+              <button className="px-4 py-2 border rounded text-sm hover:bg-gray-100" onClick={closeTpmsUpdate}>
+                {tpmsUpdate.result && tpmsUpdate.result.changes.length === 0 ? 'Close' : 'Cancel'}
+              </button>
+              {tpmsUpdate.result && tpmsUpdate.result.changes.length > 0 && (
+                <button
+                  className="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 flex items-center gap-1"
+                  onClick={applyTpmsUpdate}
+                >
+                  <CheckIcon className="w-4 h-4" /> Apply {tpmsUpdate.result.changes.length} change(s)
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Next. Saving is not a button here: the project saves itself as it is
           edited, and File → Save is there for anybody who wants to say so

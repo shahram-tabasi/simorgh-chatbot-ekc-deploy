@@ -84,6 +84,14 @@ export interface TpmsPayload {
   slotProperties: Record<string, string>;
   lines: TpmsLine[];
   counts: { lines: number; parts: number; templates: number };
+  /**
+   * What TPMS delivered for this switchgear when it was last read — the
+   * common ancestor the merge below works against. See TpmsSyncState.baseline.
+   */
+  baseline?: {
+    techSettings?: Record<string, Record<string, unknown>>;
+    device?: Record<string, unknown>;
+  };
 }
 
 export interface TpmsImportOptions {
@@ -197,6 +205,29 @@ const scopeKey = (scope: TpmsPayload['scope']) =>
     ? String(scope.scopeId)
     : (scope.scopeName || 'scope').toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
+/**
+ * Three-way merge of one flat record.
+ *
+ * `mine` is what the project holds now: TPMS's last word plus whatever the
+ * engineer has typed over it. `theirs` is what TPMS says today, `base` what it
+ * said when this was last read. A field TPMS has changed since then comes
+ * across — that is the whole point of reading again. A field it has *not*
+ * changed is left exactly as the engineer left it, because overwriting it with
+ * a value that never moved only ever destroys work.
+ *
+ * With no base — the first read, or a project imported before baselines were
+ * kept — TPMS wins outright, which is what this always used to do.
+ */
+export function mergeOverEdits<T extends Record<string, any>>(mine: T, theirs: T, base?: T): T {
+  if (!base) return { ...mine, ...theirs };
+  const out: Record<string, any> = { ...mine };
+  for (const [key, value] of Object.entries(theirs)) {
+    const movedInTpms = JSON.stringify(value ?? null) !== JSON.stringify(base[key] ?? null);
+    if (movedInTpms || !(key in out)) out[key] = value;
+  }
+  return out as T;
+}
+
 export function buildTpmsImport(
   projectData: ProjectData,
   payload: TpmsPayload,
@@ -229,8 +260,13 @@ export function buildTpmsImport(
     const current = projectData.techSettings;
     const incoming = payload.techSettings as any;
     const merged: any = { ...(current ?? {}) };
+    const settingsBase = payload.baseline?.techSettings;
     for (const section of Object.keys(incoming)) {
-      merged[section] = { ...((current as any)?.[section] ?? {}), ...incoming[section] };
+      merged[section] = mergeOverEdits(
+        ((current as any)?.[section] ?? {}) as Record<string, any>,
+        (incoming[section] ?? {}) as Record<string, any>,
+        settingsBase?.[section] as Record<string, any> | undefined,
+      );
     }
     patch.techSettings = merged;
   }
@@ -246,7 +282,11 @@ export function buildTpmsImport(
       id: libraryItemId,
       name: payload.device.name,
       type: tier,
-      properties: { ...(existing?.properties ?? {}), ...payload.device.properties },
+      properties: mergeOverEdits(
+        (existing?.properties ?? {}) as Record<string, any>,
+        (payload.device.properties ?? {}) as Record<string, any>,
+        payload.baseline?.device as Record<string, any> | undefined,
+      ) as DeviceLibraryItem['properties'],
       source: 'tpms',
       ...(payload.scope.scopeId != null ? { tpmsScopeId: payload.scope.scopeId } : {}),
     };
@@ -413,7 +453,14 @@ export function buildTpmsImport(
           importedAt: new Date().toISOString(),
         },
       },
-      devices: rows.map(row => ({ ...row, equipmentId })),
+      // The rows TPMS owns are replaced wholesale — that is how a line
+      // changed there arrives here. Rows the engineer added in Device
+      // Selection carry no TPMS id, are nobody's business but theirs, and
+      // stay.
+      devices: [
+        ...rows.map(row => ({ ...row, equipmentId })),
+        ...(existingEquipment?.devices ?? []).filter(d => !String(d.id).startsWith('row-tpms-')),
+      ],
     };
 
     patch.equipments = existingEquipment

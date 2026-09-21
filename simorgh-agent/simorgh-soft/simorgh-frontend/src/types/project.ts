@@ -277,6 +277,21 @@ export interface TpmsSyncState {
   /** When and at which revision the suite took over. */
   detachedAt?: string;
   detachedAtRevision?: string;
+  /**
+   * What TPMS last delivered — the common ancestor the next read is merged
+   * against.
+   *
+   * Without it, reading the project again overwrites every specification with
+   * the value TPMS has always had, and an engineer who corrected a panel here
+   * loses that correction for no reason. With it, only a field TPMS itself has
+   * changed since the last read comes across; everything else is left as the
+   * engineer left it.
+   */
+  baseline?: {
+    techSettings?: Record<string, Record<string, unknown>>;
+    /** Panel specification per TPMS scope id. */
+    devices?: Record<string, Record<string, unknown>>;
+  };
 }
 
 // ── Hierarchical template path ───────────────────────────────────────────────
