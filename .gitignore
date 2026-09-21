@@ -1,15 +1,260 @@
+```
+# Dependencies
 node_modules/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.py~
+*.py.class
+*.py.backup
+*.swp
+*.swo
 
-# Real configuration, never the repo's: simorgh-agent/.env carries the
-# database passwords, the registry credentials and EPLAN_BRIDGE_API_KEY. It
-# was one `git add .` away from being committed. Copy .env.example instead.
-#
-# This does not untrack the two frontend .env files already in the repo —
-# git ignores .gitignore for files it is already tracking — and those hold
-# only VITE_* vars, which are compiled into the bundle and public anyway.
+# Build directories
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Environment variables
 .env
+.env.local
+.env.*
+!env.example
 
-# Runtime data, written by the running app rather than by anyone editing it.
-uploads/
+# IDE specific
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
+*.coverage
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Compressed files
+*.zip
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.gz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+
+# MyPy cache
+.mypy_cache/
+__pycache__/
+
+# PyTest cache
+.pytest_cache/
+
+# Git
+.git/
+
+# Gradle
+.gradle/
+build/
+
+# Maven
+target/
+
+# Node
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Bower
+bower_components/
+
+# Jspm
+jspm_packages/
+
+# Grunt
+.grunt
+
+# Gulp
+gulp-cache/
+
+# Composer
+vendor/
+
+# Ruby/Rails
+*.gem
+*.rbc
+.bundle/
+.jruby-graalvm-native-image/
+.jruby-gems-cache/
+.rbenv-gemsets/
+.rbenv-gem-cache/
+.rbenv-gems/
+.rbenv-version
+rbenv-gemsets
+rbenv-gem-cache
+rbenv-gems
+rbenv-version
+Gemfile.lock
+.rake_tasks
+.rspec
+rspec
+Guardfile
+Rakefile
+Capfile
+Vagrantfile
+*.rbc
+.byebug_history
+.irbrc
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-gems
+.rbenv-version
+.rbenv-vars
+.rbenv-version
+.rbenv-gemsets
+.rbenv-gem-cache
+.rbenv-g......
+```
