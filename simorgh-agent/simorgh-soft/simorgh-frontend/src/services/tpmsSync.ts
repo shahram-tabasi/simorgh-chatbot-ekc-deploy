@@ -155,7 +155,12 @@ export async function syncProjectFromTpms(
 
   const newest = snapshots[snapshots.length - 1];
   const sync = buildTpmsSyncState(header, 'tpms', existing?.tpmsSync);
-  const projectToSave: ProjectData = { ...newest.data, tpmsSync: sync };
+  const projectToSave: ProjectData = {
+    ...newest.data,
+    tpmsSync: sync,
+    projectName: header.project.projectName || existing?.projectName || 'TPMS Project',
+    projectNumber: header.project.oeNumber || existing?.projectNumber || '',
+  };
 
   // ── The project document ────────────────────────────────────────────────
   say('Saving the project…', step, total);

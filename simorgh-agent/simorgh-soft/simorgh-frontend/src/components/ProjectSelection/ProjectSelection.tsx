@@ -303,32 +303,9 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
 
   const handleOpen = async () => {
     if (!selectedProject) return;
-    // A project TPMS still owns is read again on the way in, so what opens is
-    // what TPMS has now. Raising a revision here ends that.
-    const sync = selectedProject.tpmsSync;
-    if (sync?.master === 'tpms' && sync.projectMainId) {
-      setOpening(true);
-      setError(null);
-      try {
-        const result = await syncProjectFromTpms(
-          sync.projectMainId, selectedProject, message => setProgress(message),
-          { revisions: revisionScope });
-        // Keep the revision the user picked, if it survived the refresh.
-        const picked = selectedRevision
-          ? result.revisions.find(r => r.revisionNumber === selectedRevision.revisionNumber)
-          : null;
-        onProjectSelect(result.project, picked || result.current || undefined);
-        return;
-      } catch (err) {
-        // TPMS being unreachable must not stand between the user and their
-        // project: say so, and open the copy that is already here.
-        console.warn('TPMS refresh failed; opening the stored project:', err);
-        setError('TPMS could not be reached — opening the last version stored here.');
-      } finally {
-        setOpening(false);
-        setProgress('');
-      }
-    }
+
+    // Normal open: just load what's in MongoDB. No TPMS calls here.
+    // TPMS is only for initial import, not for re-opening existing projects.
     onProjectSelect(selectedProject, selectedRevision || undefined);
   };
 
