@@ -22,6 +22,8 @@
 // Only the path is needed to place a template, so that is all this asks for.
 // Several screens carry their own narrower idea of a hierarchy; none of them
 // has to be widened to be filed.
+import { type Tier } from './tiers';
+
 interface HasPath { path?: string[] }
 
 export interface TemplateFamily {
@@ -34,7 +36,7 @@ export interface TemplateFamily {
   nodes: string[];
 }
 
-export const TEMPLATE_FAMILIES: Record<'LV' | 'MV' | 'HV', TemplateFamily[]> = {
+export const TEMPLATE_FAMILIES: Record<Tier, TemplateFamily[]> = {
   LV: [
     { id: 'OFW', label: 'OFW', note: 'Motor, Feeder, FCB1-3, MODULLAR, FCB-CAP', nodes: ['MOTOR', 'FEEDER', 'SFD', 'HFD', 'FCB1', 'FCB2', 'FCB3', 'MODULLAR', 'FCB-CAP'] },
     { id: 'FIX', label: 'FIX', note: 'CCS, OFF, Marshaling, Swing', nodes: ['CCS', 'OFF', 'MARSHALING', 'SWING'] },
@@ -44,6 +46,8 @@ export const TEMPLATE_FAMILIES: Record<'LV' | 'MV' | 'HV', TemplateFamily[]> = {
   // have, and adding families later is adding rows here.
   MV: [],
   HV: [],
+  GIS: [],
+  OTHER: [],
 };
 
 /**
@@ -71,7 +75,7 @@ export function foldedPath(path?: readonly string[]): string[] {
 
 /** Which family a template's path puts it in, or null when none does. */
 export function familyOf(
-  tier: 'LV' | 'MV' | 'HV',
+  tier: Tier,
   hierarchy?: HasPath,
 ): TemplateFamily | null {
   const families = TEMPLATE_FAMILIES[tier] ?? [];
@@ -100,7 +104,7 @@ export function familyOf(
  * only when there is something — that one is a leftover rather than a place.
  */
 export function groupByFamily<T extends { hierarchy?: HasPath }>(
-  tier: 'LV' | 'MV' | 'HV',
+  tier: Tier,
   templates: T[],
 ): { family: TemplateFamily | null; templates: T[] }[] {
   const families = TEMPLATE_FAMILIES[tier] ?? [];
@@ -116,5 +120,5 @@ export function groupByFamily<T extends { hierarchy?: HasPath }>(
 }
 
 /** True when this tier is split into sections at all. */
-export const hasFamilies = (tier: 'LV' | 'MV' | 'HV'): boolean =>
+export const hasFamilies = (tier: Tier): boolean =>
   (TEMPLATE_FAMILIES[tier] ?? []).length > 0;

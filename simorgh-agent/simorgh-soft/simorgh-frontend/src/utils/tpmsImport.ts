@@ -17,6 +17,7 @@ import {
   ProjectData, DeviceLibraryItem, Equipment, DeviceTableRow, TemplateItem,
 } from '../types/project';
 import { codeCase } from './deviceCodes';
+import { type Tier, emptyTiers } from './tiers';
 
 export interface TpmsPart {
   slot: number;
@@ -79,7 +80,7 @@ export interface TpmsPayload {
     tag: string;
   };
   techSettings: ProjectData['techSettings'];
-  device: { name: string; type: 'LV' | 'MV' | 'HV'; properties: Record<string, any> };
+  device: { name: string; type: Tier; properties: Record<string, any> };
   columnNames: Record<string, string>;
   slotProperties: Record<string, string>;
   lines: TpmsLine[];
@@ -272,7 +273,7 @@ export function buildTpmsImport(
   }
 
   // ── Device Library entry for the switchgear ───────────────────────────
-  const library = projectData.deviceLibrary ?? { LV: [], MV: [], HV: [] };
+  const library = projectData.deviceLibrary ?? emptyTiers();
   let libraryItemId: string | undefined;
 
   if (options.deviceLibrary && payload.device?.name) {

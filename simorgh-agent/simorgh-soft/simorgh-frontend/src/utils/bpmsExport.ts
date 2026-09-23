@@ -25,6 +25,7 @@ import { COPYRIGHT_SHORT, PRODUCT_NAME } from '../branding';
 import {
   LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, getEplanixValue, stripLocaleTags,
 } from './tierEquipmentMatrix';
+import { LAYOUT_OF, TIERS } from './tiers';
 
 /** The voltage levels this report is drawn for. */
 export type BpmsTier = 'LV' | 'MV';
@@ -264,9 +265,12 @@ export interface BpmsSheet {
 export function buildBpmsSheets(data: ProjectData, meta: BpmsMeta = {}): BpmsSheet[] {
   const tier: BpmsTier = meta.tier ?? 'LV';
   const layout = bpmsLayout(tier);
-  const templates = new Map((data.templates?.[tier] ?? []).map(t => [t.id, t]));
+  // GIS switchgears are reported with MV and OTHER with LV — they carry those
+  // tiers' columns (LAYOUT_OF) — each with its own group's templates.
+  const templates = new Map(TIERS.filter(t => LAYOUT_OF[t] === tier)
+    .flatMap(t => data.templates?.[t] ?? []).map(t => [t.id, t]));
   const equipments = (data.equipments ?? [])
-    .filter(e => e.type === tier)
+    .filter(e => LAYOUT_OF[e.type] === tier)
     .filter(e => !meta.equipmentId || e.id === meta.equipmentId);
   const generated = (meta.generatedAt ?? new Date()).toLocaleString();
 

@@ -40,6 +40,7 @@ import {
 } from '../../types/project';
 import { TEMPLATE_FAMILIES, foldedPath, familyOf } from '../../utils/templateFamilies';
 import { MechanicalQuestions } from './MechanicalQuestions';
+import { type Tier } from '../../utils/tiers';
 
 const LV_ROOTS       = ['S8', '8PT'] as const;
 // SFD and HFD used to head this list, and each of them asked exactly one
@@ -74,16 +75,20 @@ const cellSubOptions = (cellType: string | null): readonly string[] =>
   : cellType === 'Disconnector Link' ? MV_DISCONNECTOR_SUB
   : [];
 
+// GIS cells are MV cells in a different enclosure — the same cell types, the
+// same sub-types — so a GIS template is filed exactly as a MV one is.
+const mvLike = (tier: Tier) => tier === 'MV' || tier === 'GIS';
+
 // Which leaf kinds are valid for the path drilled into so far — empty means
 // nothing further to ask, the path is already complete on its own.
 function allowedLeafKinds(
-  tier: 'LV' | 'MV' | 'HV',
+  tier: Tier,
   ctx: {
     family: string | null; switchNode: string | null; group: string | null;
     feeder: string | null; cellType: string | null; cellSub: string | null;
   },
 ): TemplateLeafKind[] {
-  if (tier === 'MV') {
+  if (mvLike(tier)) {
     if (ctx.cellType === 'Feeder Truck' && ctx.cellSub === 'Circuit Breaker') {
       return ['motor', 'transformer', 'capacitor'];
     }
@@ -120,7 +125,7 @@ function allowedLeafKinds(
  * new one, because only they know which group of the new section it belongs in.
  */
 function seedPath(
-  tier: 'LV' | 'MV' | 'HV',
+  tier: Tier,
   family: string | null,
   path: readonly string[],
 ): {
@@ -157,7 +162,7 @@ function seedPath(
     }
     return empty;
   }
-  if (tier === 'MV') {
+  if (mvLike(tier)) {
     const cellType = pick(at(0), MV_CELL_TYPES);
     return {
       ...empty,
@@ -184,7 +189,7 @@ function scoreSimilarity(
 }
 
 interface Props {
-  tier: 'LV' | 'MV' | 'HV';
+  tier: Tier;
   /**
    * The section the template is being made in — OFW or FIX for LV.
    *
@@ -302,7 +307,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
         if (group) p.push(group);
       }
       if (feeder) p.push(feeder);
-    } else if (tier === 'MV') {
+    } else if (mvLike(tier)) {
       if (cellType) p.push(cellType);
       if (cellSub) p.push(cellSub);
     }
@@ -313,8 +318,11 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
 
   // True once every structural step this branch requires has an answer —
   // independent of leafKind, which may legitimately be "nothing to ask".
-  const structuralPathComplete = tier === 'MV'
+  const structuralPathComplete = mvLike(tier)
     ? !!cellType && (!needsCellSub(cellType) || !!cellSub)
+    // A group with no path steps of its own (HV, OTHER) is complete as soon
+    // as it is opened — there is nothing to drill into, only a name to give.
+    : tier !== 'LV' ? true
     : !!root
       && (family === 'OFW' ? !!switch_ : family === 'FIX' ? !!group : false)
       && (!feederApplies || !!feeder);
@@ -330,7 +338,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
       if (family === 'FIX' && !group) return 'group';
       if (feederApplies && !feeder) return 'feeder';
     }
-    if (tier === 'MV') {
+    if (mvLike(tier)) {
       if (!cellType) return 'cellType';
       if (needsCellSub(cellType) && !cellSub) return 'cellSub';
     }
@@ -382,8 +390,8 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     tier === 'LV' && family === 'OFW' && 'switch',
     tier === 'LV' && family === 'FIX' && 'group',
     feederApplies && 'feeder',
-    tier === 'MV' && 'cellType',
-    tier === 'MV' && needsCellSub(cellType) && 'cellSub',
+    mvLike(tier) && 'cellType',
+    mvLike(tier) && needsCellSub(cellType) && 'cellSub',
     candidateLeafKinds.length > 0 && 'kind',
     structuralPathComplete && 'params',
     structuralPathComplete && 'mechanical',
@@ -615,7 +623,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           )}
 
           {/* Step — Cell type (MV) */}
-          {tier === 'MV' && (
+          {mvLike(tier) && (
             <div>
               <StepHeader n={stepNumber('cellType')} label="Cell Type" active={activeStep === 'cellType'} done={!!cellType} />
               <div className="mt-2 flex flex-wrap gap-2">
@@ -627,7 +635,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           )}
 
           {/* Step — Cell sub-type (Feeder Truck / Disconnector Link) */}
-          {tier === 'MV' && needsCellSub(cellType) && (
+          {mvLike(tier) && needsCellSub(cellType) && (
             <div>
               <StepHeader n={stepNumber('cellSub')} label={cellType === 'Feeder Truck' ? 'Feeder Truck type' : 'Disconnector Link'} active={activeStep === 'cellSub'} done={!!cellSub} />
               <div className="mt-2 flex flex-wrap gap-2">

@@ -7,6 +7,8 @@ import {
 import { useProject } from '../../context/ProjectContext';
 import { buildEplanData, EplanData, EplanDataOptions } from '../../utils/eplanDataExport';
 import { eplanApi, EplanTarget, EplanProject } from '../../services/eplanApi';
+import { projectService } from '../../services/projectService';
+import { ProjectData } from '../../types/project';
 import { plotframeFieldsApi, PlotframeDrawingType } from '../../services/plotframeFieldsApi';
 import { catalogFor, estimatesFor } from '../../utils/mechanical';
 import { buildMechanicalReport, mechanicalReportName } from '../../utils/mechanicalReport';
@@ -122,7 +124,10 @@ const RadioPair: React.FC<{
 );
 
 export const SendToEplanTab: React.FC = () => {
-  const { projectData, currentRevision, revisions } = useProject();
+  const {
+    projectData, currentRevision, revisions, saveProject,
+    isCurrentRevisionEditable, isTpmsMastered,
+  } = useProject();
   const equipments = projectData.equipments ?? [];
   const withLines = equipments.filter(e => (e.devices ?? []).length > 0);
 
@@ -252,11 +257,50 @@ export const SendToEplanTab: React.FC = () => {
     setShowSlides(true);
     setResult(null);
     try {
-      const answer = await eplanApi.send({
-        projectName: projectData.projectName,
-        data: records,
-        userName: projectData.planner,
-      });
+      // EPLAN draws the project as it is kept here, in Mongo — never a fresh
+      // read of TPMS. Whatever has been typed is saved first, the project is
+      // read back from Mongo, the records are built from that copy and
+      // stored beside it, and the send hands over the stored records. An edit
+      // made in this app therefore reaches the drawing whether or not TPMS
+      // has caught up with it.
+      const projectId = projectData._id || '';
+      const revision = currentRevision?.revisionNumber != null ? String(currentRevision.revisionNumber) : '';
+      let stored: ProjectData = projectData;
+      if (projectId) {
+        if (isCurrentRevisionEditable && !isTpmsMastered) {
+          try {
+            await saveProject();
+          } catch (err) {
+            throw new Error(`The project could not be saved, so EPLAN would draw an older copy of it: ${(err as Error).message}`);
+          }
+        }
+        stored = isCurrentRevisionEditable || !currentRevision?.projectSnapshot
+          ? await projectService.getProjectById(projectId)
+          : currentRevision.projectSnapshot;
+      }
+      const storedEquipment = (stored.equipments ?? []).find(e => e.id === equipment?.id) ?? equipment;
+      const data = storedEquipment ? buildEplanData(stored, [storedEquipment], options) : [];
+      if (data.length === 0) throw new Error('This switchgear has no feeder lines in the saved project.');
+
+      let answer;
+      if (projectId && storedEquipment) {
+        await eplanApi.storeData({
+          projectId, equipmentId: storedEquipment.id, revision,
+          scopeName: storedEquipment.name, records: data,
+        });
+        answer = await eplanApi.send({
+          projectName: stored.projectName,
+          userName: stored.planner,
+          projectId, equipmentId: storedEquipment.id, revision,
+        });
+      } else {
+        // A project that has never been saved has no Mongo copy to send.
+        answer = await eplanApi.send({
+          projectName: projectData.projectName,
+          data,
+          userName: projectData.planner,
+        });
+      }
       setResult(answer.success
         ? { ok: true,
             text: answer.message || `${records.length} record(s) sent.`,

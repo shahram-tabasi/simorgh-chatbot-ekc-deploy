@@ -6,6 +6,7 @@
 import type { SymbolPin } from '../utils/cad/symbolFrame';
 import { Shape } from '../utils/cad/shapes';
 import { DrawingGroups, DrawingPage } from '../utils/cad/pages';
+import { type Tier } from '../utils/tiers';
 
 export interface DeviceLibraryProperties {
   // Electrical / Mechanical — the three voltages lead the tab: they are the
@@ -49,7 +50,7 @@ export interface DeviceLibraryProperties {
 export interface DeviceLibraryItem {
   id: string;
   name: string;
-  type: 'LV' | 'MV' | 'HV';
+  type: Tier;
   properties: DeviceLibraryProperties;
   /** 'tpms' when this entry was read from TPMS rather than typed here. */
   source?: 'tpms';
@@ -141,17 +142,12 @@ export interface ProjectData {
   };
   // New technical settings structure
   techSettings?: TechSettings;
-  templates: {
-    LV: TemplateItem[];
-    MV: TemplateItem[];
-    HV: TemplateItem[];
-  };
+  // One list per tier — see utils/tiers.ts. A project saved before GIS and
+  // OTHER existed has no list for them; ProjectContext fills them in on load
+  // (withAllTiers), and anything reading a snapshot directly reads `?? []`.
+  templates: Record<Tier, TemplateItem[]>;
   // Device Library (new)
-  deviceLibrary?: {
-    LV: DeviceLibraryItem[];
-    MV: DeviceLibraryItem[];
-    HV: DeviceLibraryItem[];
-  };
+  deviceLibrary?: Record<Tier, DeviceLibraryItem[]>;
   devices: DeviceItem[];
   equipments: Equipment[];
   outputTypes?: OutputType[];
@@ -273,7 +269,7 @@ export interface TpmsSyncState {
   /** The TPMS revisions that became revisions on this side. */
   revisions: number[];
   /** Switchgear (scope) ids and names last read from TPMS. */
-  switchgears: { scopeId: number; scopeName: string; panelType: 'LV' | 'MV' | 'HV' }[];
+  switchgears: { scopeId: number; scopeName: string; panelType: Tier }[];
   /** When and at which revision the suite took over. */
   detachedAt?: string;
   detachedAtRevision?: string;
@@ -326,7 +322,7 @@ export interface TemplateHierarchy {
 export interface TemplateItem {
   id: string;
   name: string;
-  type: 'LV' | 'MV' | 'HV';
+  type: Tier;
   properties: Record<string, string>;
   /** Optional hierarchical classification used by recommendations / AI tools. */
   hierarchy?: TemplateHierarchy;
@@ -439,7 +435,7 @@ export interface Equipment {
   id: string;
   name: string;
   power?: string;
-  type: 'LV' | 'MV' | 'HV';
+  type: Tier;
   deviceCount?: number;
   description?: string;
   properties: Record<string, any>;  // deviceLibraryItemId stored here

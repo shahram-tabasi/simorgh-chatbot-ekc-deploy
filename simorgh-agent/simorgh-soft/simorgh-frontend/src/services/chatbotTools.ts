@@ -19,6 +19,7 @@ import {
 import {
   findDeviceLibraryUsage, removeDeviceLibraryItemEverywhere, describeUsage,
 } from '../utils/cascadeDelete';
+import { type Tier, TIERS, emptyTiers, isTier } from '../utils/tiers';
 
 // ── Shared context passed to every tool ──────────────────────────────────────
 // The frontend wires every relevant ProjectContext / UI handle in here, so
@@ -321,7 +322,7 @@ const find_similar_templates: ChatTool = {
   name: 'find_similar_templates',
   description: 'Suggest existing templates matching a hierarchical path. Ranks by leafKind match and parameter proximity (kW, currentA).',
   args: {
-    type:      { type: 'string',  description: 'LV | MV | HV',                            required: true },
+    type:      { type: 'string',  description: 'LV | MV | HV | GIS | OTHER',                            required: true },
     path:      { type: 'array',   description: 'Path nodes from top to leaf.',            required: true },
     leafKind:  { type: 'string',  description: 'motor | transformer | capacitor | feeder | other',  required: false },
     kw:        { type: 'string',  description: 'Rated kW or kVA (text).',                 required: false },
@@ -329,8 +330,8 @@ const find_similar_templates: ChatTool = {
     limit:     { type: 'number',  description: 'Max results, default 5.',                 required: false },
   },
   execute: ({ type, path, leafKind, kw, currentA, limit }, ctx) => {
-    const tier = (type || '').toUpperCase() as 'LV' | 'MV' | 'HV';
-    if (!['LV', 'MV', 'HV'].includes(tier)) return { ok: false, summary: 'type must be LV/MV/HV.' };
+    const tier = (type || '').toUpperCase() as Tier;
+    if (!isTier(tier)) return { ok: false, summary: 'type must be LV/MV/HV/GIS/OTHER.' };
     const candidates = (ctx.projectData.templates?.[tier] ?? []).filter(t => {
       const p = t.hierarchy?.path;
       if (!p || !Array.isArray(path)) return false;
@@ -369,7 +370,7 @@ const create_template: ChatTool = {
   name: 'create_template',
   description: 'Create a new (empty) template at the given hierarchical path. Returns the new id.',
   args: {
-    type:      { type: 'string', description: 'LV | MV | HV',                                  required: true },
+    type:      { type: 'string', description: 'LV | MV | HV | GIS | OTHER',                                  required: true },
     name:      { type: 'string', description: 'Display name.',                                  required: true },
     path:      { type: 'array',  description: 'Hierarchical path (top → leaf).',                required: true },
     leafKind:  { type: 'string', description: 'motor | transformer | capacitor | feeder | other',         required: false },
@@ -377,8 +378,8 @@ const create_template: ChatTool = {
     currentA:  { type: 'string', description: 'Full-load current (A).',                         required: false },
   },
   execute: ({ type, name, path, leafKind, kw, currentA }, ctx) => {
-    const tier = (type || '').toUpperCase() as 'LV' | 'MV' | 'HV';
-    if (!['LV', 'MV', 'HV'].includes(tier)) return { ok: false, summary: 'type must be LV/MV/HV.' };
+    const tier = (type || '').toUpperCase() as Tier;
+    if (!isTier(tier)) return { ok: false, summary: 'type must be LV/MV/HV/GIS/OTHER.' };
     if (!name) return { ok: false, summary: 'name is required.' };
     if (!Array.isArray(path)) return { ok: false, summary: 'path must be an array.' };
 
@@ -395,7 +396,7 @@ const create_template: ChatTool = {
       hierarchy,
     };
     patch(ctx, prev => {
-      const tmpls = prev.templates ?? { LV: [], MV: [], HV: [] };
+      const tmpls = prev.templates ?? emptyTiers();
       return { templates: { ...tmpls, [tier]: [...(tmpls[tier] ?? []), newTmpl] } };
     });
     return { ok: true, summary: `Created template "${name}" at ${path.join('/')}.`, data: { id: newTmpl.id } };
@@ -520,13 +521,13 @@ const add_library_device: ChatTool = {
   name: 'add_library_device',
   description: 'Create a new device-library entry in a given tier (LV/MV/HV) with optional pre-filled properties.',
   args: {
-    type:       { type: 'string', description: 'LV | MV | HV', required: true },
+    type:       { type: 'string', description: 'LV | MV | HV | GIS | OTHER', required: true },
     name:       { type: 'string', description: 'Display name for the device.', required: true },
     properties: { type: 'object', description: 'Optional DeviceLibraryProperties map.', required: false },
   },
   execute: ({ type, name, properties }, ctx) => {
-    const tier = String(type || '').toUpperCase() as 'LV' | 'MV' | 'HV';
-    if (!['LV','MV','HV'].includes(tier)) return { ok: false, summary: 'type must be LV/MV/HV.' };
+    const tier = String(type || '').toUpperCase() as Tier;
+    if (!isTier(tier)) return { ok: false, summary: 'type must be LV/MV/HV/GIS/OTHER.' };
     if (!name) return { ok: false, summary: 'name is required.' };
     const item: DeviceLibraryItem = {
       id: `dev-${Date.now()}`,
@@ -535,7 +536,7 @@ const add_library_device: ChatTool = {
       properties: (properties && typeof properties === 'object' ? properties : {}) as any,
     };
     patch(ctx, prev => {
-      const lib = prev.deviceLibrary || { LV: [], MV: [], HV: [] };
+      const lib = prev.deviceLibrary || emptyTiers();
       return { deviceLibrary: { ...lib, [tier]: [...(lib[tier] ?? []), item] } };
     });
     return { ok: true, summary: `Added ${tier} device "${name}" to the library.`, data: { id: item.id } };
@@ -546,16 +547,16 @@ const update_library_device: ChatTool = {
   name: 'update_library_device',
   description: 'Modify an existing device-library entry by id OR by name (case-insensitive match within the tier).',
   args: {
-    type:       { type: 'string', description: 'LV | MV | HV', required: true },
+    type:       { type: 'string', description: 'LV | MV | HV | GIS | OTHER', required: true },
     id:         { type: 'string', description: 'Device id (preferred when known).', required: false },
     name:       { type: 'string', description: 'Device name (case-insensitive). Used if id is missing.', required: false },
     fields:     { type: 'object', description: 'Patch — fields to overwrite. May include `name` and any DeviceLibraryProperties key.', required: true },
   },
   execute: ({ type, id, name, fields }, ctx) => {
-    const tier = String(type || '').toUpperCase() as 'LV' | 'MV' | 'HV';
-    if (!['LV','MV','HV'].includes(tier)) return { ok: false, summary: 'type must be LV/MV/HV.' };
+    const tier = String(type || '').toUpperCase() as Tier;
+    if (!isTier(tier)) return { ok: false, summary: 'type must be LV/MV/HV/GIS/OTHER.' };
     if (!fields || typeof fields !== 'object') return { ok: false, summary: 'fields is required.' };
-    const lib = ctx.projectData.deviceLibrary || { LV: [], MV: [], HV: [] };
+    const lib = ctx.projectData.deviceLibrary || emptyTiers();
     const list = lib[tier] || [];
     const idx = id
       ? list.findIndex(d => d.id === id)
@@ -564,7 +565,7 @@ const update_library_device: ChatTool = {
     const target = list[idx];
     const { name: newName, ...propPatch } = fields as any;
     patch(ctx, prev => {
-      const liveLib = prev.deviceLibrary || { LV: [], MV: [], HV: [] };
+      const liveLib = prev.deviceLibrary || emptyTiers();
       const nextList = (liveLib[tier] ?? []).map(d => d.id === target.id ? ({
         ...d,
         ...(newName ? { name: String(newName) } : {}),
@@ -580,14 +581,14 @@ const delete_library_device: ChatTool = {
   name: 'delete_library_device',
   description: 'Remove a device-library entry by id OR by name (case-insensitive within the tier).',
   args: {
-    type: { type: 'string', description: 'LV | MV | HV', required: true },
+    type: { type: 'string', description: 'LV | MV | HV | GIS | OTHER', required: true },
     id:   { type: 'string', description: 'Device id.', required: false },
     name: { type: 'string', description: 'Device name.', required: false },
   },
   execute: ({ type, id, name }, ctx) => {
-    const tier = String(type || '').toUpperCase() as 'LV' | 'MV' | 'HV';
-    if (!['LV','MV','HV'].includes(tier)) return { ok: false, summary: 'type must be LV/MV/HV.' };
-    const lib = ctx.projectData.deviceLibrary || { LV: [], MV: [], HV: [] };
+    const tier = String(type || '').toUpperCase() as Tier;
+    if (!isTier(tier)) return { ok: false, summary: 'type must be LV/MV/HV/GIS/OTHER.' };
+    const lib = ctx.projectData.deviceLibrary || emptyTiers();
     const list = lib[tier] || [];
     const target = id
       ? list.find(d => d.id === id)
@@ -612,13 +613,13 @@ const add_equipment: ChatTool = {
   description: 'Create a new equipment in the equipment tree. Optionally bind it to a device-library item.',
   args: {
     name: { type: 'string', description: 'Equipment name.', required: true },
-    type: { type: 'string', description: 'LV | MV | HV', required: true },
+    type: { type: 'string', description: 'LV | MV | HV | GIS | OTHER', required: true },
     deviceLibraryItemName: { type: 'string', description: 'Optional device-library item name to bind.', required: false },
     select: { type: 'boolean', description: 'Auto-select the new equipment (default true).', required: false },
   },
   execute: ({ name, type, deviceLibraryItemName, select }, ctx) => {
-    const tier = String(type || '').toUpperCase() as 'LV' | 'MV' | 'HV';
-    if (!['LV','MV','HV'].includes(tier)) return { ok: false, summary: 'type must be LV/MV/HV.' };
+    const tier = String(type || '').toUpperCase() as Tier;
+    if (!isTier(tier)) return { ok: false, summary: 'type must be LV/MV/HV/GIS/OTHER.' };
     if (!name) return { ok: false, summary: 'name is required.' };
     let libId: string | undefined;
     if (deviceLibraryItemName) {
@@ -702,7 +703,7 @@ const search_templates: ChatTool = {
   },
   execute: ({ query, type, limit }, ctx) => {
     const q = String(query || '').toLowerCase().trim();
-    const tiers: ('LV'|'MV'|'HV')[] = type ? [String(type).toUpperCase() as any] : ['LV', 'MV', 'HV'];
+    const tiers: Tier[] = type ? [String(type).toUpperCase() as any] : [...TIERS];
     const out: any[] = [];
     for (const tier of tiers) {
       for (const t of (ctx.projectData.templates?.[tier] ?? [])) {
@@ -732,8 +733,8 @@ const delete_template: ChatTool = {
   execute: ({ id, type, name }, ctx) => {
     let templateId = id;
     if (!templateId) {
-      const tier = String(type || '').toUpperCase() as 'LV'|'MV'|'HV';
-      if (!['LV','MV','HV'].includes(tier)) return { ok: false, summary: 'type is required when looking up by name.' };
+      const tier = String(type || '').toUpperCase() as Tier;
+      if (!isTier(tier)) return { ok: false, summary: 'type is required when looking up by name.' };
       const t = (ctx.projectData.templates?.[tier] ?? []).find(t => t.name?.toLowerCase() === String(name || '').toLowerCase());
       if (!t) return { ok: false, summary: `Template "${name}" not found in ${tier}.` };
       templateId = t.id;
@@ -753,10 +754,10 @@ const set_template_property_parts: ChatTool = {
   },
   execute: ({ templateId, property, parts }, ctx) => {
     if (!Array.isArray(parts)) return { ok: false, summary: 'parts must be an array.' };
-    const templates = ctx.projectData.templates || { LV: [], MV: [], HV: [] };
+    const templates = ctx.projectData.templates || emptyTiers();
     let found: TemplateItem | null = null;
-    let foundTier: 'LV' | 'MV' | 'HV' | null = null;
-    for (const tier of ['LV','MV','HV'] as const) {
+    let foundTier: Tier | null = null;
+    for (const tier of TIERS) {
       const t = templates[tier].find(x => x.id === templateId);
       if (t) { found = t; foundTier = tier; break; }
     }
@@ -772,7 +773,7 @@ const set_template_property_parts: ChatTool = {
     };
     const tier = foundTier;
     patch(ctx, prev => {
-      const live = prev.templates ?? { LV: [], MV: [], HV: [] };
+      const live = prev.templates ?? emptyTiers();
       return {
         templates: {
           ...live,

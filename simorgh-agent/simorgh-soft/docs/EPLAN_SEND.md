@@ -77,6 +77,19 @@ many records are going, and can show the first record in full (and copy the
 whole payload) — so what leaves the app has been looked at first, the same
 rule the rest of the Eplanix tab follows.
 
+## Where the records come from: Mongo, never TPMS
+
+A send saves the project first, reads it back from Mongo, builds the records
+from that copy and stores them in the `eplanData` collection (one document per
+project, switchgear and revision — `PUT /api/eplan/data`). `/api/eplan/send`
+is then called with `projectId`/`equipmentId`/`revision` and sends the stored
+records. So a correction made in this app reaches the drawing whether or not
+TPMS has it; nothing on the way to EPLAN reads TPMS. `GET /api/eplan/data`
+returns what was last handed over.
+
+A GIS switchgear is sent as `PanelType: MV` and an OTHER one as `LV` — the
+columns they are built with — since the add-in knows LV, MV and HV only.
+
 ## Configuration
 
 This app's backend (`simorgh-backend/.env.example`):

@@ -15,6 +15,7 @@ import { ProjectData, Equipment, DeviceTableRow, DeviceLibraryProperties } from 
 import { Drawing } from './cad/shapes';
 import { renderSvg } from './cad/svg';
 import { renderDxf, mergeDrawings } from './cad/dxf';
+import { LAYOUT_OF } from './tiers';
 
 export interface LayoutSlot {
   row: DeviceTableRow;
@@ -69,7 +70,7 @@ export function buildPanelLayout(data: ProjectData, equipment: Equipment): Panel
     library.find(d => d.name === equipment.name)?.properties ?? {};
 
   const byColumn = new Map<number, LayoutSlot[]>();
-  let unit: 'M' | 'C' = equipment.type === 'MV' ? 'C' : 'M';
+  let unit: 'M' | 'C' = LAYOUT_OF[equipment.type] === 'MV' ? 'C' : 'M';
   let fallbackColumn = 1;
 
   for (const row of equipment.devices ?? []) {

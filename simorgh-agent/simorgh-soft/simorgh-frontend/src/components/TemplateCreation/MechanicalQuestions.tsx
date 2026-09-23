@@ -2,6 +2,7 @@ import React from 'react';
 import { CheckIcon, InfoIcon, RotateCcwIcon } from 'lucide-react';
 import { TemplateItem, TemplateMechanical } from '../../types/project';
 import { templateFacts, Fact } from '../../utils/mechanical/template';
+import { type Tier } from '../../utils/tiers';
 
 // The mechanical questions a template is asked — and the ones it is not.
 //
@@ -19,7 +20,7 @@ import { templateFacts, Fact } from '../../utils/mechanical/template';
 // which is why every read fact already carries one.
 
 interface Props {
-  tier: 'LV' | 'MV' | 'HV';
+  tier: Tier;
   /**
    * The template the facts are read from.
    *
@@ -35,12 +36,14 @@ interface Props {
 }
 
 /** What these answers are for, which is not the same on every tier. */
-const PURPOSE: Record<'LV' | 'MV' | 'HV', string> = {
+const PURPOSE: Record<Tier, string> = {
   LV: 'Kept for reference. LV mechanical items are not built from these answers '
     + 'yet — they are saved with the template and can be changed at any time, '
     + 'ready for when they are.',
   MV: 'Projects started here build their mechanical items from these answers.',
   HV: 'Kept for reference until the HV sheets are in.',
+  GIS: 'Kept for reference until the GIS sheets are in.',
+  OTHER: 'Kept for reference — there is no estimate sheet for this group.',
 };
 
 const Pill: React.FC<{

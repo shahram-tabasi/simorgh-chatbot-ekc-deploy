@@ -39,6 +39,7 @@ import { findFeederDuplicates, DuplicateGroup } from './utils/feederDuplicates';
 import { DesktopInstallerInfo } from './services/projectService';
 import { Revision } from './types/project';
 import { useSymbolLibrary } from './utils/cad/useSymbols';
+import { TIERS } from './utils/tiers';
 
 // The build shown in Help → About.
 const APP_VERSION = '1.0.0';
@@ -242,8 +243,10 @@ interface MenuBarProps {
   onImportFromTpms: () => void;
   currentRevision?: any;
   isCurrentRevisionEditable?: boolean;
+  /** Raising a revision is allowed even though the open one is read-only. */
+  canRaiseRevision?: boolean;
 }
-const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, onImportFromTpms, currentRevision, isCurrentRevisionEditable }) => {
+const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, onImportFromTpms, currentRevision, isCurrentRevisionEditable, canRaiseRevision }) => {
   const { theme, setTheme } = useTheme();
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -406,7 +409,11 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  const canCreateRevision = isCurrentRevisionEditable !== false;
+  // A TPMS project is taken over by raising a revision, from whichever of its
+  // revisions is open — every one of them is read-only until then, so gating
+  // this on the open revision being the latest left no way in from an older
+  // one.
+  const canCreateRevision = isCurrentRevisionEditable !== false || !!canRaiseRevision;
 
   const handleCreateRevisionClick = () => {
     if (!canCreateRevision) {
@@ -808,7 +815,7 @@ const ProjectConflictModal: React.FC<{
   const count = (p: any) => ({
     equipments: p?.equipments?.length ?? 0,
     rows: (p?.equipments ?? []).reduce((n: number, e: any) => n + (e?.devices?.length ?? 0), 0),
-    templates: ['LV', 'MV', 'HV'].reduce((n, t) => n + (p?.templates?.[t]?.length ?? 0), 0),
+    templates: TIERS.reduce((n, t) => n + (p?.templates?.[t]?.length ?? 0), 0),
   });
   const mine = count(conflict.mine);
   const theirs = count(conflict.theirs);
@@ -1195,6 +1202,7 @@ const MainApp: React.FC = () => {
         onImportFromTpms={() => setShowTpmsImport(true)}
         currentRevision={currentRevision}
         isCurrentRevisionEditable={isCurrentRevisionEditable}
+        canRaiseRevision={isTpmsMastered}
       />
       
       {/* Header with Revision Dropdown */}

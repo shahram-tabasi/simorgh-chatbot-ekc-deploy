@@ -766,7 +766,13 @@ export const projectService = {
     if (!response.ok) {
       throw new Error('Failed to fetch revisions');
     }
-    return response.json();
+    // Latest first, numerically. Everything that decides whether a revision
+    // may be edited reads the first of this list as the latest, and a string
+    // sort puts REV 9 ahead of REV 13 — so it is sorted here as well, whatever
+    // order the server sends.
+    const list: Revision[] = await response.json();
+    return [...list].sort((a, b) =>
+      (parseInt(b.revisionNumber, 10) || 0) - (parseInt(a.revisionNumber, 10) || 0));
   },
 
   // Get a specific revision

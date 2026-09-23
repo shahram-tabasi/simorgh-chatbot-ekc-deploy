@@ -38,6 +38,7 @@ import {
 import {
   DrawingGroups, DrawingPage, newPage, pageKey, readGroups, readPages,
 } from '../../utils/cad/pages';
+import { TIERS } from '../../utils/tiers';
 
 // The Simorgh Draw tab: the drawings-and-lists outputs that come off the
 // switchgear itself — the single line, the panel layout, and the mechanical
@@ -157,7 +158,7 @@ export const EplanixTab: React.FC = () => {
   // under. Looked up once per project, not once per sheet.
   const partCodes = useMemo(() => {
     const keys = new Set<string>();
-    for (const tier of ['LV', 'MV', 'HV'] as const) {
+    for (const tier of TIERS) {
       for (const template of projectData.templates?.[tier] ?? []) {
         for (const parts of Object.values(templateParts(template))) {
           for (const part of parts) for (const key of partKeys(part)) keys.add(key);

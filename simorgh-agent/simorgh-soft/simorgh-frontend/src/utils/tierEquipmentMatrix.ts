@@ -4,6 +4,7 @@
 // OutputTypesTab.tsx (report/export) and DeviceSelectionTab.tsx (the
 // "Template Items" preview panel) so both stay in sync.
 import { ProjectData } from '../types/project';
+import { LAYOUT_OF, TIERS } from './tiers';
 
 // ─── Per-tier template property lists (must mirror TemplateProperties.tsx) ───
 export const LV_TEMPLATE_PROPERTIES = [
@@ -141,11 +142,12 @@ export function buildTierMatrix(
   const propCols   = tier === 'LV' ? LV_TEMPLATE_PROPERTIES : MV_TEMPLATE_PROPERTIES;
   const headers = ['EQUIPMENT', ...deviceCols.map(c => c.header), ...propCols];
 
-  const tierTemplates = (data.templates?.[tier] ?? []);
+  // GIS rides with MV and OTHER with LV, as everywhere their columns are read.
+  const tierTemplates = TIERS.filter(t => LAYOUT_OF[t] === tier).flatMap(t => data.templates?.[t] ?? []);
   const tmplById = new Map(tierTemplates.map(t => [t.id, t]));
 
   const rows: (string | number)[][] = [];
-  const eqs = (data.equipments ?? []).filter(e => e.type === tier);
+  const eqs = (data.equipments ?? []).filter(e => LAYOUT_OF[e.type] === tier);
   for (const eq of eqs) {
     const devices = eq.devices ?? [];
     if (devices.length === 0) {

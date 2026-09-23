@@ -17,6 +17,7 @@ import { RevisionDiff, diffProjectSnapshots, buildDiffRows } from '../../utils/r
 // The specification's field labels live with the specification itself, so the
 // Device Library breakdown and these sheets always read the same names.
 import { DEVICE_PROP_LABELS } from '../../utils/deviceProperties';
+import { TIERS, TIER_PILL, LAYOUT_OF, type Tier } from '../../utils/tiers';
 
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -293,7 +294,7 @@ function exportExcel(data: ProjectData) {
   const devHeaders = ['#', 'Name', 'Type', ...propKeys.map(k => DEVICE_PROP_LABELS[k])];
   const devRows: any[][] = [devHeaders];
   let idx = 1;
-  for (const tier of ['LV', 'MV', 'HV'] as const) {
+  for (const tier of TIERS) {
     for (const dev of (data.deviceLibrary?.[tier] ?? [])) {
       const p = dev.properties as Record<string, any>;
       devRows.push([
@@ -316,7 +317,7 @@ function exportExcel(data: ProjectData) {
   for (const eq of (data.equipments ?? [])) {
     const libItemId  = eq.properties?.deviceLibraryItemId as string | undefined;
     const libItem    = libItemId
-      ? [...(data.deviceLibrary?.LV ?? []), ...(data.deviceLibrary?.MV ?? []), ...(data.deviceLibrary?.HV ?? [])].find(d => d.id === libItemId)
+      ? TIERS.flatMap(t => data.deviceLibrary?.[t] ?? []).find(d => d.id === libItemId)
       : null;
 
     if (!eq.devices || eq.devices.length === 0) {
@@ -335,11 +336,7 @@ function exportExcel(data: ProjectData) {
   // ── Sheet 5: Template Components Breakdown (only used templates) ──────────
   const usedTemplateIds = new Set<string>();
   (data.equipments ?? []).forEach(eq => eq.devices?.forEach(d => { if (d.templateId) usedTemplateIds.add(d.templateId); }));
-  const usedTemplates = [
-    ...(data.templates?.LV ?? []),
-    ...(data.templates?.MV ?? []),
-    ...(data.templates?.HV ?? []),
-  ].filter(t => usedTemplateIds.has(t.id));
+  const usedTemplates = TIERS.flatMap(t => data.templates?.[t] ?? []).filter(t => usedTemplateIds.has(t.id));
 
   const tmplHeaders = ['Template', 'Type', 'Property', 'Part Number', 'Manufacturer', 'Rating', 'Label', 'Qty', 'Priority', 'Locked'];
   const tmplRows: any[][] = [tmplHeaders];
@@ -386,11 +383,7 @@ function exportExcel(data: ProjectData) {
 // ─────────────────────────────────────────────────────────────────────────────
 function exportPDF(data: ProjectData) {
   const propKeys  = Object.keys(DEVICE_PROP_LABELS);
-  const allDevices = [
-    ...(data.deviceLibrary?.LV ?? []).map(d => ({ ...d, tier: 'LV' })),
-    ...(data.deviceLibrary?.MV ?? []).map(d => ({ ...d, tier: 'MV' })),
-    ...(data.deviceLibrary?.HV ?? []).map(d => ({ ...d, tier: 'HV' })),
-  ];
+  const allDevices = TIERS.flatMap(t => (data.deviceLibrary?.[t] ?? []).map(d => ({ ...d, tier: t })));
 
   const th  = (label: string, bg = '#1e50a2') =>
     `<th style="background:${bg};color:#fff;padding:6px 10px;text-align:left;font-size:11px;white-space:nowrap">${label}</th>`;
@@ -440,7 +433,7 @@ function exportPDF(data: ProjectData) {
 
   // ── Equipment & selections table ──────────────────────────────────────────
   const eqs = data.equipments ?? [];
-  const allLib = [...(data.deviceLibrary?.LV??[]),...(data.deviceLibrary?.MV??[]),...(data.deviceLibrary?.HV??[])];
+  const allLib = TIERS.flatMap(t => data.deviceLibrary?.[t] ?? []);
   const eqTable = eqs.length === 0 ? '<p style="color:#9ca3af;font-size:12px">No equipment defined.</p>' : table(
     `<thead><tr>${['Equipment','Type','Device (Library)','Row','Template','Bus Section','Feeder No','Wiring Type','Rating Power','FLC (A)'].map(h=>th(h,'#b45309')).join('')}</tr></thead><tbody>` +
     eqs.flatMap((eq, eqi) => {
@@ -487,11 +480,7 @@ function exportPDF(data: ProjectData) {
   ${(() => {
     const usedIds = new Set<string>();
     eqs.forEach(eq => eq.devices?.forEach(d => { if (d.templateId) usedIds.add(d.templateId); }));
-    const used = [
-      ...(data.templates?.LV ?? []),
-      ...(data.templates?.MV ?? []),
-      ...(data.templates?.HV ?? []),
-    ].filter(t => usedIds.has(t.id));
+    const used = TIERS.flatMap(t => data.templates?.[t] ?? []).filter(t => usedIds.has(t.id));
     if (used.length === 0) return '';
     let html = '<h3 style="margin:18px 0 6px;font-size:13px;color:#b45309;font-weight:700">Template Components Breakdown</h3>';
     for (const tmpl of used) {
@@ -579,11 +568,7 @@ function exportHTML(data: ProjectData) {
      </div>`;
 
   // Device Library table
-  const allDevices = [
-    ...(data.deviceLibrary?.LV ?? []).map(d => ({ ...d, tier: 'LV' })),
-    ...(data.deviceLibrary?.MV ?? []).map(d => ({ ...d, tier: 'MV' })),
-    ...(data.deviceLibrary?.HV ?? []).map(d => ({ ...d, tier: 'HV' })),
-  ];
+  const allDevices = TIERS.flatMap(t => (data.deviceLibrary?.[t] ?? []).map(d => ({ ...d, tier: t })));
   const propKeys = Object.keys(DEVICE_PROP_LABELS);
   const devLibTable = allDevices.length === 0 ? '<p style="color:#888">No devices defined.</p>' :
     `<div style="overflow-x:auto"><table style="${tableStyle}">
@@ -615,7 +600,7 @@ function exportHTML(data: ProjectData) {
       <tbody>${equipments.flatMap((eq, eqi) => {
         const libItemId = eq.properties?.deviceLibraryItemId as string | undefined;
         const libItem   = libItemId
-          ? [...(data.deviceLibrary?.LV??[]),...(data.deviceLibrary?.MV??[]),...(data.deviceLibrary?.HV??[])].find(d=>d.id===libItemId)
+          ? TIERS.flatMap(t => data.deviceLibrary?.[t] ?? []).find(d=>d.id===libItemId)
           : null;
         if (!eq.devices || eq.devices.length === 0) {
           return [`<tr style="${eqi%2===1?altStyle:''}">
@@ -815,7 +800,7 @@ const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
 // MAIN TAB COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 export const OutputTypesTab: React.FC = () => {
-  const { projectData, currentRevision } = useProject();
+  const { projectData, currentRevision, isCurrentRevisionEditable } = useProject();
   const [downloading, setDownloading] = useState<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['project', 'tech', 'devices', 'equipment']));
   const [showCompareModal, setShowCompareModal] = useState(false);
@@ -837,11 +822,16 @@ export const OutputTypesTab: React.FC = () => {
       setLoadingRevisions(true);
       const revisionsData = await projectService.getRevisions(projectData._id!);
       setRevisions(revisionsData);
-      if (revisionsData.length > 0) {
-        setCompareBaseRevision(revisionsData[0]._id!);
-        if (revisionsData.length > 1) {
-          setCompareTargetRevision(revisionsData[1]._id!);
-        }
+      // Older → newer: the previous revision is the base and the latest the
+      // target, so what was added reads as added. Latest-first put them the
+      // other way round, and every addition was reported as a removal.
+      // A choice already made is kept as long as it still exists.
+      const exists = (id: string) => revisionsData.some(r => r._id === id);
+      if (revisionsData.length > 1) {
+        setCompareBaseRevision(prev => (prev && exists(prev) ? prev : revisionsData[1]._id!));
+        setCompareTargetRevision(prev => (prev && exists(prev) ? prev : revisionsData[0]._id!));
+      } else if (revisionsData.length === 1) {
+        setCompareBaseRevision(prev => (prev && exists(prev) ? prev : revisionsData[0]._id!));
       }
     } catch (err) {
       console.error('Failed to load revisions:', err);
@@ -864,7 +854,7 @@ export const OutputTypesTab: React.FC = () => {
     });
 
   const lib     = projectData.deviceLibrary;
-  const devices = [...(lib?.LV ?? []), ...(lib?.MV ?? []), ...(lib?.HV ?? [])];
+  const devices = TIERS.flatMap(t => lib?.[t] ?? []);
   const eqs     = projectData.equipments ?? [];
   const rowTotal = eqs.reduce((s, eq) => s + (eq.devices?.length ?? 0), 0);
 
@@ -878,15 +868,29 @@ export const OutputTypesTab: React.FC = () => {
   const runComparison = () => {
     setDiffError('');
     setDiff(null);
-    const base = revisionById(compareBaseRevision);
-    const target = revisionById(compareTargetRevision);
+    let base = revisionById(compareBaseRevision);
+    let target = revisionById(compareTargetRevision);
     if (!base || !target) { setDiffError('Pick two revisions to compare.'); return; }
     if (base._id === target._id) { setDiffError('Pick two different revisions.'); return; }
-    if (!base.projectSnapshot || !target.projectSnapshot) {
+    // Always older → newer, whichever way round they were picked.
+    const num = (r: Revision) => parseInt(r.revisionNumber, 10) || 0;
+    if (num(base) > num(target)) {
+      [base, target] = [target, base];
+      setCompareBaseRevision(base._id!);
+      setCompareTargetRevision(target._id!);
+    }
+    // The revision being worked on is compared as it is on screen. Its stored
+    // snapshot is only as new as the last save, so an edit made a minute ago
+    // was missing from the comparison.
+    const snapshotOf = (r: Revision) =>
+      r._id && currentRevision?._id === r._id && isCurrentRevisionEditable ? projectData : r.projectSnapshot;
+    const from = snapshotOf(base);
+    const to = snapshotOf(target);
+    if (!from || !to) {
       setDiffError('One of these revisions has no snapshot stored, so it cannot be compared.');
       return;
     }
-    setDiff(diffProjectSnapshots(base.projectSnapshot, target.projectSnapshot));
+    setDiff(diffProjectSnapshots(from, to));
   };
 
   const downloadComparison = () => {
@@ -967,7 +971,7 @@ export const OutputTypesTab: React.FC = () => {
           </button>
           <div className="h-8 w-px bg-gray-300 mx-1"></div>
           <button
-            onClick={() => setShowCompareModal(true)}
+            onClick={() => { setShowCompareModal(true); setDiff(null); loadRevisions(); }}
             className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm font-medium text-sm transition-colors"
           >
             🔄 Compare Revisions
@@ -1074,7 +1078,7 @@ export const OutputTypesTab: React.FC = () => {
                 <tbody>
                   {devices.map((dev, i) => {
                     const p = dev.properties as Record<string, any>;
-                    const tierColor = dev.type === 'LV' ? 'bg-green-100 text-green-800' : dev.type === 'MV' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800';
+                    const tierColor = TIER_PILL[dev.type as Tier] ?? TIER_PILL.OTHER;
                     return (
                       <tr key={dev.id} className={i % 2 === 1 ? 'bg-gray-50' : 'bg-white'}>
                         <td className="px-3 py-1.5 border-b border-gray-100">{i + 1}</td>
@@ -1126,7 +1130,7 @@ export const OutputTypesTab: React.FC = () => {
         tier="LV"
         badge="04"
         color="#065f46"
-        equipments={eqs.filter(e => e.type === 'LV')}
+        equipments={eqs.filter(e => LAYOUT_OF[e.type] === 'LV')}
         projectData={projectData}
       />
 
@@ -1135,7 +1139,7 @@ export const OutputTypesTab: React.FC = () => {
         tier="MV"
         badge="05"
         color="#92400e"
-        equipments={eqs.filter(e => e.type === 'MV')}
+        equipments={eqs.filter(e => LAYOUT_OF[e.type] === 'MV')}
         projectData={projectData}
       />
 
@@ -1242,7 +1246,7 @@ export const OutputTypesTab: React.FC = () => {
                     <div key={`${eq.type}-${eq.name}`} className="border rounded">
                       <div className="px-3 py-2 bg-gray-50 border-b text-sm flex items-center gap-2">
                         <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
-                          eq.type === 'LV' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{eq.type}</span>
+                          TIER_PILL[eq.type as Tier] ?? TIER_PILL.OTHER}`}>{eq.type}</span>
                         <span className="font-medium">{eq.name}</span>
                         {eq.kind !== 'changed' && (
                           <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${

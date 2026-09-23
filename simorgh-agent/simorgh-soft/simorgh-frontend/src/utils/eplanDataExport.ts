@@ -26,6 +26,7 @@ import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../types/p
 import { templateParts, getEplanixValue, stripLocaleTags } from './tierEquipmentMatrix';
 import { buildPanelLayout } from './panelLayout';
 import { buildOutline } from './outline';
+import { LAYOUT_OF } from './tiers';
 
 const text = (v: any) => (v == null ? '' : String(v).trim());
 
@@ -179,7 +180,7 @@ export function buildEplanDataForEquipment(
   // and a LV switchgear run through them would come back with a cell width
   // nobody worked out and a door that does not exist. For those the fields
   // stay empty, which is what the add-in reads as "not stated".
-  const outline = equipment.type === 'MV'
+  const outline = LAYOUT_OF[equipment.type] === 'MV'
     ? buildOutline(data, equipment, {
         lvCompartmentHeight: options.generationType === 'old'
           ? options.lvCompartmentHeightOld
@@ -206,7 +207,7 @@ export function buildEplanDataForEquipment(
     return {};
   })();
 
-  const isMv = equipment.type === 'MV';
+  const isMv = LAYOUT_OF[equipment.type] === 'MV';
   const cubicles = text(tpms.cellCount) || String(layout.columns.length || '');
 
   // Everything that is the same on every record of this switchgear.
@@ -216,7 +217,9 @@ export function buildEplanDataForEquipment(
     Revision: text(options.revision),
     ProjectName: text(data.projectName),
     ScopeName: text(equipment.name),
-    PanelType: text(equipment.type),
+    // The add-in knows LV, MV and HV. A GIS board is drawn as MV and an OTHER
+    // one as LV — the columns they are built with (LAYOUT_OF).
+    PanelType: text(LAYOUT_OF[equipment.type] ?? equipment.type),
 
     // ── header ──
     hBusSection:           caption(displayNames, 'BUS SECTION', 'BUS SECTION'),
@@ -360,7 +363,7 @@ export function buildEplanDataForEquipment(
 
       // ── outline data, per feeder ──
       PlaneType:   cell?.planeType ?? '',
-      SldType:     cell?.sldType ?? text(equipment.type),
+      SldType:     cell?.sldType ?? text(LAYOUT_OF[equipment.type] ?? equipment.type),
       CbType:      cell?.cbType ?? '',
       HV_Door:     cell?.hvDoor ?? '',
       DxfOpening:  cell?.dxfOpening ?? '',

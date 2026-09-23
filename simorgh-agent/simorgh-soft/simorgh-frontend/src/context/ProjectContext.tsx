@@ -3,6 +3,7 @@ import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy, Te
 import { ProjectConflict, SaveNeedsYou, projectService } from '../services/projectService';
 import { removeTemplateEverywhere } from '../utils/cascadeDelete';
 import { downloadText, fileSafe } from '../utils/download';
+import { type Tier, TIERS, emptyTiers, withAllTiers } from '../utils/tiers';
 
 interface ProjectContextType {
   projectData: ProjectData;
@@ -56,7 +57,7 @@ interface ProjectContextType {
    * on one panel went, and nothing should happen to the other nine.
    */
   restoreOneSwitchgear: (from: ProjectData, equipmentId: string) => void;
-  addTemplate: (type: 'LV' | 'MV' | 'HV', name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean, mechanical?: TemplateMechanical) => void;
+  addTemplate: (type: Tier, name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean, mechanical?: TemplateMechanical) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   /** The mechanical answers a template holds, replaced whole. */
   setTemplateMechanical: (templateId: string, mechanical: TemplateMechanical) => void;
@@ -160,8 +161,8 @@ export const defaultProjectData: ProjectData = {
     wireManufacturer: { lv: '', mv: '' },
     others: { thicknessOfPainting: '', colorType: '', backgroundColor: '', writingColor: '' }
   },
-  templates: { LV: [], MV: [], HV: [] },
-  deviceLibrary: { LV: [], MV: [], HV: [] },
+  templates: emptyTiers(),
+  deviceLibrary: emptyTiers(),
   devices: [],
   equipments: [],
   outputTypes: []
@@ -177,6 +178,20 @@ export interface ProjectConflictState {
   mine: ProjectData;
 }
 
+/**
+ * The project with a list for every tier.
+ *
+ * One saved before GIS and OTHER existed has none for them, and a screen that
+ * maps over `templates.GIS` would throw on it. The same object comes back
+ * when nothing is missing.
+ */
+export function wholeProject(project: ProjectData): ProjectData {
+  const templates = withAllTiers(project.templates);
+  const deviceLibrary = withAllTiers(project.deviceLibrary);
+  if (templates === project.templates && deviceLibrary === project.deviceLibrary) return project;
+  return { ...project, templates, deviceLibrary };
+}
+
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
 interface ProjectProviderProps {
@@ -186,11 +201,17 @@ interface ProjectProviderProps {
 }
 
 export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, initialProject, initialRevision }) => {
-  const [projectData, setProjectData] = useState<ProjectData>(
+  const [projectData, setProjectDataRaw] = useState<ProjectData>(
     initialProject
-      ? { ...defaultProjectData, ...initialProject }
+      ? wholeProject({ ...defaultProjectData, ...initialProject })
       : defaultProjectData
   );
+  // Every way a project comes in — opened, switched to, restored, merged —
+  // passes through here, so every screen can take a list per tier for granted.
+  const setProjectData = React.useCallback(
+    (next: ProjectData | ((prev: ProjectData) => ProjectData)) =>
+      setProjectDataRaw(prev => wholeProject(typeof next === 'function' ? next(prev) : next)),
+    []);
   const [projectId, setProjectId] = useState<string | null>(initialProject?._id || null);
   const [selectedEquipment, setSelectedEquipment] = useState<Equipment | null>(null);
 
@@ -555,7 +576,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
 
   const addTemplate = (
-    type: 'LV' | 'MV' | 'HV',
+    type: Tier,
     name: string,
     hierarchy?: TemplateHierarchy,
     copyFromId?: string,
@@ -610,7 +631,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     if (!guardEdit()) return;
     setProjectData(prev => {
       const updatedTemplates = { ...prev.templates };
-      for (const type of ['LV', 'MV', 'HV'] as const) {
+      for (const type of TIERS) {
         updatedTemplates[type] = updatedTemplates[type].map(template =>
           template.id === templateId ? { ...template, properties } : template
         );
@@ -629,7 +650,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     if (!guardEdit()) return;
     setProjectData(prev => {
       const updatedTemplates = { ...prev.templates };
-      for (const type of ['LV', 'MV', 'HV'] as const) {
+      for (const type of TIERS) {
         updatedTemplates[type] = updatedTemplates[type].map(template =>
           template.id === templateId ? { ...template, mechanical } : template
         );
@@ -649,7 +670,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     if (!guardEdit()) return;
     setProjectData(prev => {
       const updatedTemplates = { ...prev.templates };
-      for (const type of ['LV', 'MV', 'HV'] as const) {
+      for (const type of TIERS) {
         updatedTemplates[type] = updatedTemplates[type].map(template =>
           template.id === templateId
             ? {

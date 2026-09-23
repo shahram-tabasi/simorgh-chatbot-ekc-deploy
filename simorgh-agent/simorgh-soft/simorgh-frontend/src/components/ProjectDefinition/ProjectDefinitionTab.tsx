@@ -5,6 +5,7 @@ import {
   findDeviceLibraryUsage, removeDeviceLibraryItemEverywhere, UsageReport,
 } from '../../utils/cascadeDelete';
 import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
+import { MenuBox } from '../shared/MenuBox';
 import {
   PlusIcon, EditIcon, TrashIcon, XIcon,
   ChevronDownIcon, ChevronRightIcon, CheckIcon, SaveIcon, CopyIcon, ClipboardIcon,
@@ -14,6 +15,7 @@ import {
   DEVICE_PROP_GROUPS, DEVICE_PROP_LABELS, DEVICE_PROP_TOTAL, filledPropertyCount,
 } from '../../utils/deviceProperties';
 import { readSpecUpdateFromTpms, TpmsSpecUpdate } from '../../services/tpmsSync';
+import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, emptyTiers } from '../../utils/tiers';
 
 // ──────────────────────────────────────────────────────────────
 // Stable helper components — MUST live outside any other component
@@ -80,17 +82,41 @@ type ModalMode = 'view' | 'edit' | 'add';
 interface DevicePropertiesModalProps {
   item:      DeviceLibraryItem | null;
   mode:      ModalMode;
-  addType?:  'LV' | 'MV' | 'HV';
+  addType?:  Tier;
   onSave:    (item: DeviceLibraryItem) => void;
   onClose:   () => void;
+  /** The device whose specification was copied, if any — see SpecClipboard. */
+  clip:      DeviceLibraryItem | null;
+  onCopy:    (item: DeviceLibraryItem) => void;
+}
+
+// Copying a specification is copying the whole device's; pasting it is either
+// the whole of it or one tab — the tabs are the groups in DEVICE_PROP_GROUPS,
+// so "paste Busbar & Construction" writes exactly the fields that tab shows
+// and leaves the other three as they were.
+type SpecGroupId = 'electrical' | 'control' | 'busbar' | 'padlock';
+
+function pasteSpec(
+  into: DeviceLibraryProperties, from: DeviceLibraryProperties, group?: SpecGroupId,
+): DeviceLibraryProperties {
+  const keys = group
+    ? DEVICE_PROP_GROUPS.find(g => g.id === group)?.keys ?? []
+    : DEVICE_PROP_GROUPS.flatMap(g => g.keys);
+  const next = { ...into } as Record<string, unknown>;
+  const src = from as Record<string, unknown>;
+  for (const key of keys) {
+    if (src[key] === undefined) delete next[key];
+    else next[key] = src[key];
+  }
+  return next as DeviceLibraryProperties;
 }
 
 const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
-  item, mode: initialMode, addType, onSave, onClose
+  item, mode: initialMode, addType, onSave, onClose, clip, onCopy
 }) => {
   const [mode,  setMode]  = useState<ModalMode>(initialMode);
   const [name,  setName]  = useState(item?.name ?? '');
-  const [type,  setType]  = useState<'LV' | 'MV' | 'HV'>(item?.type ?? addType ?? 'LV');
+  const [type,  setType]  = useState<Tier>(item?.type ?? addType ?? 'LV');
   const [props, setProps] = useState<DeviceLibraryProperties>(item?.properties ?? {});
   const [activeSection, setActiveSection] = useState<'electrical' | 'control' | 'busbar' | 'padlock'>('electrical');
   // A panel specification is a long form; full screen gives it the whole
@@ -120,9 +146,17 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
 
   // PropField and PropCheckbox are defined at module level to prevent focus loss
 
-  const typeColor = type === 'LV' ? 'bg-green-100 text-green-700'
-    : type === 'MV' ? 'bg-orange-100 text-orange-700'
-    : 'bg-red-100 text-red-700';
+  const typeColor = TIER_PILL[type] ?? TIER_PILL.OTHER;
+
+  // Paste from the copied device, all of it or the tab on screen. A paste
+  // into a device being viewed turns the dialog to editing, so the change is
+  // seen and saved (or cancelled) like any other edit.
+  const canPaste = !!clip && clip.id !== item?.id;
+  const paste = (group?: SpecGroupId) => {
+    if (!clip) return;
+    setProps(prev => pasteSpec(prev, clip.properties ?? {}, group));
+    if (mode === 'view') setMode('edit');
+  };
 
   const sections = [
     { id: 'electrical' as const, label: 'Electrical / Mechanical' },
@@ -151,7 +185,23 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
               <span className={`text-xs px-2 py-0.5 rounded font-semibold ${typeColor}`}>{type}</span>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            <button
+              className="px-2.5 py-1.5 border rounded text-xs flex items-center gap-1 hover:bg-gray-50"
+              onClick={() => onCopy({ id: item?.id ?? 'new', name: name || 'this device', type, properties: props })}
+              title="Copy this device's whole specification"
+            >
+              <CopyIcon className="w-3 h-3" /> Copy spec
+            </button>
+            {canPaste && (
+              <button
+                className="px-2.5 py-1.5 border border-blue-300 bg-blue-50 text-blue-800 rounded text-xs flex items-center gap-1 hover:bg-blue-100"
+                onClick={() => paste()}
+                title={`Paste every tab of ${clip!.name}'s specification here`}
+              >
+                <ClipboardIcon className="w-3 h-3" /> Paste all from {clip!.name}
+              </button>
+            )}
             {mode === 'view' && (
               <button
                 className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm flex items-center gap-1 hover:bg-blue-700"
@@ -195,11 +245,11 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
                 <select
                   className="border border-gray-300 rounded px-2 py-1 text-sm"
                   value={type}
-                  onChange={e => setType(e.target.value as 'LV' | 'MV' | 'HV')}
+                  onChange={e => setType(e.target.value as Tier)}
                 >
-                  <option value="LV">LV – Low Voltage</option>
-                  <option value="MV">MV – Medium Voltage</option>
-                  <option value="HV">HV – High Voltage</option>
+                  {TIERS.map(t => (
+                    <option key={t} value={t}>{t} – {TIER_LABEL[t]}</option>
+                  ))}
                 </select>
               </div>
             )}
@@ -221,6 +271,16 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
               {sec.label}
             </button>
           ))}
+          {canPaste && (
+            <button
+              className="ml-auto my-1.5 px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 rounded flex items-center gap-1"
+              onClick={() => paste(activeSection)}
+              title={`Paste only this tab from ${clip!.name}`}
+            >
+              <ClipboardIcon className="w-3 h-3" />
+              Paste this tab from {clip!.name}
+            </button>
+          )}
         </div>
 
         {/* ── Section content ── */}
@@ -317,11 +377,11 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
   const [activeSubTab,       setActiveSubTab]       = useState<SubTab>('project-data');
   const [projectNameEditing, setProjectNameEditing] = useState(false);
-  const [expandedTypes,      setExpandedTypes]      = useState<Set<string>>(new Set(['LV', 'MV', 'HV']));
+  const [expandedTypes,      setExpandedTypes]      = useState<Set<string>>(new Set(TIERS));
 
   const [ctxMenu, setCtxMenu] = useState<{
     visible: boolean; x: number; y: number;
-    typeNode: 'LV' | 'MV' | 'HV' | null;
+    typeNode: Tier | null;
     itemId:   string | null;
   }>({ visible: false, x: 0, y: 0, typeNode: null, itemId: null });
 
@@ -339,20 +399,20 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
   const [copiedDevice, setCopiedDevice] = useState<DeviceLibraryItem | null>(null);
   const [pasteNameModal, setPasteNameModal] = useState<{
-    visible: boolean; targetType: 'LV' | 'MV' | 'HV' | null; suggestedName: string;
+    visible: boolean; targetType: Tier | null; suggestedName: string;
   }>({ visible: false, targetType: null, suggestedName: '' });
 
   const [deviceModal, setDeviceModal] = useState<{
     visible:  boolean;
     item:     DeviceLibraryItem | null;
     mode:     ModalMode;
-    addType?: 'LV' | 'MV' | 'HV';
+    addType?: Tier;
   }>({ visible: false, item: null, mode: 'add' });
 
   // Pending Device Library deletion — held until the user confirms in the
   // cascade dialog, which lists everywhere the device is used.
   const [libDeleteTarget, setLibDeleteTarget] = useState<{
-    item: DeviceLibraryItem; type: 'LV' | 'MV' | 'HV'; usage: UsageReport;
+    item: DeviceLibraryItem; type: Tier; usage: UsageReport;
   } | null>(null);
 
   // Navigate here from DeviceSelection → Device Library
@@ -363,8 +423,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   // Auto-open a specific device in edit mode when navigated from DeviceSelection
   useEffect(() => {
     if (requestedDeviceId && requestedSubTab === 'device-library') {
-      const library = projectData.deviceLibrary ?? { LV: [], MV: [], HV: [] };
-      for (const t of ['LV', 'MV', 'HV'] as const) {
+      const library = projectData.deviceLibrary ?? emptyTiers();
+      for (const t of TIERS) {
         const found = (library[t] ?? []).find(d => d.id === requestedDeviceId);
         if (found) {
           setDeviceModal({ visible: true, item: found, mode: 'edit' });
@@ -384,7 +444,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   }, [ctxMenu.visible]);
 
   const techSettings  = projectData.techSettings  ?? DEFAULT_TECH_SETTINGS;
-  const deviceLibrary = projectData.deviceLibrary ?? { LV: [], MV: [], HV: [] };
+  const deviceLibrary = projectData.deviceLibrary ?? emptyTiers();
 
   // ── helpers ──────────────────────────────────────────────────
   const setMain  = (field: string, val: string)  => updateProjectData({ [field]: val });
@@ -421,7 +481,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   // the entry disappears from the library AND from the Device Selection tree
   // — the equipment created from it and every row that equipment holds go
   // with it. The user sees exactly what will be removed first.
-  const deleteLib = (id: string, t: 'LV' | 'MV' | 'HV') => {
+  const deleteLib = (id: string, t: Tier) => {
     const item = (deviceLibrary[t] ?? []).find(d => d.id === id);
     if (!item) return;
     setLibDeleteTarget({ item, type: t, usage: findDeviceLibraryUsage(projectData, id, t) });
@@ -505,10 +565,18 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     setPasteNameModal({ visible: false, targetType: null, suggestedName: '' });
   };
 
-  const typeColor = (t: 'LV' | 'MV' | 'HV') =>
-    t === 'LV' ? 'text-green-600 bg-green-50'
-    : t === 'MV' ? 'text-orange-600 bg-orange-50'
-    : 'text-red-600 bg-red-50';
+  const typeColor = (t: Tier) => TIER_BADGE[t] ?? TIER_BADGE.OTHER;
+
+  // Paste a copied specification over an existing device — all of it, or one
+  // tab. What is overwritten is said first: a paste has no undo here.
+  const pasteSpecInto = (target: DeviceLibraryItem, group?: SpecGroupId) => {
+    if (!copiedDevice) return;
+    const what = group
+      ? `the "${DEVICE_PROP_GROUPS.find(g => g.id === group)?.label}" tab`
+      : 'the whole specification';
+    if (!window.confirm(`Replace ${what} of ${target.name} with ${copiedDevice.name}'s?`)) return;
+    updateLib({ ...target, properties: pasteSpec(target.properties ?? {}, copiedDevice.properties ?? {}, group) });
+  };
 
   // ── Style shortcuts ──────────────────────────────────────────
   const inp   = 'col-span-2 border border-gray-300 rounded px-2 py-1 text-sm';
@@ -776,7 +844,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     <div>
       <div className="flex items-start justify-between gap-4 mb-3">
         <p className="text-sm text-gray-500">
-          Right-click on a voltage category to add a device. Click a device to break out its
+          Right-click on a group to add a device; right-click a device to copy its specification
+          and paste it into another, whole or tab by tab. Click a device to break out its
           specification, double-click to open it.
         </p>
         {tpmsLink?.projectMainId ? (
@@ -798,11 +867,11 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
         <div className="px-4 py-2 bg-gray-100 border-b font-semibold text-sm flex items-center gap-2 select-none">
           <span>📦</span> Device Library
           <span className="ml-auto text-xs font-normal text-gray-500">
-            {(['LV', 'MV', 'HV'] as const).reduce((n, t) => n + (deviceLibrary[t] ?? []).length, 0)} device(s)
+            {TIERS.reduce((n, t) => n + (deviceLibrary[t] ?? []).length, 0)} device(s)
           </span>
         </div>
 
-        {(['LV', 'MV', 'HV'] as const).map(t => {
+        {TIERS.map(t => {
           const items    = deviceLibrary[t] ?? [];
           const expanded = expandedTypes.has(t);
 
@@ -827,7 +896,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                     : <ChevronRightIcon className="w-4 h-4 text-gray-500" />}
                   <span className={`text-xs px-2 py-0.5 rounded font-bold ${typeColor(t)}`}>{t}</span>
                   <span className="text-sm font-medium">
-                    {t === 'LV' ? 'Low Voltage' : t === 'MV' ? 'Medium Voltage' : 'High Voltage'}
+                    {TIER_LABEL[t]}
                   </span>
                 </div>
                 <span className="text-xs text-gray-400">{items.length} device{items.length !== 1 ? 's' : ''}</span>
@@ -890,10 +959,10 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
       {/* Context Menu */}
       {ctxMenu.visible && (
-        <div
-          className="fixed z-50 bg-white border shadow-lg rounded py-1 w-44"
-          style={{ top: ctxMenu.y, left: ctxMenu.x }}
-          onClick={e => e.stopPropagation()}
+        <MenuBox
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          className="z-50 bg-white border shadow-lg rounded py-1 w-60 max-h-[90vh] overflow-y-auto"
         >
           {/* Add Device / Paste – shown when right-clicking on type header */}
           {!ctxMenu.itemId && ctxMenu.typeNode && (
@@ -919,7 +988,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                     setCtxMenu(prev => ({ ...prev, visible: false }));
                   }}
                 >
-                  <ClipboardIcon className="w-4 h-4 mr-2" /> Paste "{copiedDevice.name}"
+                  <ClipboardIcon className="w-4 h-4 mr-2" /> Paste as new device "{copiedDevice.name}"
                 </button>
               )}
             </>
@@ -949,6 +1018,36 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                 >
                   <CopyIcon className="w-4 h-4 mr-2" /> Copy
                 </button>
+                {copiedDevice && copiedDevice.id !== found.id && (
+                  <>
+                    <div className="border-t my-1" />
+                    <p className="px-4 pt-1 pb-0.5 text-[10px] uppercase tracking-wide text-gray-400">
+                      Specification from {copiedDevice.name}
+                    </p>
+                    <button
+                      className="w-full text-left px-4 py-1.5 text-sm hover:bg-gray-100 flex items-center"
+                      onClick={() => {
+                        setCtxMenu(prev => ({ ...prev, visible: false }));
+                        pasteSpecInto(found);
+                      }}
+                    >
+                      <ClipboardIcon className="w-4 h-4 mr-2" /> Paste all tabs
+                    </button>
+                    {DEVICE_PROP_GROUPS.map(g => (
+                      <button
+                        key={g.id}
+                        className="w-full text-left pl-10 pr-4 py-1 text-xs hover:bg-gray-100 text-gray-700"
+                        onClick={() => {
+                          setCtxMenu(prev => ({ ...prev, visible: false }));
+                          pasteSpecInto(found, g.id as SpecGroupId);
+                        }}
+                      >
+                        Paste {g.label} only
+                      </button>
+                    ))}
+                    <div className="border-t my-1" />
+                  </>
+                )}
                 {copiedDevice && (
                   <button
                     className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
@@ -961,7 +1060,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                       setCtxMenu(prev => ({ ...prev, visible: false }));
                     }}
                   >
-                    <ClipboardIcon className="w-4 h-4 mr-2" /> Paste "{copiedDevice.name}"
+                    <ClipboardIcon className="w-4 h-4 mr-2" /> Paste as new device "{copiedDevice.name}"
                   </button>
                 )}
                 <button
@@ -984,7 +1083,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           >
             <XIcon className="w-4 h-4 mr-2" /> Cancel
           </button>
-        </div>
+        </MenuBox>
       )}
 
       {/* Device Properties Modal */}
@@ -995,6 +1094,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           addType={deviceModal.addType}
           onSave={handleDeviceSave}
           onClose={closeDeviceModal}
+          clip={copiedDevice}
+          onCopy={setCopiedDevice}
         />
       )}
 

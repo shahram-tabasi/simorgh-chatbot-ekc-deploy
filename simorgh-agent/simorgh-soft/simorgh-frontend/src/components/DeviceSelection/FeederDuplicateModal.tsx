@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { AlertTriangleIcon, XIcon } from 'lucide-react';
 import { DuplicateGroup, countDuplicateRows } from '../../utils/feederDuplicates';
+import { type Tier, TIER_PILL } from '../../utils/tiers';
 
 interface FeederDuplicateModalProps {
   groups: DuplicateGroup[];
@@ -73,10 +74,7 @@ export const FeederDuplicateModal: React.FC<FeederDuplicateModalProps> = ({
   const totalRows = countDuplicateRows(groups);
   const hasEdits = Object.keys(edits).length > 0;
 
-  const typeColor = (t: 'LV' | 'MV' | 'HV') =>
-    t === 'LV' ? 'bg-green-100 text-green-700'
-    : t === 'MV' ? 'bg-orange-100 text-orange-700'
-    : 'bg-red-100 text-red-700';
+  const typeColor = (t: Tier) => TIER_PILL[t] ?? TIER_PILL.OTHER;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100] p-6">

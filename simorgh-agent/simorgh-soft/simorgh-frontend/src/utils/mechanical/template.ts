@@ -44,13 +44,16 @@ export interface TemplateFacts {
   magnetLabel: string;
 }
 
-type Tier = 'LV' | 'MV' | 'HV';
+import { type Tier } from '../tiers';
 
 /** The columns each fact is read from, per tier, most particular first. */
 const COLUMNS: Record<Tier, { breaker: string[]; vt: string[]; ct: string[] }> = {
   MV: { breaker: ['VCB OR VC/FUSE'], vt: ['PT RATING'], ct: ['CT RATING', 'COREBALANCE CT'] },
   LV: { breaker: ['CB ORDER'], vt: ['PT RATING'], ct: ['CT RATING', 'COREBALANCE CT'] },
   HV: { breaker: ['BREAKER TYPE'], vt: ['PT RATING'], ct: ['CT RATING'] },
+  // GIS cells carry MV's columns (see LAYOUT_OF); OTHER carries LV's.
+  GIS: { breaker: ['VCB OR VC/FUSE'], vt: ['PT RATING'], ct: ['CT RATING', 'COREBALANCE CT'] },
+  OTHER: { breaker: ['CB ORDER'], vt: ['PT RATING'], ct: ['CT RATING', 'COREBALANCE CT'] },
 };
 
 const key = (v: unknown) => String(v ?? '').toUpperCase().replace(/[^A-Z0-9]+/g, '');

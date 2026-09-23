@@ -43,6 +43,7 @@ import { buildMechanicalItems, MECHANICAL_HEADERS } from './mechanicalItems';
 import {
   CellEstimate, MechanicalCellContext, catalogFor, estimatesFor, panelTypeOf,
 } from './mechanical';
+import { LAYOUT_OF } from './tiers';
 
 // ── The palette, as the original mixes it ──────────────────────────────────
 const INK = '0F172A';
@@ -820,7 +821,7 @@ function matrixSheet(f: Facts): XLSX.WorkSheet {
 function elevationSheet(f: Facts): XLSX.WorkSheet {
   const g = new Grid();
   const type = f.panelType.toUpperCase();
-  const isMv = f.layout.equipment.type === 'MV'
+  const isMv = LAYOUT_OF[f.layout.equipment.type] === 'MV'
     || /A4|SIMOPRIME|EK36|KV/.test(type);
 
   g.band(1, 1, 9, 'PANEL ELEVATION', { bold: true, size: 14, color: NAVY });

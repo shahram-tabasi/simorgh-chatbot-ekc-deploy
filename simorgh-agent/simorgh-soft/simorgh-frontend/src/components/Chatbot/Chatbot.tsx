@@ -50,6 +50,7 @@ import {
 import { intentParseAll } from '../../services/intentParser';
 import { MarkdownView } from './MarkdownView';
 import { ProposalCard } from './ProposalCard';
+import { TIERS } from '../../utils/tiers';
 
 // Tab labels used both in the context snapshot we send to the model and in
 // the local tool runner that resolves `set_active_tab`.
@@ -481,16 +482,10 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         allEquipments: (projectData.equipments ?? []).map(e => ({
           id: e.id, name: e.name, type: e.type, rows: e.devices?.length ?? 0,
         })),
-        templates: {
-          LV: (projectData.templates?.LV ?? []).map(slimTemplate),
-          MV: (projectData.templates?.MV ?? []).map(slimTemplate),
-          HV: (projectData.templates?.HV ?? []).map(slimTemplate),
-        },
-        deviceLibrary: {
-          LV: (projectData.deviceLibrary?.LV ?? []).map(slimLibDevice),
-          MV: (projectData.deviceLibrary?.MV ?? []).map(slimLibDevice),
-          HV: (projectData.deviceLibrary?.HV ?? []).map(slimLibDevice),
-        },
+        templates: Object.fromEntries(TIERS.map(t =>
+          [t, (projectData.templates?.[t] ?? []).map(slimTemplate)])),
+        deviceLibrary: Object.fromEntries(TIERS.map(t =>
+          [t, (projectData.deviceLibrary?.[t] ?? []).map(slimLibDevice)])),
       };
       fd.append('context', JSON.stringify(ctxSnapshot));
       if (agentMode) fd.append('tools', JSON.stringify(chatToolSchemas()));

@@ -13,7 +13,7 @@
 // TPMS revision N becomes REV N on this side, carrying that revision's whole
 // project as its snapshot, so the revision list here is the revision history
 // there — and two of them can be compared in Output Types.
-import { ProjectData, Revision } from '../types/project';
+import { ProjectData, Revision, DeviceLibraryItem } from '../types/project';
 import { projectService, tpmsService } from './projectService';
 import { defaultProjectData } from '../context/ProjectContext';
 import {
@@ -21,6 +21,7 @@ import {
   buildTpmsRevisionSnapshot, buildTpmsSyncState,
 } from '../utils/tpmsProjectImport';
 import { mergeOverEdits } from '../utils/tpmsImport';
+import { type Tier, TIERS, emptyTiers } from '../utils/tiers';
 
 export interface TpmsSyncResult {
   project: ProjectData;
@@ -383,15 +384,19 @@ export async function readSpecUpdateFromTpms(
   if (changes.some(c => c.where.startsWith('Technical settings'))) patch.techSettings = mergedSettings;
 
   // ── Each panel's specification, in the Device Library ───────────────────
-  const library = project.deviceLibrary ?? { LV: [], MV: [], HV: [] };
-  const nextLibrary = { LV: [...(library.LV ?? [])], MV: [...(library.MV ?? [])], HV: [...(library.HV ?? [])] };
+  const library = project.deviceLibrary ?? emptyTiers();
+  const nextLibrary = Object.fromEntries(
+    TIERS.map(t => [t, [...(library[t] ?? [])]])) as Record<Tier, DeviceLibraryItem[]>;
   const newSwitchgears: string[] = [];
   let libraryTouched = false;
 
   for (const sw of switchgears) {
-    const tier = sw.panelType as 'LV' | 'MV' | 'HV';
-    const index = (nextLibrary[tier] ?? []).findIndex(
-      d => (sw.scopeId != null && d.tpmsScopeId === sw.scopeId) || d.name === sw.scopeName);
+    // Looked for in every group, not only the one TPMS files it under: an
+    // engineer who moved a panel to GIS or OTHER still has the same panel.
+    const matches = (d: DeviceLibraryItem) =>
+      (sw.scopeId != null && d.tpmsScopeId === sw.scopeId) || d.name === sw.scopeName;
+    const tier = TIERS.find(t => nextLibrary[t].some(matches)) ?? (sw.panelType as Tier);
+    const index = (nextLibrary[tier] ?? []).findIndex(matches);
     if (index < 0) { newSwitchgears.push(sw.scopeName); continue; }
 
     const existing = nextLibrary[tier][index];

@@ -1,7 +1,7 @@
 import React, { useReducer, useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx-js-style';
-import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ScissorsIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon, RefreshCwIcon, Undo2Icon, Redo2Icon } from 'lucide-react';
+import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ScissorsIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon, RefreshCwIcon, Undo2Icon, Redo2Icon, EyeOffIcon } from 'lucide-react';
 import { PanelFrame } from '../shared/PanelFrame';
 import { MenuBox } from '../shared/MenuBox';
 import { usePanel } from '../../context/PanelsContext';
@@ -13,6 +13,8 @@ import { parseSimarisRows, matchSimarisToRows, SimarisMatch } from '../../utils/
 import { HIGHLIGHT_FIELD, ImportPlan, applyPlan, planImport, readFills } from '../../utils/deviceImport';
 import { History, emptyHistory, record, undo, redo } from '../../utils/tableHistory';
 import { templateMeta } from '../../utils/templateMeta';
+import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, LAYOUT_OF, emptyTiers } from '../../utils/tiers';
+import { saveExcelHandle, loadExcelHandle, mayRead } from '../../utils/fileHandleStore';
 
 /** The spreadsheet one switchgear was last filled from. */
 interface ExcelMemory {
@@ -27,6 +29,17 @@ interface ExcelMemory {
 }
 
 const NO_EXCEL: ExcelMemory = { file: null, readAt: null, note: null };
+
+/**
+ * Whether this page may keep a file to read again.
+ *
+ * The File System Access API is only offered to secure pages — https, or
+ * localhost. Over plain http it is simply absent, and so is Update's ability
+ * to read the spreadsheet again without the file being chosen again.
+ */
+const canKeepFiles = () =>
+  typeof window !== 'undefined'
+  && typeof (window as unknown as { showOpenFilePicker?: unknown }).showOpenFilePicker === 'function';
 
 /** How many steps back Ctrl+Z goes. */
 const UNDO_DEPTH = 5;
@@ -138,7 +151,7 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
   ];
 
   let propertiesToShow: string[] = [];
-  switch (template.type) {
+  switch (LAYOUT_OF[template.type] ?? template.type) {
     case 'LV': propertiesToShow = lvProperties; break;
     case 'MV': propertiesToShow = mvProperties; break;
     case 'HV': propertiesToShow = hvProperties; break;
@@ -149,13 +162,7 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
   const displayNames: Record<string, string> = (template.properties as any)?.__displayNames || {};
   const lockedRows: string[]                  = (template.properties as any)?.__locked || [];
 
-  const getTypeColor = (type: 'LV' | 'MV' | 'HV') => {
-    switch (type) {
-      case 'LV': return 'bg-green-100 text-green-800';
-      case 'MV': return 'bg-orange-100 text-orange-800';
-      case 'HV': return 'bg-red-100 text-red-800';
-    }
-  };
+  const getTypeColor = (type: Tier) => TIER_PILL[type] ?? TIER_PILL.OTHER;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -189,7 +196,7 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
             <div>
               <span className="text-sm font-medium text-gray-600">Type:</span>
               <span className={`ml-2 px-2 py-0.5 rounded text-xs font-semibold ${getTypeColor(template.type)}`}>
-                {template.type} ({template.type === 'LV' ? 'Low Voltage' : template.type === 'MV' ? 'Medium Voltage' : 'High Voltage'})
+                {template.type} ({TIER_LABEL[template.type] ?? template.type})
               </span>
             </div>
           </div>
@@ -295,15 +302,28 @@ interface DeviceColumnDef {
   header: string;
   isTemplate?: boolean;
   width?: string; // tailwind width class
+  /**
+   * The most characters the column is ever made wide for.
+   *
+   * A feeder number and a bus section are a few characters — "F12", "B1" —
+   * but their headings are ten, and a column sized to its heading stretched
+   * across the table for values a quarter as wide. These two hold four
+   * characters and their headings wrap; a longer value is still all there,
+   * in the box and in its tooltip.
+   */
+  maxChars?: number;
 }
+
+/** Every other column is made as wide as its widest value, heading included. */
+const NARROW = 4;
 
 const MV_COLUMNS: DeviceColumnDef[] = [
   { key: 'templateName', header: 'Template', isTemplate: true },
   { key: 'wiringType',   header: 'WIRING TYPE' },
   { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
   { key: 'flc',          header: 'FLC (A)' },
-  { key: 'feederNo',     header: 'FEEDER NO.' },
-  { key: 'busSection',   header: 'BUS SECTION' },
+  { key: 'feederNo',     header: 'FEEDER NO.', maxChars: NARROW },
+  { key: 'busSection',   header: 'BUS SECTION', maxChars: NARROW },
   { key: 'tag',          header: 'TAG' },
   { key: 'description',  header: 'DESCRIPTION' },
   { key: 'cableSize',    header: 'CABLE SIZE' },
@@ -314,8 +334,8 @@ const LV_COLUMNS: DeviceColumnDef[] = [
   { key: 'wiringType',   header: 'WIRING TYPE' },
   { key: 'ratingPower',  header: 'RATING POWER (kW/KVA)' },
   { key: 'flc',          header: 'FLC (A)' },
-  { key: 'feederNo',     header: 'FEEDER NO.' },
-  { key: 'busSection',   header: 'BUS SECTION' },
+  { key: 'feederNo',     header: 'FEEDER NO.', maxChars: NARROW },
+  { key: 'busSection',   header: 'BUS SECTION', maxChars: NARROW },
   { key: 'sfdHfd',       header: 'SFD/HFD' },
   { key: 'tag',          header: 'TAG' },
   { key: 'description',  header: 'DESCRIPTION' },
@@ -324,8 +344,8 @@ const LV_COLUMNS: DeviceColumnDef[] = [
   { key: 'cableSize',    header: 'CABLE SIZE' },
 ];
 
-const getColumnsForType = (type: 'LV' | 'MV' | 'HV'): DeviceColumnDef[] =>
-  type === 'LV' ? LV_COLUMNS : MV_COLUMNS;
+const getColumnsForType = (type: Tier): DeviceColumnDef[] =>
+  LAYOUT_OF[type] === 'LV' ? LV_COLUMNS : MV_COLUMNS;
 
 // Row/cell color palette. Includes soft pastels plus saturated red/green/yellow
 // (per spec). Empty string = clear color.
@@ -674,6 +694,26 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   // How many columns (from the left, counting the # column) stay pinned in
   // place while the rest of the table scrolls horizontally.
   const [freezeCount, setFreezeCount] = useState(0);
+  // How many rows, from the top, stay put while the rest scrolls — the
+  // heading row always does once any are frozen.
+  const [freezeRows, setFreezeRows] = useState(0);
+  // Columns taken off the screen. Kept per group of columns (LV's and MV's
+  // differ) and remembered on this machine, because the columns somebody does
+  // not need are the same ones every time. Export still writes every column —
+  // the file is what Import reads back.
+  const hiddenKey = `simorgh.deviceSelection.hidden.${LAYOUT_OF[selectedEquipment?.type ?? 'MV'] ?? 'MV'}`;
+  const [hiddenCols, setHiddenColsState] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(hiddenKey) || '[]');
+      setHiddenColsState(new Set(Array.isArray(saved) ? saved : []));
+    } catch { setHiddenColsState(new Set()); }
+  }, [hiddenKey]);
+  const setHiddenCols = (next: Set<string>) => {
+    setHiddenColsState(next);
+    try { localStorage.setItem(hiddenKey, JSON.stringify([...next])); } catch { /* a convenience only */ }
+  };
+  const [columnsMenu, setColumnsMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Track previous equipment ID to only reload rows when equipment changes
   const prevEquipmentIdRef = useRef<string | null>(null);
@@ -809,16 +849,20 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   // optional row-colour filter. Both are bypassed entirely when filtering is
   // disabled at the toolbar level.
   const activeColumns = getColumnsForType(selectedEquipment?.type ?? 'MV');
+  // What is drawn. Filtering, import and export still work on every column.
+  const visibleColumns = activeColumns.filter(c => !hiddenCols.has(c.key));
 
   // Template-item columns (read-only) — property list matches the CURRENT
   // equipment's type, mirroring TemplateProperties.tsx's per-type layout.
   const templatePropertyNames = !showTemplateColumns ? [] : (
-    selectedEquipment?.type === 'LV' ? LV_TEMPLATE_PROPERTIES :
-    selectedEquipment?.type === 'MV' ? MV_TEMPLATE_PROPERTIES :
-    selectedEquipment?.type === 'HV' ? HV_TEMPLATE_PROPERTIES : []
+    !selectedEquipment ? [] :
+    LAYOUT_OF[selectedEquipment.type] === 'LV' ? LV_TEMPLATE_PROPERTIES :
+    LAYOUT_OF[selectedEquipment.type] === 'MV' ? MV_TEMPLATE_PROPERTIES :
+    LAYOUT_OF[selectedEquipment.type] === 'HV' ? HV_TEMPLATE_PROPERTIES : []
   );
+  const visibleTemplateProps = templatePropertyNames.filter(p => !hiddenCols.has(`tmpl:${p}`));
   const templatesById = useMemo(() => {
-    const list = selectedEquipment ? (projectData.templates[selectedEquipment.type] || []) : [];
+    const list = selectedEquipment ? (projectData.templates?.[selectedEquipment.type] || []) : [];
     return new Map(list.map(t => [t.id, t]));
   }, [projectData.templates, selectedEquipment?.type]);
   const getTemplatePropertyText = (row: DeviceTableRow, propName: string): string => {
@@ -833,7 +877,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   // layout — no fixed widths) and sticky-position the first `freezeCount`
   // columns using those measured offsets, so freeze works whether or not
   // the extra template columns are visible.
-  const totalColumnCount = 1 + activeColumns.length + templatePropertyNames.length;
+  const totalColumnCount = 1 + visibleColumns.length + visibleTemplateProps.length;
   const colHeaderRefs = useRef<(HTMLTableCellElement | null)[]>([]);
   const [stickyLefts, setStickyLefts] = useState<number[]>([]);
 
@@ -871,28 +915,115 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     return () => observer.disconnect();
   }, [totalColumnCount, freezeCount, rows.length, showTemplateColumns]);
 
-  const stickyStyle = (colIndex: number, bg: string): React.CSSProperties | undefined =>
-    colIndex < freezeCount
-      ? {
-          position: 'sticky',
-          left: stickyLefts[colIndex] ?? 0,
-          zIndex: 2,
-          background: bg,
-          boxShadow: colIndex === freezeCount - 1 ? '2px 0 4px -2px rgba(0,0,0,0.25)' : undefined,
-        }
-      : undefined;
+  // ── Freeze rows ─────────────────────────────────────────────────────────
+  // The heading and the first `freezeRows` rows on screen stick to the top of
+  // the table's own scroll box. Their heights are measured, as the columns'
+  // widths are, and written back only when one has moved.
+  const headerRowRef = useRef<HTMLTableRowElement | null>(null);
+  const bodyRowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+  const [stickyTops, setStickyTops] = useState<number[]>([]);
+  useLayoutEffect(() => {
+    if (freezeRows <= 0) {
+      setStickyTops(prev => (prev.length === 0 ? prev : []));
+      return;
+    }
+    const recompute = () => {
+      const tops: number[] = [];
+      let acc = headerRowRef.current?.offsetHeight || 0;
+      for (let i = 0; i < freezeRows; i++) {
+        tops[i] = acc;
+        acc += bodyRowRefs.current[i]?.offsetHeight || 0;
+      }
+      setStickyTops(prev =>
+        (prev.length === tops.length && prev.every((v, i) => v === tops[i]) ? prev : tops));
+    };
+    recompute();
+    const observer = new ResizeObserver(recompute);
+    if (headerRowRef.current) observer.observe(headerRowRef.current);
+    bodyRowRefs.current.slice(0, freezeRows).forEach(el => el && observer.observe(el));
+    return () => observer.disconnect();
+  }, [freezeRows, rows.length, totalColumnCount]);
+
+  /**
+   * Where a cell sticks: to the left when its column is frozen, to the top
+   * when its row is (`rowIndex` -1 is the heading), and to both at once in
+   * the corner — which is also why the corner sits above everything else.
+   */
+  const stickyStyle = (colIndex: number, bg: string, rowIndex?: number): React.CSSProperties | undefined => {
+    const colFrozen = colIndex < freezeCount;
+    const isHeader = rowIndex === -1;
+    const rowFrozen = freezeRows > 0 && (isHeader || (rowIndex !== undefined && rowIndex < freezeRows));
+    if (!colFrozen && !rowFrozen) return undefined;
+    return {
+      position: 'sticky',
+      ...(colFrozen ? { left: stickyLefts[colIndex] ?? 0 } : {}),
+      ...(rowFrozen ? { top: isHeader ? 0 : (stickyTops[rowIndex!] ?? 0) } : {}),
+      // Frozen rows sit over the frozen columns' other cells (which scroll up
+      // beneath them), the heading over both, and each corner over its row.
+      zIndex: isHeader ? (colFrozen ? 6 : 5) : rowFrozen ? (colFrozen ? 4 : 3) : 2,
+      background: bg,
+      boxShadow: [
+        colFrozen && colIndex === freezeCount - 1 ? '2px 0 4px -2px rgba(0,0,0,0.25)' : '',
+        rowFrozen && !isHeader && rowIndex === freezeRows - 1 ? '0 2px 4px -2px rgba(0,0,0,0.25)' : '',
+      ].filter(Boolean).join(', ') || undefined,
+    };
+  };
+
+  // ── Column widths ───────────────────────────────────────────────────────
+  // Each column is as wide as the longest thing in it, so every value can be
+  // read without clicking into it — the table scrolls sideways instead. The
+  // two code columns are held to NARROW characters (see maxChars).
+  const colChars = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const col of activeColumns) {
+      if (col.isTemplate) continue;
+      let widest = col.maxChars ? 0 : col.header.length;
+      for (const row of rows) widest = Math.max(widest, String((row as any)[col.key] ?? '').length);
+      out[col.key] = col.maxChars ? col.maxChars : Math.max(6, widest);
+    }
+    return out;
+  }, [rows, activeColumns]);
+
+  // ── Filtering ───────────────────────────────────────────────────────────
+  const matchesFilters = (row: DeviceTableRow) => {
+    if (colorFilter && !colorFilter.has(row.rowColor || '')) return false;
+    return activeColumns.every(col => {
+      const allowed = filters[col.key];
+      if (!allowed) return true;
+      const val = String((row as any)[col.key] ?? '');
+      return allowed.has(val);
+    });
+  };
+
+  // A row that was on screen when the filter was set stays on screen while it
+  // is edited, even once its new value no longer matches. It used to vanish
+  // on the first keystroke — the value typed was no longer the value filtered
+  // for — taking the cursor with it, so a filtered row could not be edited at
+  // all. The filter is measured against the rows as they were when it was
+  // set; "Apply filter" measures it again, and only then does an edited row
+  // leave.
+  const [filterTick, setFilterTick] = useState(0);
+  const filterSnapshot = useMemo(
+    () => new Map(rows.map(r => [r.id, r])),
+    // Taken when the filter changes, not when the rows do — that is the point.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filters, colorFilter, filtersEnabled, filterTick, selectedEquipment?.id]);
+
   const getFilteredRows = () => {
     if (!filtersEnabled) return rows;
     return rows.filter(row => {
-      if (colorFilter && !colorFilter.has(row.rowColor || '')) return false;
-      return activeColumns.every(col => {
-        const allowed = filters[col.key];
-        if (!allowed) return true;
-        const val = String((row as any)[col.key] ?? '');
-        return allowed.has(val);
-      });
+      if (matchesFilters(row)) return true;
+      const before = filterSnapshot.get(row.id);
+      // A row added since the filter was set is shown: it was just made here.
+      return !before || matchesFilters(before);
     });
   };
+
+  /** Rows kept on screen by an edit that no longer match the filter. */
+  const heldByEdit = filtersEnabled
+    ? rows.filter(row => !matchesFilters(row) && filterSnapshot.has(row.id)
+        && matchesFilters(filterSnapshot.get(row.id)!)).length
+    : 0;
 
   // Unique values for a column (used to populate the filter dropdown).
   // Note: this looks at the FULL row set, not the filtered one, so users can
@@ -1107,9 +1238,9 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     if (!selectedEquipment) return;
 
     let templateName = '';
-    let templateType: 'LV' | 'MV' | 'HV' | null = null;
+    let templateType: Tier | null = null;
 
-    for (const type of ['LV', 'MV', 'HV'] as const) {
+    for (const type of TIERS) {
       const template = projectData.templates[type].find(t => t.id === templateId);
       if (template) {
         templateName = template.name;
@@ -1132,9 +1263,9 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     if (!selectedCellRowId || !selectedEquipment) return;
 
     let templateName = '';
-    let templateType: 'LV' | 'MV' | 'HV' | null = null;
+    let templateType: Tier | null = null;
 
-    for (const type of ['LV', 'MV', 'HV'] as const) {
+    for (const type of TIERS) {
       const template = projectData.templates[type].find(t => t.id === templateId);
       if (template) {
         templateName = template.name;
@@ -1227,7 +1358,26 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     excelMemory.set(excelKey, { ...(excelMemory.get(excelKey) ?? NO_EXCEL), ...patch });
     bumpExcel();
   };
-  const setExcelFile = (file: ExcelMemory['file']) => patchExcel({ file });
+  // The handle also goes to IndexedDB, so the file is still this switchgear's
+  // after a reload — see utils/fileHandleStore.ts.
+  const handleKey = `${projectData?._id ?? 'unsaved'}:${excelKey}`;
+  const setExcelFile = (file: ExcelMemory['file']) => {
+    patchExcel({ file });
+    if (file?.handle && excelKey) void saveExcelHandle(handleKey, file.handle);
+  };
+
+  // Coming back to a switchgear whose file this session has not seen — after
+  // a reload, or the next day — the stored handle is picked up again.
+  useEffect(() => {
+    if (!excelKey || excelMemory.get(excelKey)?.file) return;
+    let cancelled = false;
+    loadExcelHandle(handleKey).then(handle => {
+      if (cancelled || !handle || excelMemory.get(excelKey)?.file) return;
+      patchExcel({ file: { name: handle.name, handle } });
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handleKey]);
   const setExcelReadAt = (readAt: Date | null) => patchExcel({ readAt });
   const setExcelNote = (note: string | null) => patchExcel({ note });
 
@@ -1352,6 +1502,12 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     if (!excelFile) return;
     if (excelFile.handle) {
       try {
+        // A handle brought back from storage needs the browser's say-so once
+        // per session; this click is what it asks on.
+        if (!(await mayRead(excelFile.handle))) {
+          setExcelNote(`Reading ${excelFile.name} was not allowed — press Update again and allow it.`);
+          return;
+        }
         const file = await excelFile.handle.getFile();
         setExcelNote(null);
         importExcelFile(file, true);
@@ -1362,8 +1518,14 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       }
     }
     // No handle: this browser cannot re-open a path on its own, so it has to
-    // be pointed at the file again. Said plainly rather than failing quietly.
-    setExcelNote('This browser cannot re-read the file on its own — choose it again.');
+    // be pointed at the file again. Said plainly rather than failing quietly —
+    // and with the reason, because the usual one is fixable: the browser only
+    // hands out a file it can read again on a secure page, and a suite served
+    // over plain http on the office network is not one.
+    setExcelNote(canKeepFiles()
+      ? 'This browser cannot re-read the file on its own — choose it again.'
+      : 'The browser only re-reads a file on a secure (https) page — choose it again, '
+        + 'or open the suite over https to make Update read it by itself.');
     fileInputRef.current?.click();
   };
 
@@ -1475,7 +1637,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   // round-trip (export → fill in Excel → import) works. The Template column
   // is intentionally excluded — templates can only be assigned inside the
   // software (drag-and-drop or right-click), never via Excel.
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     if (!selectedEquipment) {
       alert('Please select an equipment first!');
       return;
@@ -1503,11 +1665,45 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Devices');
-    XLSX.writeFile(wb, `${selectedEquipment.name}_Devices.xlsx`);
+    const fileName = `${selectedEquipment.name}_Devices.xlsx`;
+
+    // Saved through a handle where the browser gives one, and that handle is
+    // kept as this switchgear's file: export, fill it in in Excel, save, press
+    // Update. The file written is the file read back — there is no import in
+    // between, which is the step people kept being sent back to.
+    const saver = (window as unknown as {
+      showSaveFilePicker?: (o: unknown) => Promise<FileSystemFileHandle>;
+    }).showSaveFilePicker;
+    if (saver) {
+      try {
+        const handle = await saver({
+          suggestedName: fileName,
+          types: [{
+            description: 'Excel workbook',
+            accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] },
+          }],
+        });
+        const bytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+        const writable = await (handle as any).createWritable();
+        await writable.write(bytes);
+        await writable.close();
+        setExcelFile({ name: handle.name, handle });
+        setExcelReadAt(new Date());
+        setExcelNote(`${handle.name} saved — edit it in Excel, save, then press Update`);
+        return;
+      } catch (err) {
+        if ((err as DOMException)?.name === 'AbortError') return;
+        // Anything else: fall through to a plain download.
+      }
+    }
+    XLSX.writeFile(wb, fileName);
   };
 
+  // From the rows as they are, not as this render saw them: two keystrokes
+  // landing before a re-render each wrote over the other, and a word typed
+  // quickly came out with every other letter missing.
   const updateRowField = (rowId: string, field: keyof DeviceTableRow, value: string) => {
-    setRows(rows.map(row =>
+    setRows(prev => prev.map(row =>
       row.id === rowId ? { ...row, [field]: value } : row
     ));
   };
@@ -1891,7 +2087,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
               SIMARIS feeder list is a low-voltage distribution document, and
               MODULE NO. is an LV column, so the button has nothing to do on
               an MV switchgear. */}
-          {selectedEquipment.type === 'LV' && (
+          {LAYOUT_OF[selectedEquipment.type] === 'LV' && (
             <button
               className="px-3 py-1 bg-orange-600 text-white rounded text-sm hover:bg-orange-700"
               onClick={handleImportSimaris}
@@ -1964,7 +2160,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       {/* Filter toolbar — toggles whether column ▼ icons + colour filter
           are surfaced. When OFF, all filters are bypassed (kept in memory
           so flipping ON restores them). */}
-      <div className="mb-2 flex items-center gap-2 text-xs">
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
         {/* Five steps back, on the table only. The keys do the same thing,
             except inside a cell, where they are the browser's own. */}
         <div className="flex items-center rounded border border-gray-300 overflow-hidden">
@@ -2034,6 +2230,49 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           <span>/ {totalColumnCount} cols</span>
         </div>
 
+        <div
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded border font-medium ${
+            freezeRows > 0
+              ? 'bg-amber-500 text-white border-amber-600'
+              : 'bg-white text-gray-700 border-gray-300'
+          }`}
+          title="Freeze this many rows from the top, with the heading, so they stay put while you scroll down"
+        >
+          <PinIcon className="w-3.5 h-3.5 rotate-90" />
+          <span>Freeze</span>
+          <input
+            type="number"
+            min={0}
+            max={rows.length}
+            value={freezeRows}
+            onChange={e => {
+              const n = parseInt(e.target.value, 10);
+              setFreezeRows(Number.isNaN(n) ? 0 : Math.max(0, Math.min(rows.length, n)));
+            }}
+            className="w-12 border border-gray-300 rounded px-1 py-0.5 text-xs text-gray-900"
+          />
+          <span>rows</span>
+        </div>
+
+        <button
+          onClick={e => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setColumnsMenu(columnsMenu ? null : { x: r.left, y: r.bottom + 4 });
+          }}
+          className={`px-3 py-1.5 rounded border flex items-center gap-1.5 font-medium ${
+            hiddenCols.size > 0
+              ? 'bg-slate-600 text-white border-slate-700 hover:bg-slate-700'
+              : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+          }`}
+          title="Show or hide columns"
+        >
+          <EyeOffIcon className="w-3.5 h-3.5" />
+          Columns
+          {hiddenCols.size > 0 && (
+            <span className="ml-1 px-1.5 rounded-full bg-white/30 text-[10px]">{hiddenCols.size} hidden</span>
+          )}
+        </button>
+
         {filtersEnabled && (
           <button
             onClick={e => {
@@ -2059,29 +2298,60 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             <button className="underline hover:no-underline" onClick={clearAllFilters}>Clear all</button>
           </div>
         )}
+
+        {heldByEdit > 0 && (
+          <div className="flex items-center gap-2 text-amber-800 bg-amber-50 border border-amber-300 rounded px-3 py-1.5">
+            <span>
+              {heldByEdit === 1
+                ? '1 edited row no longer matches the filter and is kept on screen until you confirm'
+                : `${heldByEdit} edited rows no longer match the filter and are kept on screen until you confirm`}
+            </span>
+            <button
+              className="px-2 py-0.5 rounded bg-amber-600 text-white hover:bg-amber-700"
+              onClick={() => setFilterTick(t => t + 1)}
+              title="Done editing — apply the filter again, so the edited rows that no longer match leave"
+            >
+              <CheckIcon className="w-3.5 h-3.5 inline mr-0.5" />
+              Apply filter
+            </button>
+          </div>
+        )}
       </div>
 
-      <div className="border border-gray-200 rounded overflow-auto" onContextMenu={(e) => handleContextMenu(e, 'row')}>
-        <table className="w-full text-sm">
+      {/* Held to the window's height once rows are frozen: a frozen row
+          sticks to the top of this box, so the box has to be what scrolls. */}
+      <div
+        className="border border-gray-200 rounded overflow-auto"
+        style={freezeRows > 0 ? { maxHeight: isFullscreen ? 'calc(100vh - 220px)' : '70vh' } : undefined}
+        onContextMenu={(e) => handleContextMenu(e, 'row')}
+      >
+        {/* As wide as its columns need, and never narrower than the box: a
+            table held to the box's width squeezed every column until its
+            text could not be read. */}
+        <table className="min-w-full w-max text-sm">
           <thead>
-            <tr className="bg-gray-50">
+            <tr className="bg-gray-50" ref={headerRowRef}>
               <th
                 ref={el => { colHeaderRefs.current[0] = el; }}
-                className="px-4 py-2 text-left font-medium text-gray-600 border-b w-12"
-                style={stickyStyle(0, '#f9fafb')}
+                className="px-2 py-2 text-left font-medium text-gray-600 border-b w-12"
+                style={stickyStyle(0, '#f9fafb', -1)}
               >
                 #
               </th>
-              {activeColumns.map((col, i) => {
+              {visibleColumns.map((col, i) => {
                 const hasActiveFilter = filtersEnabled && !!filters[col.key];
                 return (
                   <th
                     key={col.key}
                     ref={el => { colHeaderRefs.current[1 + i] = el; }}
-                    className="px-4 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap"
-                    style={stickyStyle(1 + i, '#f9fafb')}
+                    className={`${col.maxChars ? 'px-1 text-[11px] leading-tight whitespace-normal' : 'px-3 whitespace-nowrap'} py-2 text-left font-medium text-gray-600 border-b`}
+                    style={{
+                      ...(col.maxChars ? { width: `calc(${col.maxChars}ch + 1.5rem)`, maxWidth: `calc(${col.maxChars}ch + 2.5rem)` } : {}),
+                      ...stickyStyle(1 + i, '#f9fafb', -1),
+                    }}
+                    title={col.header}
                   >
-                    <div className="flex items-center gap-1">
+                    <div className={`flex items-center gap-1 ${col.maxChars ? 'flex-wrap' : ''}`}>
                       <span>{col.header}</span>
                       {filtersEnabled && (
                         <button
@@ -2107,14 +2377,14 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                   </th>
                 );
               })}
-              {showTemplateColumns && templatePropertyNames.map((propName, i) => {
-                const colIdx = 1 + activeColumns.length + i;
+              {showTemplateColumns && visibleTemplateProps.map((propName, i) => {
+                const colIdx = 1 + visibleColumns.length + i;
                 return (
                   <th
                     key={`tmpl-${propName}`}
                     ref={el => { colHeaderRefs.current[colIdx] = el; }}
                     className="px-3 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap bg-indigo-50"
-                    style={stickyStyle(colIdx, '#eef2ff')}
+                    style={stickyStyle(colIdx, '#eef2ff', -1)}
                     title={`Template item — read-only (${selectedEquipment.type})`}
                   >
                     {propName}
@@ -2124,31 +2394,32 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             </tr>
           </thead>
           <tbody>
-            {getFilteredRows().map(row => {
+            {getFilteredRows().map((row, rowIndex) => {
               const rowBg = selectedRows.has(row.id) ? '#dbeafe' : (row.rowColor || '#ffffff');
               return (
                 <tr
                   key={row.id}
+                  ref={el => { bodyRowRefs.current[rowIndex] = el; }}
                   className={`cursor-pointer ${selectedRows.has(row.id) ? 'bg-blue-100' : 'hover:bg-gray-50'}`}
                   style={row.rowColor && !selectedRows.has(row.id) ? { backgroundColor: row.rowColor } : undefined}
                   onClick={(e) => handleRowClick(row.id, e)}
                   onContextMenu={(e) => handleContextMenu(e, 'row', row.id)}
                 >
                   <td
-                    className="px-4 py-2 border-b text-center font-medium bg-gray-50"
-                    style={stickyStyle(0, '#f9fafb')}
+                    className="px-2 py-2 border-b text-center font-medium bg-gray-50"
+                    style={stickyStyle(0, '#f9fafb', rowIndex)}
                   >
                     {row.rowNumber}
                   </td>
-                  {activeColumns.map((col, i) => {
+                  {visibleColumns.map((col, i) => {
                     const colIdx = 1 + i;
                     const cellBg = row.cellColors?.[col.key];
-                    const cellStyle = { ...(cellBg ? { backgroundColor: cellBg } : undefined), ...stickyStyle(colIdx, cellBg || rowBg) };
+                    const cellStyle = { ...(cellBg ? { backgroundColor: cellBg } : undefined), ...stickyStyle(colIdx, cellBg || rowBg, rowIndex) };
                     if (col.isTemplate) {
                       return (
                         <td
                           key={col.key}
-                          className="px-4 py-2 border-b"
+                          className="px-2 py-2 border-b whitespace-nowrap"
                           style={cellStyle}
                           onDragOver={handleDragOver}
                           onDrop={e => handleDrop(e, row.id)}
@@ -2170,7 +2441,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                     return (
                       <td
                         key={col.key}
-                        className="px-4 py-2 border-b"
+                        className={`${col.maxChars ? 'px-1' : 'px-2'} py-2 border-b`}
                         style={cellStyle}
                         onContextMenu={(e) => {
                           // Right-click on a data cell: open the row context menu
@@ -2187,20 +2458,28 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                       >
                         <input
                           type="text"
-                          className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-transparent"
+                          // size 1: an input's own default width is about
+                          // twenty characters, and that — not the text — was
+                          // what every column was sized to.
+                          size={1}
+                          className={`w-full border border-gray-300 rounded ${col.maxChars ? 'px-1' : 'px-2'} py-1 text-sm bg-transparent`}
+                          // As wide as the column's longest value, so nothing
+                          // in it is cut off; the code columns stay narrow.
+                          style={{ minWidth: `calc(${colChars[col.key] ?? 6}ch + ${col.maxChars ? '0.75rem' : '1.25rem'})` }}
                           value={(row as any)[col.key] ?? ''}
+                          title={String((row as any)[col.key] ?? '')}
                           onChange={e => updateRowField(row.id, col.key as any, e.target.value)}
                         />
                       </td>
                     );
                   })}
-                  {showTemplateColumns && templatePropertyNames.map((propName, i) => {
-                    const colIdx = 1 + activeColumns.length + i;
+                  {showTemplateColumns && visibleTemplateProps.map((propName, i) => {
+                    const colIdx = 1 + visibleColumns.length + i;
                     return (
                       <td
                         key={`tmpl-${propName}`}
-                        className="px-3 py-2 border-b text-xs text-gray-700 whitespace-pre-wrap bg-indigo-50/40"
-                        style={stickyStyle(colIdx, '#eef2ff')}
+                        className="px-3 py-2 border-b text-xs text-gray-700 whitespace-pre bg-indigo-50/40"
+                        style={stickyStyle(colIdx, '#eef2ff', rowIndex)}
                       >
                         {getTemplatePropertyText(row, propName)}
                       </td>
@@ -2223,6 +2502,71 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           </div>
         )}
       </div>
+
+      {/* Which columns are on screen. */}
+      {columnsMenu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setColumnsMenu(null)} />
+          <MenuBox
+            x={columnsMenu.x}
+            y={columnsMenu.y}
+            className="z-50 w-64 bg-white border shadow-lg rounded py-1 max-h-[70vh] overflow-y-auto text-sm"
+          >
+            <div className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-gray-400 flex items-center">
+              Columns
+              {hiddenCols.size > 0 && (
+                <button className="ml-auto normal-case text-blue-600 hover:underline" onClick={() => setHiddenCols(new Set())}>
+                  Show all
+                </button>
+              )}
+            </div>
+            {activeColumns.map(col => (
+              <label key={col.key} className="flex items-center gap-2 px-3 py-1 hover:bg-gray-50 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!hiddenCols.has(col.key)}
+                  onChange={() => {
+                    const next = new Set(hiddenCols);
+                    if (next.has(col.key)) next.delete(col.key);
+                    else {
+                      next.add(col.key);
+                      // A hidden column's filter would go on filtering where
+                      // nobody can see it; it goes with the column.
+                      setFilters(prev => { const f = { ...prev }; delete f[col.key]; return f; });
+                    }
+                    setHiddenCols(next);
+                  }}
+                />
+                {col.header}
+              </label>
+            ))}
+            {showTemplateColumns && templatePropertyNames.length > 0 && (
+              <>
+                <div className="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wide text-gray-400 border-t mt-1">
+                  Template items
+                </div>
+                {templatePropertyNames.map(propName => {
+                  const key = `tmpl:${propName}`;
+                  return (
+                    <label key={key} className="flex items-center gap-2 px-3 py-1 hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!hiddenCols.has(key)}
+                        onChange={() => {
+                          const next = new Set(hiddenCols);
+                          if (next.has(key)) next.delete(key); else next.add(key);
+                          setHiddenCols(next);
+                        }}
+                      />
+                      {propName}
+                    </label>
+                  );
+                })}
+              </>
+            )}
+          </MenuBox>
+        </>
+      )}
 
       {/* Portal-rendered filter dropdowns (anchored to their trigger button).
           Rendering through a portal so the table's overflow:auto can't clip
@@ -2549,9 +2893,9 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
 
   const handleCreate = () => {
     if (!selectedLibItemId) return;
-    const library = projectData.deviceLibrary ?? { LV: [], MV: [], HV: [] };
+    const library = projectData.deviceLibrary ?? emptyTiers();
     let found: any = null;
-    for (const t of ['LV', 'MV', 'HV'] as const) {
+    for (const t of TIERS) {
       found = (library[t] ?? []).find((d: any) => d.id === selectedLibItemId);
       if (found) break;
     }
@@ -2590,13 +2934,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
     setExpandedBusSections(s);
   };
 
-  const getTypeColor = (type: 'LV' | 'MV' | 'HV') => {
-    switch (type) {
-      case 'LV': return 'text-green-600 bg-green-50';
-      case 'MV': return 'text-orange-600 bg-orange-50';
-      case 'HV': return 'text-red-600 bg-red-50';
-    }
-  };
+  const getTypeColor = (type: Tier) => TIER_BADGE[type] ?? TIER_BADGE.OTHER;
 
   return (
     <div className="h-full p-4 bg-gray-50">
@@ -2867,8 +3205,8 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
 
       {/* ── Add Equipment – pick from Device Library ── */}
       {showAddModal && (() => {
-        const library = projectData.deviceLibrary ?? { LV: [], MV: [], HV: [] };
-        const allItems = (['LV', 'MV', 'HV'] as const).flatMap(t =>
+        const library = projectData.deviceLibrary ?? emptyTiers();
+        const allItems = TIERS.flatMap(t =>
           (library[t] ?? []).map(d => ({ ...d, typeLabel: t }))
         );
         return (
@@ -2883,13 +3221,13 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
                 </div>
               ) : (
                 <div className="flex-1 overflow-y-auto border rounded mb-4 min-h-0">
-                  {(['LV', 'MV', 'HV'] as const).map(t => {
+                  {TIERS.map(t => {
                     const items = library[t] ?? [];
                     if (items.length === 0) return null;
-                    const typeColor = t === 'LV' ? 'text-green-700 bg-green-50' : t === 'MV' ? 'text-orange-700 bg-orange-50' : 'text-red-700 bg-red-50';
+                    const typeColor = TIER_BADGE[t];
                     return (
                       <div key={t}>
-                        <div className={`px-3 py-1.5 text-xs font-bold uppercase border-b ${typeColor}`}>{t} – {t === 'LV' ? 'Low Voltage' : t === 'MV' ? 'Medium Voltage' : 'High Voltage'}</div>
+                        <div className={`px-3 py-1.5 text-xs font-bold uppercase border-b ${typeColor}`}>{t} – {TIER_LABEL[t]}</div>
                         {items.map(item => (
                           <div
                             key={item.id}
@@ -2931,10 +3269,10 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
       {equipPropsModal.visible && equipPropsModal.equipment && (() => {
         const eq       = equipPropsModal.equipment!;
         const libId    = eq.properties?.deviceLibraryItemId as string | undefined;
-        const library  = projectData.deviceLibrary ?? { LV: [], MV: [], HV: [] };
+        const library  = projectData.deviceLibrary ?? emptyTiers();
         let libItem: any = null;
         if (libId) {
-          for (const t of ['LV', 'MV', 'HV'] as const) {
+          for (const t of TIERS) {
             libItem = (library[t] ?? []).find((d: any) => d.id === libId);
             if (libItem) break;
           }
@@ -2946,7 +3284,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
             <span className="font-medium">{val}</span>
           </div> : null
         );
-        const typeColor = eq.type === 'LV' ? 'bg-green-100 text-green-700' : eq.type === 'MV' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700';
+        const typeColor = TIER_PILL[eq.type] ?? TIER_PILL.OTHER;
         return (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg shadow-2xl w-[640px] max-h-[85vh] flex flex-col">
@@ -3113,8 +3451,8 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
 
   // Find full template data for the properties modal
   const getTemplateById = (templateId: string): TemplateItem | null => {
-    for (const type of ['LV', 'MV', 'HV'] as const) {
-      const found = projectData.templates[type].find(t => t.id === templateId);
+    for (const type of TIERS) {
+      const found = (projectData.templates?.[type] ?? []).find(t => t.id === templateId);
       if (found) return found;
     }
     return null;
@@ -3157,13 +3495,13 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
       className="w-[220px]"
     >
       <div className="p-2 max-h-96 overflow-y-auto">
-        {(['LV', 'MV', 'HV'] as const).map(type => (
+        {TIERS.map(type => (
           <div key={type} className="mb-3">
             <div className="text-xs font-semibold text-gray-600 mb-1">{type}</div>
-            {projectData.templates[type].length === 0 && (
+            {(projectData.templates?.[type] ?? []).length === 0 && (
               <div className="text-xs text-gray-400 italic p-1">No templates</div>
             )}
-            {projectData.templates[type].map(template => (
+            {(projectData.templates?.[type] ?? []).map(template => (
               <div
                 key={template.id}
                 className="p-2 text-sm bg-white border rounded mb-1 cursor-move hover:bg-blue-50 select-none"

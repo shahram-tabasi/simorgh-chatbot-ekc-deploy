@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { templateMeta } from '../../utils/templateMeta';
 import { useProject } from '../../context/ProjectContext';
-import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ClipboardPasteIcon, BanIcon, ChevronDownIcon, ChevronRightIcon, WrenchIcon, XIcon, PencilIcon } from 'lucide-react';
+import { PlusIcon, TrashIcon, CopyIcon, ScissorsIcon, ClipboardPasteIcon, BanIcon, ChevronDownIcon, ChevronRightIcon, WrenchIcon, XIcon, PencilIcon, SearchIcon } from 'lucide-react';
 import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
 import { findTemplateUsage, UsageReport } from '../../utils/cascadeDelete';
 import { TEMPLATE_FAMILIES, familyOf, groupByFamily, hasFamilies } from '../../utils/templateFamilies';
@@ -9,6 +9,7 @@ import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
 import { MenuBox } from '../shared/MenuBox';
 import { MechanicalQuestions } from './MechanicalQuestions';
 import { TemplateItem, TemplateMechanical } from '../../types/project';
+import { type Tier, TIERS, TIER_LABEL, TIER_PILL, withAllTiers } from '../../utils/tiers';
 
 interface TemplateTreeProps {
   projectData: any;
@@ -23,23 +24,11 @@ interface TemplateTreeProps {
   bare?: boolean;
 }
 
-interface Template {
-  id: string;
-  name: string;
-  type: 'LV' | 'MV' | 'HV';
-  properties?: Record<string, any>;
-  hierarchy?: {
-    path?: string[];
-    leafKind?: string;
-    params?: { kw?: string; currentA?: string };
-  };
-}
-
 interface ContextMenuState {
   visible: boolean;
   x: number;
   y: number;
-  nodeType: 'LV' | 'MV' | 'HV' | null;
+  nodeType: Tier | null;
   templateId: string | null;
   /**
    * Which section of the tier the menu was opened in — OFW or FIX for LV.
@@ -72,7 +61,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   } | null>(null);
   
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(
-    new Set(['LV', 'MV', 'HV', 'LV/OFW', 'LV/FIX']));
+    new Set([...TIERS, 'LV/OFW', 'LV/FIX', 'BPMS']));
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -84,7 +73,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   // The hierarchical wizard replaces the old "just a name" modal — we keep
   // a separate flag so the rest of the file doesn't have to change.
   const [wizard, setWizard] = useState<{
-    tier: 'LV' | 'MV' | 'HV';
+    tier: Tier;
     family: string | null;
     /** Set when the wizard was opened by a paste, or to edit what is there. */
     startFrom?: TemplateItem | null;
@@ -106,12 +95,68 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   const [mechEdit, setMechEdit] = useState<
     { template: TemplateItem; value: TemplateMechanical } | null>(null);
 
-  // 🔹 بررسی امن برای templates - اضافه شده
-  const safeTemplates = {
-    LV: projectData?.templates?.LV || [],
-    MV: projectData?.templates?.MV || [],
-    HV: projectData?.templates?.HV || []
-  };
+  // Every tier present, whatever the project was saved with.
+  const safeTemplates = withAllTiers<TemplateItem>(projectData?.templates);
+  const allTemplates: TemplateItem[] = TIERS.flatMap(t => safeTemplates[t]);
+
+  // A tier's own section lists what was made here; what came from TPMS is in
+  // the BPMS section below.
+  const tierTemplates = (tier: Tier) => safeTemplates[tier].filter(t => t.source !== 'tpms');
+
+  // ── BPMS ───────────────────────────────────────────────────────────────
+  const [bpmsQuery, setBpmsQuery] = useState('');
+  const [bpmsTier, setBpmsTier] = useState<Tier | ''>('');
+  const bpmsTemplates = allTemplates.filter(t => t.source === 'tpms');
+  // Which TPMS switchgear a template was read for: the import files it under
+  // ['TPMS', <switchgear>].
+  const switchgearOf = (t: TemplateItem) =>
+    (t.hierarchy?.path?.[0] === 'TPMS' ? t.hierarchy?.path?.[1] : undefined) || 'Other';
+  // Matched against the name, the switchgear, the group and every part number
+  // and label on it — the engineer often knows the breaker, not the name TPMS
+  // gave the line.
+  const bpmsHaystack = (t: TemplateItem) => [
+    t.name, switchgearOf(t), t.type,
+    ...Object.entries(t.properties ?? {}).flatMap(([slot, v]: [string, any]) =>
+      slot.startsWith('__') ? [] : [slot, ...((v?.parts ?? []) as any[]).flatMap(p => [p?.partNumber, p?.label])]),
+  ].join(' ').toLowerCase();
+  const bpmsWords = bpmsQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const bpmsShown = bpmsTemplates.filter(t =>
+    (!bpmsTier || t.type === bpmsTier) &&
+    bpmsWords.every(w => bpmsHaystack(t).includes(w)));
+  const bpmsGroups: [string, TemplateItem[]][] = (() => {
+    const byGear = new Map<string, TemplateItem[]>();
+    for (const t of bpmsShown) {
+      const key = switchgearOf(t);
+      if (!byGear.has(key)) byGear.set(key, []);
+      byGear.get(key)!.push(t);
+    }
+    return [...byGear.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+  })();
+
+  /** One template in the tree — the same row in every section. */
+  const renderTemplateRow = (
+    template: TemplateItem, tier: Tier, family: string | null, showTier = false,
+  ) => (
+    <li key={template.id}>
+      <div
+        className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
+        onClick={() => onTemplateSelect(template.id)}
+        onContextMenu={event => handleContextMenu(event, tier, template.id, family)}
+      >
+        <span className="text-sm">
+          {showTier && (
+            <span className={`mr-1 text-[9px] px-1 py-px rounded font-semibold ${TIER_PILL[template.type] ?? ''}`}>{template.type}</span>
+          )}
+          {template.name}
+        </span>
+        {templateMeta(template) && (
+          <span className="text-[10px] text-gray-500 truncate">
+            {templateMeta(template)}
+          </span>
+        )}
+      </div>
+    </li>
+  );
 
   const toggleNode = (nodeType: string) => {
     const newExpanded = new Set(expandedNodes);
@@ -125,7 +170,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
 
   const handleContextMenu = (
     event: React.MouseEvent,
-    nodeType: 'LV' | 'MV' | 'HV',
+    nodeType: Tier,
     templateId: string | null = null,
     family: string | null = null,
   ) => {
@@ -147,7 +192,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   };
 
   /** Open the wizard straight in a section, from the section's own row. */
-  const createInFamily = (tier: 'LV' | 'MV' | 'HV', family: string) => {
+  const createInFamily = (tier: Tier, family: string) => {
     setContextMenu({ ...contextMenu, visible: false });
     setWizard({ tier, family });
   };
@@ -158,8 +203,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   const handleDeleteTemplate = () => {
     if (!contextMenu.templateId) return;
     const id = contextMenu.templateId;
-    const all = [...safeTemplates.LV, ...safeTemplates.MV, ...safeTemplates.HV];
-    const tmpl = all.find((t: Template) => t.id === id);
+    const tmpl = allTemplates.find(t => t.id === id);
     setTemplateDeleteTarget({
       id,
       name: tmpl?.name || 'Template',
@@ -177,8 +221,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
 
   const templateById = (id: string | null): TemplateItem | undefined => {
     if (!id) return undefined;
-    const all = [...safeTemplates.LV, ...safeTemplates.MV, ...safeTemplates.HV];
-    return all.find((t: TemplateItem) => t.id === id);
+    return allTemplates.find(t => t.id === id);
   };
 
   /** Take the template the menu was opened on, to be pasted somewhere. */
@@ -253,167 +296,167 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     <div className="h-full p-2" onClick={handleClickOutside}>
       {!bare && <div className="text-sm font-medium mb-2">Project Templates</div>}
       <ul className="space-y-1">
+        {TIERS.map(tier => {
+          const list = tierTemplates(tier);
+          return (
+            <li key={tier}>
+              <div className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded" onContextMenu={event => handleContextMenu(event, tier)}>
+                <button onClick={event => {
+                  event.stopPropagation();
+                  toggleNode(tier);
+                }} className="mr-1">
+                  {expandedNodes.has(tier) ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
+                </button>
+                <span className="text-sm font-medium">{tier} ({TIER_LABEL[tier]})</span>
+                <span className="ml-1.5 text-[10px] text-gray-400">{list.length}</span>
+              </div>
+              {expandedNodes.has(tier) && (
+                <ul className="pl-6 space-y-1 mt-1">
+                  {list.length === 0 && !hasFamilies(tier) ? (
+                    <li className="text-xs text-gray-400 italic p-1">
+                      No templates — right-click {tier} to create one
+                    </li>
+                  ) : (
+                    // The office reads an LV path as two different things — OFW
+                    // and FIX — so they are listed apart. A template the families
+                    // do not claim is not hidden: it is listed on its own, where
+                    // it always was. A tier with no families is one flat list.
+                    groupByFamily(tier, list).map(group => {
+                      const rows = group.templates.map(template =>
+                        renderTemplateRow(template, tier, group.family?.id ?? null));
+
+                      if (!group.family) return <React.Fragment key={`${tier}/rest`}>{rows}</React.Fragment>;
+
+                      const node = `${tier}/${group.family.id}`;
+                      return (
+                        <li key={node}>
+                          <div
+                            className="group flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded"
+                            onClick={() => toggleNode(node)}
+                            onContextMenu={event => handleContextMenu(event, tier, null, group.family!.id)}
+                          >
+                            {expandedNodes.has(node)
+                              ? <ChevronDownIcon className="w-4 h-4 mr-1" />
+                              : <ChevronRightIcon className="w-4 h-4 mr-1" />}
+                            <span className="text-sm font-medium">{group.family.label}</span>
+                            <span className="ml-1.5 text-[10px] text-gray-400">
+                              {group.family.note} · {group.templates.length}
+                            </span>
+                            {/* Made from inside the section it belongs to, so the
+                                wizard has nothing to ask about which one. */}
+                            <button
+                              onClick={event => {
+                                event.stopPropagation();
+                                createInFamily(tier, group.family!.id);
+                              }}
+                              title={`New template in ${group.family.label}`}
+                              className="ml-auto p-0.5 rounded text-gray-400 opacity-0 group-hover:opacity-100 hover:text-blue-600 hover:bg-blue-50"
+                            >
+                              <PlusIcon className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          {expandedNodes.has(node) && (
+                            <ul className="pl-5 space-y-1 mt-1">
+                              {rows.length > 0 ? rows : (
+                                <li className="text-xs text-gray-400 italic p-1">No templates</li>
+                              )}
+                            </ul>
+                          )}
+                        </li>
+                      );
+                    })
+                  )}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+
+        {/* BPMS — the templates that were built from TPMS. They are kept in
+            their own section rather than mixed into the voltage groups: there
+            are dozens of them on a project of any size, named after TPMS's
+            lines, and the engineer looks for them by switchgear and by name,
+            which is what the filter is for. They are still the tier's
+            templates — Device Selection offers them for that tier as before. */}
         <li>
-          <div className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded" onContextMenu={event => handleContextMenu(event, 'LV')}>
-            <button onClick={event => {
-              event.stopPropagation();
-              toggleNode('LV');
-            }} className="mr-1">
-              {expandedNodes.has('LV') ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
-            </button>
-            <span className="text-sm font-medium">LV (Low Voltage)</span>
+          <div className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded" onClick={() => toggleNode('BPMS')}>
+            <span className="mr-1">
+              {expandedNodes.has('BPMS') ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
+            </span>
+            <span className="text-sm font-medium">BPMS (from TPMS)</span>
+            <span className="ml-1.5 text-[10px] text-gray-400">
+              {bpmsQuery.trim() ? `${bpmsShown.length} / ${bpmsTemplates.length}` : bpmsTemplates.length}
+            </span>
           </div>
-          {expandedNodes.has('LV') && (
-            <ul className="pl-6 space-y-1 mt-1">
-              {safeTemplates.LV.length === 0 && !hasFamilies('LV') ? (
-                <li className="text-xs text-gray-400 italic p-1">
-                  No templates
-                </li>
+          {expandedNodes.has('BPMS') && (
+            <div className="pl-6 mt-1">
+              {bpmsTemplates.length === 0 ? (
+                <p className="text-xs text-gray-400 italic p-1">
+                  No templates read from TPMS in this project.
+                </p>
               ) : (
-                // The office reads an LV path as two different things — OFW
-                // and FIX — so they are listed apart. A template the families
-                // do not claim is not
-                // hidden: it is listed on its own, where it always was.
-                groupByFamily('LV', safeTemplates.LV as Template[]).map(group => {
-                  const rows = group.templates.map((template: Template) => (
-                    <li key={template.id}>
-                      <div
-                        className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
-                        onClick={() => onTemplateSelect(template.id)}
-                        onContextMenu={event => handleContextMenu(event, 'LV', template.id, group.family?.id ?? null)}
-                      >
-                        <span className="text-sm">{template.name}</span>
-                        {templateMeta(template) && (
-                          <span className="text-[10px] text-gray-500 truncate">
-                            {templateMeta(template)}
-                          </span>
+                <>
+                  <div className="flex items-center gap-1 mb-1.5 pr-1">
+                    <div className="relative flex-1">
+                      <SearchIcon className="w-3.5 h-3.5 absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        value={bpmsQuery}
+                        onChange={e => setBpmsQuery(e.target.value)}
+                        onClick={e => e.stopPropagation()}
+                        placeholder="Filter by name, switchgear, part…"
+                        className="w-full border border-gray-300 rounded pl-6 pr-6 py-1 text-xs focus:outline-none focus:border-blue-400"
+                      />
+                      {bpmsQuery && (
+                        <button
+                          onClick={() => setBpmsQuery('')}
+                          className="absolute right-1 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                          title="Clear the filter"
+                        >
+                          <XIcon className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    <select
+                      value={bpmsTier}
+                      onChange={e => setBpmsTier(e.target.value as Tier | '')}
+                      className="border border-gray-300 rounded px-1 py-1 text-xs"
+                      title="Only one group"
+                    >
+                      <option value="">All</option>
+                      {TIERS.filter(t => bpmsTemplates.some(x => x.type === t)).map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {bpmsShown.length === 0 ? (
+                    <p className="text-xs text-gray-400 italic p-1">Nothing matches the filter.</p>
+                  ) : (
+                    bpmsGroups.map(([switchgear, list]) => (
+                      <div key={switchgear} className="mb-1">
+                        <div
+                          className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded text-xs font-medium text-gray-600"
+                          onClick={() => toggleNode(`BPMS/${switchgear}`)}
+                        >
+                          {expandedNodes.has(`BPMS/${switchgear}`) || bpmsQuery.trim()
+                            ? <ChevronDownIcon className="w-3.5 h-3.5 mr-1" />
+                            : <ChevronRightIcon className="w-3.5 h-3.5 mr-1" />}
+                          {switchgear}
+                          <span className="ml-1.5 text-[10px] text-gray-400 font-normal">{list.length}</span>
+                        </div>
+                        {(expandedNodes.has(`BPMS/${switchgear}`) || bpmsQuery.trim()) && (
+                          <ul className="pl-4 space-y-1">
+                            {list.map(template => renderTemplateRow(template, template.type, null, true))}
+                          </ul>
                         )}
                       </div>
-                    </li>
-                  ));
-
-                  if (!group.family) return <React.Fragment key="LV/rest">{rows}</React.Fragment>;
-
-                  const node = `LV/${group.family.id}`;
-                  return (
-                    <li key={node}>
-                      <div
-                        className="group flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded"
-                        onClick={() => toggleNode(node)}
-                        onContextMenu={event => handleContextMenu(event, 'LV', null, group.family!.id)}
-                      >
-                        {expandedNodes.has(node)
-                          ? <ChevronDownIcon className="w-4 h-4 mr-1" />
-                          : <ChevronRightIcon className="w-4 h-4 mr-1" />}
-                        <span className="text-sm font-medium">{group.family.label}</span>
-                        <span className="ml-1.5 text-[10px] text-gray-400">
-                          {group.family.note} · {group.templates.length}
-                        </span>
-                        {/* Made from inside the section it belongs to, so the
-                            wizard has nothing to ask about which one. */}
-                        <button
-                          onClick={event => {
-                            event.stopPropagation();
-                            createInFamily('LV', group.family!.id);
-                          }}
-                          title={`New template in ${group.family.label}`}
-                          className="ml-auto p-0.5 rounded text-gray-400 opacity-0 group-hover:opacity-100 hover:text-blue-600 hover:bg-blue-50"
-                        >
-                          <PlusIcon className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                      {expandedNodes.has(node) && (
-                        <ul className="pl-5 space-y-1 mt-1">
-                          {rows.length > 0 ? rows : (
-                            <li className="text-xs text-gray-400 italic p-1">No templates</li>
-                          )}
-                        </ul>
-                      )}
-                    </li>
-                  );
-                })
+                    ))
+                  )}
+                </>
               )}
-            </ul>
-          )}
-        </li>
-        
-        <li>
-          <div className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded" onContextMenu={event => handleContextMenu(event, 'MV')}>
-            <button onClick={event => {
-              event.stopPropagation();
-              toggleNode('MV');
-            }} className="mr-1">
-              {expandedNodes.has('MV') ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
-            </button>
-            <span className="text-sm font-medium">MV (Medium Voltage)</span>
-          </div>
-          {expandedNodes.has('MV') && (
-            <ul className="pl-6 space-y-1 mt-1">
-              {safeTemplates.MV.length === 0 ? (
-                <li className="text-xs text-gray-400 italic p-1">
-                  No templates
-                </li>
-              ) : (
-                safeTemplates.MV.map((template: Template) => (
-                  <li key={template.id}>
-                    <div
-                      className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
-                      onClick={() => onTemplateSelect(template.id)}
-                      onContextMenu={event => handleContextMenu(event, 'MV', template.id)}
-                    >
-                      <span className="text-sm">{template.name}</span>
-                      {templateMeta(template) && (
-                        <span className="text-[10px] text-gray-500 truncate">
-                          {templateMeta(template)}
-                        </span>
-                      )}
-                    </div>
-                  </li>
-                ))
-              )}
-            </ul>
-          )}
-        </li>
-        
-        <li>
-          <div className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded" onContextMenu={event => handleContextMenu(event, 'HV')}>
-            <button onClick={event => {
-              event.stopPropagation();
-              toggleNode('HV');
-            }} className="mr-1">
-              {expandedNodes.has('HV') ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
-            </button>
-            <span className="text-sm font-medium">HV (High Voltage)</span>
-          </div>
-          {expandedNodes.has('HV') && (
-            <ul className="pl-6 space-y-1 mt-1">
-              {safeTemplates.HV.length === 0 ? (
-                <li className="text-xs text-gray-400 italic p-1">
-                  No templates
-                </li>
-              ) : (
-                safeTemplates.HV.map((template: Template) => (
-                  <li key={template.id}>
-                    <div
-                      className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
-                      onClick={() => onTemplateSelect(template.id)}
-                      onContextMenu={event => handleContextMenu(event, 'HV', template.id)}
-                    >
-                      <span className="text-sm">{template.name}</span>
-                      {templateMeta(template) && (
-                        <span className="text-[10px] text-gray-500 truncate">
-                          {templateMeta(template)}
-                        </span>
-                      )}
-                    </div>
-                  </li>
-                ))
-              )}
-            </ul>
+            </div>
           )}
         </li>
       </ul>
-
       {contextMenu.visible && (
         <MenuBox
           x={contextMenu.x}

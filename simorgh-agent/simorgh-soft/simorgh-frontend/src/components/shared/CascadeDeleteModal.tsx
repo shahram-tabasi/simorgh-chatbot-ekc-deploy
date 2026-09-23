@@ -1,6 +1,7 @@
 import React from 'react';
 import { AlertTriangleIcon, XIcon } from 'lucide-react';
 import { UsageReport } from '../../utils/cascadeDelete';
+import { TIER_PILL, type Tier } from '../../utils/tiers';
 
 interface CascadeDeleteModalProps {
   /** What is being deleted, e.g. the device or template name. */
@@ -68,9 +69,7 @@ export const CascadeDeleteModal: React.FC<CascadeDeleteModalProps> = ({
                         <td className="px-3 py-1.5 text-gray-800">{eq.name}</td>
                         <td className="px-3 py-1.5">
                           <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
-                            eq.type === 'LV' ? 'bg-green-100 text-green-700'
-                            : eq.type === 'MV' ? 'bg-orange-100 text-orange-700'
-                            : 'bg-red-100 text-red-700'
+                            TIER_PILL[eq.type as Tier] ?? TIER_PILL.OTHER
                           }`}>{eq.type}</span>
                         </td>
                         <td className="px-3 py-1.5 text-right text-gray-600">{eq.rowCount}</td>

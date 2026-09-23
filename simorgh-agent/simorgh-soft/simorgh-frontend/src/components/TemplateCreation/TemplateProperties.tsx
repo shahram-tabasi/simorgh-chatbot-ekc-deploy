@@ -1,7 +1,7 @@
 // src/components/TemplateCreation/TemplateProperties.tsx - FIXED SQL CONNECTION
 import React, { useEffect, useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
-import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon } from 'lucide-react';
+import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon, CopyIcon, ClipboardPasteIcon } from 'lucide-react';
 import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
 import { PanelFrame } from '../shared/PanelFrame';
 import { PartCell } from './PartCell';
@@ -9,6 +9,7 @@ import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
 import { EplanSymbolMap } from '../../utils/eplanSingleLine';
 import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import { templateMeta } from '../../utils/templateMeta';
+import { type Tier, LAYOUT_OF } from '../../utils/tiers';
 
 // Reserved keys inside template.properties used to carry per-template metadata.
 // These keys are NOT real property rows; the renderer skips them.
@@ -17,10 +18,34 @@ const META_LOCKED = '__locked';
 
 const PAGE_SIZE = 100;
 
+// The one row whose name is not the engineer's to change. ACCESSORY is where
+// the drawing hangs what belongs to the device above it rather than to the
+// branch (see "An accessory is not a device on the branch"), and it finds the
+// row by this name — renamed, the accessories would land on the branch as
+// devices of their own.
+const UNRENAMABLE_ROWS = ['ACCESSORY'];
+
+/**
+ * A section of a template, copied to be pasted into another.
+ *
+ * Kept at module level rather than in the component: picking another template
+ * in the tree hands this component a different template, and the whole point
+ * is that what was copied from the first is still there to paste into the
+ * second.
+ */
+interface SectionClip {
+  templateId: string;
+  templateName: string;
+  slot: string;
+  label: string;
+  parts: PartInfo[];
+}
+let sectionClip: SectionClip | null = null;
+
 interface TemplateItem {
   id: string;
   name: string;
-  type: 'LV' | 'MV' | 'HV';
+  type: Tier;
   properties: Record<string, PropertyValue>;
   /** Where it is filed and what it was sized for — see utils/templateMeta. */
   hierarchy?: {
@@ -499,6 +524,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   template
 }) => {
   const { updateTemplate, projectData, patchProjectData, isCurrentRevisionEditable } = useProject();
+  const [clip, setClipState] = useState<SectionClip | null>(sectionClip);
+  const setClip = (next: SectionClip | null) => { sectionClip = next; setClipState(next); };
   const [properties, setProperties] = useState<Record<string, PropertyValue>>(
     template.properties || {}
   );
@@ -590,7 +617,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   let fixedRows: string[] = [];
   let renamableSpares: string[] = [];
   let extendedSpares: string[] = [];
-  switch (template.type) {
+  // GIS templates carry MV's rows and OTHER's carry LV's (LAYOUT_OF).
+  switch (LAYOUT_OF[template.type] ?? template.type) {
     case 'LV': fixedRows = lvFixed; renamableSpares = lvRenamableSpares; extendedSpares = lvExtendedSpares; break;
     case 'MV': fixedRows = mvFixed; renamableSpares = mvRenamableSpares; extendedSpares = mvExtendedSpares; break;
     case 'HV': fixedRows = hvProperties; break;
@@ -704,17 +732,64 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     updateTemplate(template.id, updated as any);
   };
 
+  // A row renamed is renamed in every template of this group, not only the
+  // one on screen. The rows are the group's columns — Device Selection, the
+  // BPMS sheet and the EPLAN header all read them as one table — and a
+  // column called one thing on one template and another on the next is a
+  // table with two headings for the same column.
   const commitRename = (rawName: string, newName: string) => {
+    if (UNRENAMABLE_ROWS.includes(rawName)) return;
     const trimmed = newName.trim();
-    const next = { ...displayNames };
-    if (!trimmed || trimmed === rawName) {
-      delete next[rawName];
-    } else {
-      next[rawName] = trimmed;
-    }
-    writeMetadata(next, lockedRows);
+    const renamed = (names: Record<string, string> | undefined) => {
+      const next = { ...(names ?? {}) };
+      if (!trimmed || trimmed === rawName) delete next[rawName];
+      else next[rawName] = trimmed;
+      return next;
+    };
+    const next = renamed(displayNames);
+    setProperties(prev => ({ ...prev, [META_DISPLAY_NAMES]: next as any }));
+    patchProjectData(prev => ({
+      templates: {
+        ...prev.templates,
+        [template.type]: (prev.templates?.[template.type] ?? []).map(t => ({
+          ...t,
+          properties: {
+            ...(t.properties ?? {}),
+            [META_DISPLAY_NAMES]: renamed((t.properties as any)?.[META_DISPLAY_NAMES]) as any,
+          },
+        })),
+      },
+    }));
     setRenamingRow(null);
     setRenameDraft('');
+  };
+
+  // ── Copying a section to another template ──────────────────────────────
+  // A section is one property row: its parts, and everything said about them
+  // — label, quantity, priority, the SIM-TABLE and manufacturer typed in, the
+  // symbol picked. Copied whole, so the paste is the row as it was.
+  const copySection = (slot: string) => {
+    const parts = properties[slot]?.parts ?? [];
+    if (parts.length === 0) return;
+    setClip({
+      templateId: template.id,
+      templateName: template.name,
+      slot,
+      label: getDisplayName(slot),
+      parts: JSON.parse(JSON.stringify(parts)),
+    });
+  };
+
+  const pasteSection = (slot: string) => {
+    if (!clip) return;
+    const current = properties[slot]?.parts ?? [];
+    if (current.length > 0 && !window.confirm(
+      `Replace the ${current.length} part(s) in ${getDisplayName(slot)} with the ` +
+      `${clip.parts.length} part(s) of ${clip.label} from ${clip.templateName}?`)) return;
+    const parts: PartInfo[] = JSON.parse(JSON.stringify(clip.parts));
+    const updated = { ...properties, [slot]: { parts } };
+    setProperties(updated);
+    updateTemplate(template.id, updated as any);
   };
 
   const toggleLock = (rawName: string) => {
@@ -807,6 +882,11 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   const handleRemovePart = (propertyName: string, partIndex: number) => {
     const currentProperty = properties[propertyName];
     if (!currentProperty) return;
+    // Asked first: there is no undo here, and the button sits one column from
+    // the ones clicked all day.
+    const part = currentProperty.parts[partIndex];
+    if (!window.confirm(
+      `Delete ${part?.partNumber || 'this part'} from ${getDisplayName(propertyName)}?`)) return;
 
     const updatedProperty = {
       parts: currentProperty.parts.filter((_, index) => index !== partIndex)
@@ -854,6 +934,18 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           Type: {template.type}
           {templateMeta(template) && <span className="ml-2">· {templateMeta(template)}</span>}
         </p>
+        {clip && (
+          <div className="mt-2 inline-flex items-center gap-2 text-xs bg-green-50 border border-green-200 text-green-800 rounded px-2 py-1">
+            <ClipboardPasteIcon className="w-3.5 h-3.5" />
+            <span>
+              Copied <strong>{clip.label}</strong> ({clip.parts.length} part{clip.parts.length === 1 ? '' : 's'})
+              from {clip.templateName} — press the paste icon on a row to put it there.
+            </span>
+            <button className="text-green-700 hover:text-green-900" title="Forget it" onClick={() => setClip(null)}>
+              <XIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* The table is untouched; the schematic sits beside it — and gives its
@@ -916,8 +1008,10 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
               const hasManufacturerOverride = parts.some(p => p.manufacturerOverride !== undefined);
 
               const displayLabel = getDisplayName(property);
-              // For LV and MV, all rows are renamable (including fixed rows)
-              const isRenamable  = template.type === 'LV' || template.type === 'MV';
+              // Every LV and MV row is renamable (GIS and OTHER follow their
+              // layout) — except ACCESSORY, which the drawing finds by name.
+              const isRenamable  = (LAYOUT_OF[template.type] === 'LV' || LAYOUT_OF[template.type] === 'MV')
+                && !UNRENAMABLE_ROWS.includes(property);
               const isExtended   = extendedSpares.includes(property);
               const isLocked     = isRowLocked(property);
               const isEnabled    = !isLocked && (!isExtended || isExtendedEnabled(property));
@@ -954,10 +1048,25 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                       <span className={isLocked ? 'line-through text-gray-400' : ''}>{displayLabel}</span>
                       {isRenamable && (
                         <button
-                          title="Rename"
+                          title={`Rename — in every ${template.type} template`}
                           className="text-gray-400 hover:text-blue-600"
                           onClick={() => { setRenamingRow(property); setRenameDraft(displayLabel); }}
                         ><Edit2Icon className="w-3.5 h-3.5" /></button>
+                      )}
+                      {parts.length > 0 && (
+                        <button
+                          title={`Copy ${displayLabel} — its parts and everything set on them — to paste into another template`}
+                          className={clip && clip.templateId === template.id && clip.slot === property
+                            ? 'text-blue-600' : 'text-gray-400 hover:text-blue-600'}
+                          onClick={() => copySection(property)}
+                        ><CopyIcon className="w-3.5 h-3.5" /></button>
+                      )}
+                      {clip && isEnabled && !(clip.templateId === template.id && clip.slot === property) && (
+                        <button
+                          title={`Paste ${clip.label} from ${clip.templateName} here`}
+                          className="text-green-600 hover:text-green-800"
+                          onClick={() => pasteSection(property)}
+                        ><ClipboardPasteIcon className="w-3.5 h-3.5" /></button>
                       )}
                       {isLocked && (
                         <button

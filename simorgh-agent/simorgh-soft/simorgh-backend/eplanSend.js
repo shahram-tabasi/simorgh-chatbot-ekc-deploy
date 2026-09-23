@@ -113,7 +113,73 @@ async function callBridge(path, { method = 'GET', body, apiKey, timeoutMs } = {}
   }
 }
 
-export function registerEplanRoutes(app) {
+// ── The records, kept in Mongo ────────────────────────────────────────────
+//
+// What EPLAN draws is the project as it stands here — the one in this app's
+// Mongo, with every correction the engineer made to it — never TPMS's copy.
+// So the EplanData records are written to Mongo first, one document per
+// project, switchgear and revision, and the send reads them back from there.
+// Nothing on the way to EPLAN goes to TPMS; the stored document is also the
+// record of exactly what was handed over, which is what somebody asks for the
+// first time a drawing disagrees with the project.
+const EPLAN_DATA = 'eplanData';
+
+function eplanDataKey({ projectId, equipmentId, revision }) {
+  return {
+    projectId: String(projectId),
+    equipmentId: String(equipmentId),
+    revision: revision == null ? '' : String(revision),
+  };
+}
+
+export function registerEplanRoutes(app, getDb) {
+  // Store (or replace) the records for one switchgear at one revision.
+  app.put('/api/eplan/data', async (req, res) => {
+    const { projectId, equipmentId, revision, scopeName, records } = req.body || {};
+    if (!projectId || !equipmentId || !Array.isArray(records)) {
+      return res.status(400).json({
+        success: false, error: 'projectId, equipmentId and a records array are required',
+      });
+    }
+    try {
+      const db = getDb();
+      const key = eplanDataKey({ projectId, equipmentId, revision });
+      await db.collection(EPLAN_DATA).updateOne(
+        key,
+        { $set: {
+            ...key,
+            scopeName: String(scopeName || records[0]?.ScopeName || ''),
+            records,
+            recordCount: records.length,
+            updatedAt: new Date().toISOString(),
+        } },
+        { upsert: true },
+      );
+      res.json({ success: true, records: records.length });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // What is stored — the last records written for a switchgear.
+  app.get('/api/eplan/data', async (req, res) => {
+    const { projectId, equipmentId } = req.query;
+    if (!projectId || !equipmentId) {
+      return res.status(400).json({ success: false, error: 'projectId and equipmentId are required' });
+    }
+    try {
+      const db = getDb();
+      const key = eplanDataKey(req.query);
+      const doc = req.query.revision != null
+        ? await db.collection(EPLAN_DATA).findOne(key)
+        : await db.collection(EPLAN_DATA).find({ projectId: key.projectId, equipmentId: key.equipmentId })
+            .sort({ updatedAt: -1 }).limit(1).next();
+      res.json({ success: true, found: !!doc, ...(doc ? { data: doc } : {}) });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Where the app would send, and whether an API key is configured — the
   // dialog shows this, there is nothing left for the user to pick.
   app.get('/api/eplan/target', (req, res) => {
@@ -145,7 +211,26 @@ export function registerEplanRoutes(app) {
 
   // The records themselves.
   app.post('/api/eplan/send', async (req, res) => {
-    const { projectName, data, userName } = req.body || {};
+    const { projectName, userName, projectId, equipmentId, revision } = req.body || {};
+    let { data } = req.body || {};
+
+    // Sent by reference: the records are the ones stored in Mongo for this
+    // switchgear, not whatever came in the request.
+    if (projectId && equipmentId) {
+      try {
+        const doc = await getDb().collection(EPLAN_DATA)
+          .findOne(eplanDataKey({ projectId, equipmentId, revision }));
+        if (!doc) {
+          return res.status(404).json({
+            success: false,
+            error: 'No EPLAN data is stored for this switchgear yet — it is written when the project is sent.',
+          });
+        }
+        data = doc.records;
+      } catch (err) {
+        return res.status(500).json({ success: false, error: `Could not read the EPLAN data: ${err.message}` });
+      }
+    }
 
     if (!Array.isArray(data) || data.length === 0) {
       return res.status(400).json({

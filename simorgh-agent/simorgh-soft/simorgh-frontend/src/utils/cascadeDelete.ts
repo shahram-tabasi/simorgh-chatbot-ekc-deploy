@@ -13,11 +13,12 @@
 // referenced (so the UI can warn before deleting) and `remove…Everywhere`
 // returns the ProjectData patch that performs the cascade.
 import { ProjectData } from '../types/project';
+import { type Tier, TIERS, emptyTiers } from './tiers';
 
 export interface UsageEquipment {
   id: string;
   name: string;
-  type: 'LV' | 'MV' | 'HV';
+  type: Tier;
   rowCount: number;
 }
 
@@ -35,7 +36,7 @@ export function isEquipmentFromLibraryItem(
   equipment: any,
   libItemId: string,
   libItemName: string,
-  libItemType: 'LV' | 'MV' | 'HV',
+  libItemType: Tier,
 ): boolean {
   const linkedId = equipment?.properties?.deviceLibraryItemId as string | undefined;
   if (linkedId) return linkedId === libItemId;
@@ -46,7 +47,7 @@ export function isEquipmentFromLibraryItem(
 export function findDeviceLibraryUsage(
   data: ProjectData,
   libItemId: string,
-  type: 'LV' | 'MV' | 'HV',
+  type: Tier,
 ): UsageReport {
   const libItem = (data.deviceLibrary?.[type] ?? []).find(d => d.id === libItemId);
   if (!libItem) return EMPTY_USAGE;
@@ -71,9 +72,9 @@ export function findDeviceLibraryUsage(
 export function removeDeviceLibraryItemEverywhere(
   data: ProjectData,
   libItemId: string,
-  type: 'LV' | 'MV' | 'HV',
+  type: Tier,
 ): Partial<ProjectData> {
-  const library = data.deviceLibrary ?? { LV: [], MV: [], HV: [] };
+  const library = data.deviceLibrary ?? emptyTiers();
   const usage = findDeviceLibraryUsage(data, libItemId, type);
   const removedEquipmentIds = new Set(usage.equipments.map(eq => eq.id));
 
@@ -109,7 +110,7 @@ export function findTemplateUsage(data: ProjectData, templateId: string): UsageR
 // remaining rows are renumbered so the table stays 1..n.
 export function removeTemplateEverywhere(data: ProjectData, templateId: string): Partial<ProjectData> {
   const templates = { ...data.templates };
-  for (const t of ['LV', 'MV', 'HV'] as const) {
+  for (const t of TIERS) {
     templates[t] = (templates[t] ?? []).filter(tmpl => tmpl.id !== templateId);
   }
 

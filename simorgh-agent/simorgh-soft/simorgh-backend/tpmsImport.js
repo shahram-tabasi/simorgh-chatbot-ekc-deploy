@@ -5,7 +5,7 @@
 // views and tables:
 //
 //   View_Project_Main                 the OE project
-//   view_scope + CODING_SECONDARY_GRP_TB   the switchgear (scope) and its type
+//   view_scope + CODING_SECONDARY_GRP_TB   the switchgear (scope), its name and its type
 //   technical_project_identity_       project-wide technical settings
 //   technical_panel_identity          the panel's own specification
 //   TECHNICAL_PROPERTIES              lookup titles for the coded fields above
@@ -330,7 +330,7 @@ export function buildImportPayload({
   const deviceProperties = mapPanelToDeviceProperties(panelRow, projectIdentityRow, resolve);
   delete deviceProperties.__designTemperature;
 
-  const scopeName = str(scopeRow?.scopeName) || str(lines[0]?.scopeName) || 'Switchgear';
+  const scopeName = str(scopeRow?.scopeName) || str(scopeRow?.TAG) || 'Switchgear';
 
   return {
     project: {
@@ -438,17 +438,19 @@ export const SQL = {
     FROM View_Project_Main
     WHERE IDProjectMain = ?`,
 
-  scope: `
+  // A switchgear's name is read from view_scope, never from View_draft.
+  // The draft rows carry a copy of it, but only a panel somebody has drawn
+  // lines for has any drafts — a panel with none came out as "Switchgear 42",
+  // and a panel renamed in TPMS kept its old name on every old draft. The
+  // column holding the name is found once per server (see scopeNameColumn),
+  // so these statements are written against it.
+  scope: col => `
     SELECT vs.IDProjectMain, vs.IDProjectScope, vs.SW_Type, vs.Cell_No, vs.TAG,
+           vs.\`${col}\` AS scopeName,
            c.ENG_DES AS swTypeName
     FROM view_scope vs
     LEFT JOIN CODING_SECONDARY_GRP_TB c ON c.ID = vs.SW_Type
     WHERE vs.IDProjectMain = ? AND vs.IDProjectScope = ?
-    LIMIT 1`,
-
-  scopeName: `
-    SELECT scopeName FROM View_draft
-    WHERE Tablo_ID = ? AND scopeName IS NOT NULL AND scopeName <> ''
     LIMIT 1`,
 
   panel: `
@@ -515,17 +517,11 @@ export const SQL = {
     WHERE Project_ID = ? AND revision IS NOT NULL
     ORDER BY revision`,
 
-  // Its switchgears, as the drafts name them.
-  projectScopes: `
-    SELECT DISTINCT Tablo_ID AS scopeId, scopeName
-    FROM View_draft
-    WHERE Project_ID = ? AND scopeName IS NOT NULL AND scopeName <> ''
-    ORDER BY scopeName`,
-
-  // Every switchgear of a project with its type and cell count, in one read
-  // instead of one read per switchgear.
-  projectScopeDetails: `
+  // Every switchgear of a project with its name, type and cell count, in one
+  // read instead of one read per switchgear.
+  projectScopeDetails: col => `
     SELECT vs.IDProjectScope AS scopeId, vs.SW_Type, vs.Cell_No, vs.TAG,
+           vs.\`${col}\` AS scopeName,
            c.ENG_DES AS swTypeName
     FROM view_scope vs
     LEFT JOIN CODING_SECONDARY_GRP_TB c ON c.ID = vs.SW_Type
@@ -555,11 +551,12 @@ export const SQL = {
     FROM View_Project_Main
     ORDER BY Project_Name`,
 
-  scopeList: `
-    SELECT DISTINCT Tablo_ID AS value, scopeName AS text
-    FROM View_draft
-    WHERE Project_ID = ? AND scopeName IS NOT NULL AND scopeName <> ''
-    ORDER BY scopeName`,
+  scopeList: col => `
+    SELECT DISTINCT IDProjectScope AS value,
+           COALESCE(NULLIF(\`${col}\`, ''), TAG, CONCAT('Switchgear ', IDProjectScope)) AS text
+    FROM view_scope
+    WHERE IDProjectMain = ?
+    ORDER BY text`,
 
   revisionList: `
     SELECT DISTINCT revision AS value, revision AS text
@@ -567,6 +564,42 @@ export const SQL = {
     WHERE Tablo_ID = ? AND revision IS NOT NULL
     ORDER BY revision`,
 };
+
+// Which column of view_scope holds the switchgear's name.
+//
+// The view is TPMS's and its column names are not ours to fix, so rather than
+// guess one and fail every read on a server where it is spelled otherwise,
+// the view's own columns are read once and the name is picked from them.
+// TPMS_SCOPE_NAME_COLUMN names it outright when an office knows better.
+const SCOPE_NAME_CANDIDATES = [
+  'scopename', 'scope_name', 'scope', 'scope_title', 'name', 'title',
+  'panel_name', 'panelname', 'tablo_name', 'tabloname', 'tag',
+];
+let scopeNameColumnPromise = null;
+
+export function pickScopeNameColumn(columns) {
+  const byLower = new Map((columns || []).map(c => [String(c).toLowerCase(), String(c)]));
+  for (const candidate of SCOPE_NAME_CANDIDATES) {
+    if (byLower.has(candidate)) return byLower.get(candidate);
+  }
+  return 'TAG';
+}
+
+async function scopeNameColumn(pool) {
+  const forced = String(process.env.TPMS_SCOPE_NAME_COLUMN || '').trim();
+  if (/^\w+$/.test(forced)) return forced;
+  if (!scopeNameColumnPromise) {
+    scopeNameColumnPromise = (async () => {
+      const [rows] = await pool.query(
+        `SELECT COLUMN_NAME AS name FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND LOWER(TABLE_NAME) = 'view_scope'`);
+      const column = pickScopeNameColumn(rows.map(r => r.name));
+      console.log(`ℹ️  TPMS: switchgear names are read from view_scope.${column}`);
+      return column;
+    })().catch(err => { scopeNameColumnPromise = null; throw err; });
+  }
+  return scopeNameColumnPromise;
+}
 
 const TPMS_QUERY_TIMEOUT_MS = Number(process.env.TPMS_QUERY_TIMEOUT_MS || 60000);
 
@@ -639,7 +672,8 @@ export function registerTpmsImportRoutes(app, getPool) {
       try {
         const pool = withQueryTimeout(await getPool());
         const params = paramFrom ? [paramFrom(req)] : [];
-        const [rows] = await pool.execute(sql, params);
+        const statement = typeof sql === 'function' ? sql(await scopeNameColumn(pool)) : sql;
+        const [rows] = await pool.execute(statement, params);
         res.json({ success: true, count: rows.length, items: rows, projects: rows, scopes: rows, revisions: rows });
       } catch (err) {
         console.error(`❌ Error in ${path}:`, err.message);
@@ -667,11 +701,11 @@ export function registerTpmsImportRoutes(app, getPool) {
       const one = async (sql, params) => (await pool.execute(sql, params))[0][0] || null;
       const many = async (sql, params) => (await pool.execute(sql, params))[0];
 
-      const [projectRow, projectIdentityRow, scopeRows, revisionRows, columnRows] =
+      const nameColumn = await scopeNameColumn(pool);
+      const [projectRow, projectIdentityRow, revisionRows, columnRows] =
         await Promise.all([
           one(SQL.project, [projectId]),
           one(SQL.projectIdentity, [projectId]),
-          many(SQL.projectScopes, [projectId]),
           many(SQL.projectRevisions, [projectId]),
           many(SQL.columns, [projectId]),
         ]);
@@ -686,16 +720,14 @@ export function registerTpmsImportRoutes(app, getPool) {
       // switchgears now come from a single read, and the panel specification
       // is fetched per switchgear on its own route (see below), so no single
       // request grows with the size of the project.
-      const [detailRows] = await pool.query(SQL.projectScopeDetails, [projectId]);
+      const [detailRows] = await pool.query(SQL.projectScopeDetails(nameColumn), [projectId]);
       const details = new Map(detailRows.map(r => [Number(r.scopeId), r]));
-      const named = new Map(scopeRows.map(r => [Number(r.scopeId), r.scopeName]));
-      const ids = new Set([...details.keys(), ...named.keys()]);
 
-      const scopes = [...ids].map(id => {
+      const scopes = [...details.keys()].map(id => {
         const detail = details.get(id) || {};
         return {
           scopeId: id,
-          scopeName: str(named.get(id)) || str(detail.TAG) || `Switchgear ${id}`,
+          scopeName: str(detail.scopeName) || str(detail.TAG) || `Switchgear ${id}`,
           scopeRow: { ...detail, IDProjectScope: id },
           panelRow: null,          // read per switchgear, on its own route
         };
@@ -780,8 +812,9 @@ export function registerTpmsImportRoutes(app, getPool) {
         (await pool.execute(SQL.project, [projectId]))[0][0] || null);
       if (!projectRow) return res.status(404).json({ success: false, error: 'No such project in TPMS' });
 
+      const nameColumn = await scopeNameColumn(pool);
       const scopes = await time('switchgears', async () =>
-        (await pool.query(SQL.projectScopeDetails, [projectId]))[0]);
+        (await pool.query(SQL.projectScopeDetails(nameColumn), [projectId]))[0]);
       const perRevision = await time('revisions', async () =>
         (await pool.query(SQL.statsRevisions, [projectId]))[0]);
       const parts = await time('parts', async () =>
@@ -834,8 +867,13 @@ export function registerTpmsImportRoutes(app, getPool) {
       if (scopeId != null) {
         for (const row of joinedRows) if (row.tabloId == null) row.tabloId = scopeId;
       }
+      // The lines carry View_draft's copy of the name; the name is view_scope's.
+      const nameColumn = await scopeNameColumn(pool);
+      const [nameRows] = await pool.query(SQL.projectScopeDetails(nameColumn), [projectId]);
+      const names = new Map(nameRows.map(r => [Number(r.scopeId), str(r.scopeName) || str(r.TAG)]));
       const switchgears = buildLinesByScope(joinedRows).map(entry => ({
         ...entry,
+        scopeName: names.get(Number(entry.scopeId)) || entry.scopeName,
         counts: {
           lines: entry.lines.length,
           parts: entry.lines.reduce(
@@ -877,21 +915,19 @@ export function registerTpmsImportRoutes(app, getPool) {
       const pool = withQueryTimeout(await getPool());
       const one = async (sql, params) => (await pool.execute(sql, params))[0][0] || null;
       const many = async (sql, params) => (await pool.execute(sql, params))[0];
+      const nameColumn = await scopeNameColumn(pool);
 
       const [projectRow, scopeRow, panelRow, projectIdentityRow, joinedRows, columnRows] =
         await Promise.all([
           one(SQL.project, [projectId]),
-          one(SQL.scope, [projectId, scopeId]),
+          one(SQL.scope(nameColumn), [projectId, scopeId]),
           one(SQL.panel, [projectId, scopeId]),
           one(SQL.projectIdentity, [projectId]),
           hasRevision ? many(SQL.lines, [projectId, scopeId, revisionId]) : Promise.resolve([]),
           many(SQL.columns, [projectId]),
         ]);
 
-      if (scopeRow && !scopeRow.scopeName) {
-        const named = await one(SQL.scopeName, [scopeId]);
-        if (named) scopeRow.scopeName = named.scopeName;
-      }
+      if (scopeRow && !str(scopeRow.scopeName)) scopeRow.scopeName = str(scopeRow.TAG);
 
       const propertyIds = collectPropertyIds(panelRow, projectIdentityRow);
       let propertyTitles = {};

@@ -10,6 +10,7 @@ import {
 } from '../../utils/eplanSingleLine';
 import { formatPartEntry } from '../../utils/tierEquipmentMatrix';
 import { eplanSymbolService } from '../../services/projectService';
+import { type Tier } from '../../utils/tiers';
 
 // The template's own drawing, beside the parts that make it.
 //
@@ -28,7 +29,7 @@ export interface PartRef {
 
 interface Props {
   template: TemplateLike;
-  tier: 'LV' | 'MV' | 'HV';
+  tier: Tier;
   /** Every part of the template, in the order the sheet would draw them. */
   parts: PartRef[];
   selected: PartRef | null;

@@ -4,6 +4,7 @@ import { useProject } from '../../context/ProjectContext';
 import { TemplateTree } from './TemplateTree';
 import { PanelFrame } from '../shared/PanelFrame';
 import { TemplateProperties } from './TemplateProperties';
+import { TIERS } from '../../utils/tiers';
 
 interface TemplateCreationTabProps {
   onComplete: () => void;
@@ -252,7 +253,7 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
   const getSelectedTemplateData = () => {
     if (!selectedTemplate) return null;
     const templates = projectData.templates || {};
-    for (const type of ['LV', 'MV', 'HV'] as const) {
+    for (const type of TIERS) {
       const template = (templates[type] || []).find(t => t.id === selectedTemplate);
       if (template) return template;
     }
@@ -275,7 +276,7 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
           id="project-templates"
           title="Project Templates"
           group="Create Template"
-          note="LV, MV and HV, and the sections under them"
+          note="LV, MV, HV, GIS and Other, the sections under them, and BPMS — the templates read from TPMS"
           side="left"
           className="w-1/4 border-0 border-r border-gray-200 rounded-none"
           bodyClassName="overflow-y-auto"

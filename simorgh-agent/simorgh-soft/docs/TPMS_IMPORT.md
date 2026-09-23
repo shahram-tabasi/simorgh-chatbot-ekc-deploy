@@ -60,7 +60,7 @@ touched.
 | TPMS | Used for |
 |---|---|
 | `View_Project_Main` | OE number, project name (EN/FA), project expert, technical supervisor |
-| `view_scope` + `CODING_SECONDARY_GRP_TB` | the switchgear, its type, cell count, and whether it is LV or MV |
+| `view_scope` + `CODING_SECONDARY_GRP_TB` | the switchgear, **its name**, its type, cell count, and whether it is LV or MV — names are always read from `view_scope`, never from `View_draft` (the column is found from the view itself; `TPMS_SCOPE_NAME_COLUMN` overrides it) |
 | `technical_project_identity_` | Technical Settings (altitude, temperature, wire sizes and colours, paint) |
 | `technical_panel_identity` | the panel specification → a Device Library entry |
 | `TECHNICAL_PROPERTIES` | the titles behind the coded fields in the two tables above |

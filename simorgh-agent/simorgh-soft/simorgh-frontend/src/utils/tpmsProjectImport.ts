@@ -11,6 +11,7 @@
 // Pure: no network, no persistence. `services/tpmsSync.ts` does both.
 import { ProjectData, TpmsSyncState } from '../types/project';
 import { buildTpmsImport, TpmsLine, TpmsPayload } from './tpmsImport';
+import { type Tier, TIERS, emptyTiers } from './tiers';
 
 export interface TpmsSwitchgear {
   scopeId: number;
@@ -19,7 +20,7 @@ export interface TpmsSwitchgear {
   panelType: 'LV' | 'MV';
   cellCount: string;
   tag: string;
-  device: { name: string; type: 'LV' | 'MV' | 'HV'; properties: Record<string, any> };
+  device: { name: string; type: Tier; properties: Record<string, any> };
   slotProperties: Record<string, string>;
 }
 
@@ -84,14 +85,14 @@ export function stripTpmsContent(data: ProjectData, header?: TpmsProjectHeader):
     return !scopeNames.has(String(name ?? ''));
   };
 
-  const templates = { ...(data.templates ?? { LV: [], MV: [], HV: [] }) };
-  for (const tier of ['LV', 'MV', 'HV'] as const) {
+  const templates = { ...(data.templates ?? emptyTiers()) };
+  for (const tier of TIERS) {
     templates[tier] = (templates[tier] ?? []).filter(
       (t: any) => !templateFromTpms(t) || !gone(t?.tpmsScopeId, t?.hierarchy?.path?.[1]));
   }
 
-  const library = { ...(data.deviceLibrary ?? { LV: [], MV: [], HV: [] }) };
-  for (const tier of ['LV', 'MV', 'HV'] as const) {
+  const library = { ...(data.deviceLibrary ?? emptyTiers()) };
+  for (const tier of TIERS) {
     library[tier] = (library[tier] ?? []).filter(
       (d: any) => d?.source !== 'tpms' || !gone(d?.tpmsScopeId, d?.name));
   }

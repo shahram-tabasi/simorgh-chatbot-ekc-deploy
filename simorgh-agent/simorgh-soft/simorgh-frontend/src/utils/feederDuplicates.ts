@@ -5,6 +5,7 @@
 // way while the user is working; the check runs when they leave the tab, and
 // what it finds is what the warning dialog lists and lets them fix.
 import { ProjectData } from '../types/project';
+import { type Tier } from './tiers';
 
 export interface DuplicateRowRef {
   rowId: string;
@@ -18,7 +19,7 @@ export interface DuplicateRowRef {
 export interface DuplicateGroup {
   equipmentId: string;
   equipmentName: string;
-  equipmentType: 'LV' | 'MV' | 'HV';
+  equipmentType: Tier;
   feederNo: string;
   rows: DuplicateRowRef[];
 }

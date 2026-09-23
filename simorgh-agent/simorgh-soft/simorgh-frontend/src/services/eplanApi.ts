@@ -60,11 +60,39 @@ export const eplanApi = {
     return response.json();
   },
 
-  /** Post the records. */
+  /**
+   * Keep the records in Mongo, one document per project, switchgear and
+   * revision — the data structure EPLAN draws from.
+   */
+  async storeData(payload: {
+    projectId: string;
+    equipmentId: string;
+    revision?: string;
+    scopeName?: string;
+    records: EplanData[];
+  }): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/eplan/data`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.success === false) {
+      throw new Error(body.error || `Could not store the EPLAN data (${response.status})`);
+    }
+  },
+
+  /**
+   * Post the records. With `projectId` and `equipmentId` the backend sends
+   * what `storeData` wrote to Mongo, and `data` is not needed.
+   */
   async send(payload: {
     projectName: string;
-    data: EplanData[];
+    data?: EplanData[];
     userName?: string;
+    projectId?: string;
+    equipmentId?: string;
+    revision?: string;
   }): Promise<EplanSendResult> {
     const response = await fetch(`${API_BASE_URL}/eplan/send`, {
       method: 'POST',

@@ -23,6 +23,7 @@ import {
   CELL, SymbolId, drawIecSymbol, symbolRight, symbolLeft, symbolHeight,
   overrideBox, buildSymbolCatalogueSvg, IEC_SYMBOLS
 } from './iecSymbols';
+import { type Tier, LAYOUT_OF } from './tiers';
 
 export const EPLAN_HEADERS = [
   'Page', 'Higher-level function', 'Location', 'DT', 'Function text',
@@ -44,8 +45,8 @@ const SLOT_LETTER: Record<string, string> = {
 
 const text = (v: any) => (v == null ? '' : String(v).trim());
 
-const propertyOrder = (tier: 'LV' | 'MV' | 'HV') =>
-  tier === 'MV' ? MV_TEMPLATE_PROPERTIES : LV_TEMPLATE_PROPERTIES;
+const propertyOrder = (tier: Tier) =>
+  LAYOUT_OF[tier] === 'MV' ? MV_TEMPLATE_PROPERTIES : LV_TEMPLATE_PROPERTIES;
 
 /** One row per device on a feeder line, ready for EPLAN's device-list import. */
 export function buildEplanRows(
@@ -319,14 +320,14 @@ const LV_INSTEAD: Partial<Record<SymbolId, SymbolId>> = {
 };
 
 /** The symbol as this tier draws it. */
-const forTier = (id: SymbolId, tier?: 'LV' | 'MV' | 'HV'): SymbolId =>
-  (tier === 'LV' ? LV_INSTEAD[id] ?? id : id);
+const forTier = (id: SymbolId, tier?: Tier): SymbolId =>
+  (tier && LAYOUT_OF[tier] === 'LV' ? LV_INSTEAD[id] ?? id : id);
 
 export function symbolForPart(
   part: any,
   slot: string,
   symbols?: EplanSymbolMap,
-  tier?: 'LV' | 'MV' | 'HV',
+  tier?: Tier,
 ): { id: SymbolId; from: SymbolSource; eplan?: EplanSymbolInfo } {
   const eplan = lookupSymbol(part, symbols);
   const chosen = String(part?.symbolId ?? '').trim();
@@ -380,7 +381,7 @@ function chainFor(
   order: string[],
   page: number,
   symbols?: EplanSymbolMap,
-  tier?: 'LV' | 'MV' | 'HV',
+  tier?: Tier,
 ): ChainItem[] {
   const template = line.templateId ? templates.get(line.templateId) : undefined;
   return chainOfTemplate(template, order, page, symbols, tier);
@@ -398,7 +399,7 @@ function chainOfTemplate(
   order: string[],
   page: number,
   symbols?: EplanSymbolMap,
-  tier?: 'LV' | 'MV' | 'HV',
+  tier?: Tier,
 ): ChainItem[] {
   const parts = template ? templateParts(template) : {};
   const slots = [
@@ -1243,7 +1244,7 @@ export function buildSingleLineSvg(
  */
 export function buildTemplateSvg(
   template: TemplateLike | undefined,
-  tier: 'LV' | 'MV' | 'HV',
+  tier: Tier,
   symbols?: EplanSymbolMap,
 ): { svg: string; width: number; height: number; devices: number } {
   const { margin } = GEOM;

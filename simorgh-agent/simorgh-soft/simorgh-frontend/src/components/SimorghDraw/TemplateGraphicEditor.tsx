@@ -5,6 +5,7 @@ import { EplanSymbolMap, TemplateLike, buildTemplateSvg } from '../../utils/epla
 import { drawingFromSvg } from '../../utils/cad/fromSvg';
 import { fingerprint } from '../../utils/cad/edit';
 import { DrawingEditor, EditorSheet } from './DrawingEditor';
+import { type Tier } from '../../utils/tiers';
 
 // The whole template, in one window.
 //
@@ -19,7 +20,7 @@ import { DrawingEditor, EditorSheet } from './DrawingEditor';
 
 interface Props {
   template: TemplateLike & { id: string };
-  tier: 'LV' | 'MV' | 'HV';
+  tier: Tier;
   /** What EPLAN says the parts are, when it has been asked. */
   symbols?: EplanSymbolMap;
   /** Edits already kept with the project. */

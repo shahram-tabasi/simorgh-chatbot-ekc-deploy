@@ -499,7 +499,7 @@ registerTpmsImportRoutes(app, connectToMySql);
 registerEplanSymbolRoutes(app, connectToSqlServer, process.env.EPLAN_SYMBOL_DIR);
 
 // EPLAN — forwards to eplan-bridge-service; address in .env (EPLAN_BRIDGE_URL).
-registerEplanRoutes(app);
+registerEplanRoutes(app, () => db);
 
 // Simorgh Draw's assistant: the local model writes shapes, this validates them
 // before any of it reaches a sheet. Same model the chat uses — one endpoint to
@@ -610,8 +610,8 @@ app.get('/', (req, res) => {
 // into one SelectListItem text (Oenum + ProjectName).
 //
 // The queries are the reads the C# makes, against the same MySQL views:
-// View_Project_Main for the projects, and View_draft for the scopes
-// (Tablo_ID/scopeName) and revisions of one.
+// View_Project_Main for the projects, view_scope for the scopes
+// (IDProjectScope and its name) and View_draft for the revisions of one.
 //
 // One part of C# GetScopes has no equivalent here, deliberately: the check
 // that the caller holds write access to \\techserver\OE<nnn> before the
@@ -1419,11 +1419,15 @@ app.get('/api/projects/:projectId/revisions', async (req, res) => {
   try {
     const { projectId } = req.params;
     
-    // Get all revisions for the project sorted by revisionNumber descending (latest first)
-    const revisions = await db.collection('revisions')
-      .find({ projectId })
-      .sort({ revisionNumber: -1 })
-      .toArray();
+    // Latest first, by the revision's number as a number. revisionNumber is
+    // stored as a string, and sorted as one "9" came before "13" — on a
+    // project with ten revisions or more (every TPMS project of any age) the
+    // revision just raised was not the first in the list, the app took the
+    // wrong one for the latest, and the project stayed read-only after the
+    // revision that was meant to hand it over.
+    const revisions = (await db.collection('revisions').find({ projectId }).toArray())
+      .sort((a, b) => (parseInt(b.revisionNumber, 10) || 0) - (parseInt(a.revisionNumber, 10) || 0)
+        || String(b.createdOn || '').localeCompare(String(a.createdOn || '')));
     
     // Auto-create Revision 0 if no revisions exist for this project
     if (revisions.length === 0) {
