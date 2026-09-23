@@ -264,8 +264,8 @@ export function registerEplanRoutes(app, getDb) {
           success: false,
           error: `EPLAN did not draw it — ${eplanError.replace(/^\s*error:?\s*/i, '')}. `
             + 'If this switchgear was already drawn at this revision and revision name, EPLAN will '
-            + 'not create the same project twice: tick "Update existing project", change the '
-            + 'revision name, or remove the old project from techserver first.',
+            + 'not create the same project twice: tick "Delete and draw again" (or "Update existing '
+            + 'project"), or change the revision name.',
           existingProject: true,
         });
       }

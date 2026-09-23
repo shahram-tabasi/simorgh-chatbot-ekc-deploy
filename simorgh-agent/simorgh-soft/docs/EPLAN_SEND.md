@@ -90,6 +90,22 @@ returns what was last handed over.
 A GIS switchgear is sent as `PanelType: MV` and an OTHER one as `LV` — the
 columns they are built with — since the add-in knows LV, MV and HV only.
 
+## Sending the same switchgear again
+
+EPLAN draws into `OE…\Drawing\<LV|MV>\Single line\Auto-<switchgear>\Rev<revision>-Draft\Rev<revision name>\ASLD.elk`
+and the add-in's `CreateProject` refuses a path that exists. So a second send
+at the same revision and revision name needs one of:
+
+- **Delete and draw again** (`RecreateProject`) — the add-in removes the old
+  project and builds it from the current records. This is the one that brings
+  a new row, a removed row or a changed template into the drawing. Needs the
+  add-in from Eplanix `simorgh/recreate-project` (bf0a6bb) or later.
+- **Update existing project** (`UpdateExisting`) — rewrites the existing
+  project's tables and switchboard values only; no new pages, no outline.
+
+The tab remembers each send (`eplanData.lastSend`) and asks which, before a
+repeat send. An "Error" reply from EPLAN is reported as a failed send.
+
 ## Configuration
 
 This app's backend (`simorgh-backend/.env.example`):

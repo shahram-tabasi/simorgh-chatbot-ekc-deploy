@@ -192,6 +192,10 @@ export const SendToEplanTab: React.FC = () => {
 
   // ── Update / markup ──
   const [updateExisting, setUpdateExisting] = useState(false);
+  // Delete the project EPLAN already has at this revision and draw it again —
+  // the only way a row added since the last send reaches the drawing, because
+  // update mode rewrites the tables that are there and adds nothing.
+  const [recreateProject, setRecreateProject] = useState(false);
   const [markupChanged, setMarkupChanged] = useState(false);
   const [markupRevisionId, setMarkupRevisionId] = useState('');
 
@@ -225,13 +229,14 @@ export const SendToEplanTab: React.FC = () => {
     lvCompartmentHeightSldOld,
     buffelType,
     updateExisting,
+    recreateProject,
     markupChanged,
     sldPageUserSupplementaryFields: Object.keys(sldFields).length > 0 ? sldFields : null,
     oldPageUserSupplementaryFields: Object.keys(oldFields).length > 0 ? oldFields : null,
   }), [
     currentRevision, feedersPerPage, generationType, isSingleCompartment, feederDistance, revName,
     plotframeFileName, exhaustType, reverseFromLineNumber, lvCompartmentHeightOld, lvCompartmentHeightSldOld,
-    buffelType, updateExisting, markupChanged, sldFields, oldFields,
+    buffelType, updateExisting, recreateProject, markupChanged, sldFields, oldFields,
   ]);
 
   const records: EplanData[] = useMemo(
@@ -289,25 +294,30 @@ export const SendToEplanTab: React.FC = () => {
       // (its tables and switchboard values rewritten from these records)
       // unless somebody would rather change the revision name.
       let sendOptions = options;
-      if (projectId && storedEquipment && !options.updateExisting) {
+      if (projectId && storedEquipment && !options.updateExisting && !options.recreateProject) {
         const before = await eplanApi.getData(projectId, storedEquipment.id, revision).catch(() => null);
         const last = before?.lastSend;
         const revNameNow = (options.revName || options.revisionName || '').trim();
         if (last && last.revName.trim() === revNameNow) {
-          const update = window.confirm(
-            `${storedEquipment.name} was already sent to EPLAN at REV ${revision}`
-            + `${revNameNow ? ` / ${revNameNow}` : ''} on ${new Date(last.at).toLocaleString()}.\n\n`
-            + 'EPLAN will not create the same project twice, so a new send would leave the old '
-            + 'drawing in place.\n\n'
-            + 'OK — update that project with the current data (tables and switchboard values; '
-            + 'the outline is not redrawn in update mode).\n'
-            + 'Cancel — stop, to change the revision name or remove the old project first.');
-          if (!update) {
-            setResult({ ok: false, text: 'Not sent — change the revision name, or tick "Update existing project".' });
+          const when = `${storedEquipment.name} was already sent to EPLAN at REV ${revision}`
+            + `${revNameNow ? ` / ${revNameNow}` : ''} on ${new Date(last.at).toLocaleString()}.\n\n`;
+          if (window.confirm(when
+            + 'OK — delete that project and draw it again from the current data. Rows added or '
+            + 'removed since, changed templates and specifications all come through.\n\n'
+            + 'Cancel — other choices.')) {
+            setRecreateProject(true);
+            sendOptions = { ...options, recreateProject: true };
+          } else if (window.confirm(
+            'Update the existing project instead?\n\n'
+            + 'Only its tables and switchboard values are rewritten — a new row does not get a '
+            + 'page, and the outline is not redrawn.\n\n'
+            + 'Cancel — do not send.')) {
+            setUpdateExisting(true);
+            sendOptions = { ...options, updateExisting: true };
+          } else {
+            setResult({ ok: false, text: 'Not sent.' });
             return;
           }
-          setUpdateExisting(true);
-          sendOptions = { ...options, updateExisting: true };
         }
       }
 
@@ -669,10 +679,18 @@ export const SendToEplanTab: React.FC = () => {
                 <p className="text-sm font-semibold text-gray-700">If this project already exists on EPLAN</p>
                 <label className="flex items-start gap-2 text-sm text-gray-700">
                   <input type="checkbox" className="mt-0.5" checked={updateExisting}
-                    onChange={e => setUpdateExisting(e.target.checked)} />
+                    onChange={e => { setUpdateExisting(e.target.checked); if (e.target.checked) setRecreateProject(false); }} />
                   <span>
                     <span className="font-medium">Update existing project</span> — refresh the table header and part
-                    properties on the project already on EPLAN, instead of creating a new one.
+                    properties on the project already on EPLAN, instead of creating a new one. Adds no rows or pages.
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 text-sm text-gray-700">
+                  <input type="checkbox" className="mt-0.5" checked={recreateProject}
+                    onChange={e => { setRecreateProject(e.target.checked); if (e.target.checked) setUpdateExisting(false); }} />
+                  <span>
+                    <span className="font-medium">Delete and draw again</span> — remove the project EPLAN already
+                    has at this revision and create it from the current data. Use this after adding or removing rows.
                   </span>
                 </label>
                 <label className="flex items-start gap-2 text-sm text-gray-700">
@@ -693,8 +711,8 @@ export const SendToEplanTab: React.FC = () => {
                   </select>
                 )}
                 <p className="text-[11px] text-gray-400">
-                  Neither box checked, on a project that already exists, asks EPLAN to recreate it from scratch —
-                  same as leaving both unchecked in Eplanix's own dialog.
+                  EPLAN will not create a project that is already there: with neither box ticked, a switchgear
+                  already drawn at this revision and revision name stays as it was.
                 </p>
               </div>
 

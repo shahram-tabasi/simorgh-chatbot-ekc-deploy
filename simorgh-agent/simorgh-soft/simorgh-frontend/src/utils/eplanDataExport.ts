@@ -121,6 +121,8 @@ export interface EplanData {
   LvCompartmentHeightOld: string; LvCompartmentHeightSldOld: string; BuffelType: string;
   // update / markup options
   UpdateExisting: boolean; MarkupChanged: boolean; WiringTypeChanged: boolean;
+  /** Delete the project already at this path and draw it again (add-in, Eplanix bf0a6bb). */
+  RecreateProject: boolean;
   // EPLAN page "User supplementary field" values, SLD and OLD kept apart
   SldPageUserSupplementaryFields: Record<string, string> | null;
   OldPageUserSupplementaryFields: Record<string, string> | null;
@@ -136,6 +138,8 @@ export interface EplanDataOptions {
   feedersPerPage?: number;
   /** Refresh an existing EPLAN project instead of creating a new one. */
   updateExisting?: boolean;
+  /** Delete the existing EPLAN project at this path and create it again. */
+  recreateProject?: boolean;
 
   // ── Send to EPLAN tab — Drawing Options, mirroring Eplanix's own
   // ProjectData screen (GenerationType / *Section fields on ProjectFormViewModel).
@@ -343,6 +347,7 @@ export function buildEplanDataForEquipment(
 
     // ── update / markup ──
     UpdateExisting: !!options.updateExisting,
+    RecreateProject: !options.updateExisting && !!options.recreateProject,
     MarkupChanged: !!options.markupChanged,
     WiringTypeChanged: false,
 
