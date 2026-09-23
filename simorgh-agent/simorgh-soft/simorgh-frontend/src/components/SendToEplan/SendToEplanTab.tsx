@@ -279,7 +279,39 @@ export const SendToEplanTab: React.FC = () => {
           : currentRevision.projectSnapshot;
       }
       const storedEquipment = (stored.equipments ?? []).find(e => e.id === equipment?.id) ?? equipment;
-      const data = storedEquipment ? buildEplanData(stored, [storedEquipment], options) : [];
+
+      // EPLAN draws a switchgear into a path made of the OE, the switchgear,
+      // the revision and the revision name, and will not create a project
+      // that is already there — the add-in fails, and what is in that folder
+      // is still the drawing from before. That read as "EPLAN used the old
+      // data". So a switchgear already sent at this revision and name is
+      // said so first, and the send is turned into an update of that project
+      // (its tables and switchboard values rewritten from these records)
+      // unless somebody would rather change the revision name.
+      let sendOptions = options;
+      if (projectId && storedEquipment && !options.updateExisting) {
+        const before = await eplanApi.getData(projectId, storedEquipment.id, revision).catch(() => null);
+        const last = before?.lastSend;
+        const revNameNow = (options.revName || options.revisionName || '').trim();
+        if (last && last.revName.trim() === revNameNow) {
+          const update = window.confirm(
+            `${storedEquipment.name} was already sent to EPLAN at REV ${revision}`
+            + `${revNameNow ? ` / ${revNameNow}` : ''} on ${new Date(last.at).toLocaleString()}.\n\n`
+            + 'EPLAN will not create the same project twice, so a new send would leave the old '
+            + 'drawing in place.\n\n'
+            + 'OK — update that project with the current data (tables and switchboard values; '
+            + 'the outline is not redrawn in update mode).\n'
+            + 'Cancel — stop, to change the revision name or remove the old project first.');
+          if (!update) {
+            setResult({ ok: false, text: 'Not sent — change the revision name, or tick "Update existing project".' });
+            return;
+          }
+          setUpdateExisting(true);
+          sendOptions = { ...options, updateExisting: true };
+        }
+      }
+
+      const data = storedEquipment ? buildEplanData(stored, [storedEquipment], sendOptions) : [];
       if (data.length === 0) throw new Error('This switchgear has no feeder lines in the saved project.');
 
       let answer;

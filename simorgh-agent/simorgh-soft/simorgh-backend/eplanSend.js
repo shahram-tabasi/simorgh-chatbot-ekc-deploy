@@ -252,6 +252,24 @@ export function registerEplanRoutes(app, getDb) {
       const result = await callBridge(`${url}/draw`, { method: 'POST', body, apiKey, timeoutMs });
       const parsed = result.body;
 
+      // EPLAN answers a failed job with a Content of "Error: …" and the bridge
+      // still calls that completed. Passed on as a success it read as a
+      // drawing made, while the files at that path were the last ones EPLAN
+      // did make — the usual cause being a project that already exists
+      // there, which the add-in's CreateProject refuses to make again.
+      const eplanError = /^\s*error/i.test(String(parsed.project_path || ''))
+        ? String(parsed.project_path).trim() : null;
+      if (eplanError) {
+        return res.status(502).json({
+          success: false,
+          error: `EPLAN did not draw it — ${eplanError.replace(/^\s*error:?\s*/i, '')}. `
+            + 'If this switchgear was already drawn at this revision and revision name, EPLAN will '
+            + 'not create the same project twice: tick "Update existing project", change the '
+            + 'revision name, or remove the old project from techserver first.',
+          existingProject: true,
+        });
+      }
+
       if (!result.ok || parsed.status === 'failed') {
         return res.status(result.ok ? 502 : result.status).json({
           success: false,
@@ -264,6 +282,25 @@ export function registerEplanRoutes(app, getDb) {
       // project(s) EPLAN wrote, each one already split into the OE share and
       // the path inside it that techserver-mcp wants.
       const projects = parseEplanProjects(parsed.project_path);
+
+      // Remember what was drawn where, so the next send of the same switchgear
+      // at the same revision can say beforehand that the project exists.
+      if (projectId && equipmentId) {
+        try {
+          await getDb().collection(EPLAN_DATA).updateOne(
+            eplanDataKey({ projectId, equipmentId, revision }),
+            { $set: { lastSend: {
+                at: new Date().toISOString(),
+                revName: String(data[0]?.RevName ?? ''),
+                generationType: String(data[0]?.GenerationType ?? ''),
+                updateExisting: !!data[0]?.UpdateExisting,
+                projectPath: String(parsed.project_path || ''),
+            } } },
+          );
+        } catch (err) {
+          console.warn('Could not record the EPLAN send:', err.message);
+        }
+      }
 
       return res.json({
         success: true,

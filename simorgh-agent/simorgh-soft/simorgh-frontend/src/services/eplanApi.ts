@@ -82,6 +82,17 @@ export const eplanApi = {
     }
   },
 
+  /** What was last stored and sent for a switchgear at a revision, if anything. */
+  async getData(projectId: string, equipmentId: string, revision: string): Promise<{
+    lastSend?: { at: string; revName: string; generationType: string; updateExisting: boolean; projectPath: string };
+  } | null> {
+    const q = new URLSearchParams({ projectId, equipmentId, revision });
+    const response = await fetch(`${API_BASE_URL}/eplan/data?${q.toString()}`);
+    if (!response.ok) return null;
+    const body = await response.json().catch(() => ({}));
+    return body?.found ? body.data : null;
+  },
+
   /**
    * Post the records. With `projectId` and `equipmentId` the backend sends
    * what `storeData` wrote to Mongo, and `data` is not needed.
