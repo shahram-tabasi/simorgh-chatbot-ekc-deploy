@@ -716,6 +716,53 @@ export const SendToEplanTab: React.FC = () => {
                 </p>
               </div>
 
+              {/* ── What goes to EPLAN ──
+                  The records themselves, one line per feeder, before they are
+                  sent. They are built from this project — the copy kept in
+                  Simorgh's own database, the one the Output tab shows — and
+                  from nothing else: once a revision has been raised here, TPMS
+                  is not read again. Showing them is how that can be checked,
+                  a new row included, rather than taken on trust. */}
+              <details className="border border-gray-200 rounded-lg" open>
+                <summary className="px-4 py-2.5 cursor-pointer text-sm font-semibold text-gray-700 flex items-center gap-2">
+                  <ListChecksIcon className="w-4 h-4 text-emerald-700" />
+                  What will be sent — {records.length} feeder(s)
+                  <span className="ml-auto text-[11px] font-normal text-gray-500">
+                    Source: Simorgh project{currentRevision ? ` · REV ${currentRevision.revisionNumber}` : ''} (same data as the Output tab)
+                  </span>
+                </summary>
+                <div className="overflow-auto max-h-80 border-t">
+                  <table className="min-w-full text-xs">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        {['#', 'BUS', 'FEEDER', 'WIRING', 'POWER', 'FLC', 'TAG', 'DESCRIPTION', 'CB / VCB', 'CONTACTOR', 'O/L RELAY', 'PROT. RELAY', 'CT'].map(h => (
+                          <th key={h} className="px-2 py-1.5 text-left font-medium text-gray-600 whitespace-nowrap border-b">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {records.map(r => (
+                        <tr key={r.Id} className="border-b border-gray-100">
+                          <td className="px-2 py-1 text-gray-400">{r.Id}</td>
+                          <td className="px-2 py-1">{r.BusSection}</td>
+                          <td className="px-2 py-1 font-medium">{r.LineNumber}</td>
+                          <td className="px-2 py-1 whitespace-nowrap">{r.WiringType}</td>
+                          <td className="px-2 py-1">{r.RatingPower}</td>
+                          <td className="px-2 py-1">{r.FLC}</td>
+                          <td className="px-2 py-1 whitespace-nowrap">{r.TagName}</td>
+                          <td className="px-2 py-1 whitespace-nowrap">{r.Description}</td>
+                          <td className="px-2 py-1 whitespace-nowrap">{r.CBOrder}</td>
+                          <td className="px-2 py-1 whitespace-nowrap">{r.ContactorOrder}</td>
+                          <td className="px-2 py-1 whitespace-nowrap">{r.OverloadRelayOrder}</td>
+                          <td className="px-2 py-1 whitespace-nowrap">{r.ProtectionRelayOrder}</td>
+                          <td className="px-2 py-1 whitespace-nowrap">{r.CTRating}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+
               {/* ── Target + send ── */}
               <div className="border border-gray-200 rounded-lg p-4">
                 <div className="flex items-center justify-between gap-3 mb-3">

@@ -3,7 +3,7 @@
 // Shared LV/MV "equipment × template property" matrix builder, used by both
 // OutputTypesTab.tsx (report/export) and DeviceSelectionTab.tsx (the
 // "Template Items" preview panel) so both stay in sync.
-import { ProjectData } from '../types/project';
+import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../types/project';
 import { LAYOUT_OF, TIERS } from './tiers';
 
 // ─── Per-tier template property lists (must mirror TemplateProperties.tsx) ───
@@ -134,6 +134,27 @@ export function templateParts(template: any): Record<string, any[]> {
 // Flatten LV/MV equipment + device rows into a 2-D array for Excel + table
 // rendering. The number of columns is fixed; cells without a matching
 // template property come out empty.
+
+/**
+ * One switchgear's feeder rows, each with the template it is built on and the
+ * parts on that template — the one reading of the project that the Output
+ * tab's tables and the EPLAN records are both made from, so what EPLAN is
+ * sent is exactly what the Output tab shows. Templates are looked up across
+ * every group that shares the switchgear's columns (LAYOUT_OF), as the tables
+ * always did.
+ */
+export function equipmentFeeders(data: ProjectData, equipment: Equipment): {
+  row: DeviceTableRow; template: TemplateItem | undefined; parts: Record<string, any[]>;
+}[] {
+  const layout = LAYOUT_OF[equipment.type] ?? equipment.type;
+  const byId = new Map(TIERS.filter(t => (LAYOUT_OF[t] ?? t) === layout)
+    .flatMap(t => data.templates?.[t] ?? []).map(t => [t.id, t as TemplateItem]));
+  return (equipment.devices ?? []).map(row => {
+    const template = row.templateId ? byId.get(row.templateId) : undefined;
+    return { row, template, parts: template ? templateParts(template) : {} };
+  });
+}
+
 export function buildTierMatrix(
   data: ProjectData,
   tier: 'LV' | 'MV'
@@ -143,9 +164,6 @@ export function buildTierMatrix(
   const headers = ['EQUIPMENT', ...deviceCols.map(c => c.header), ...propCols];
 
   // GIS rides with MV and OTHER with LV, as everywhere their columns are read.
-  const tierTemplates = TIERS.filter(t => LAYOUT_OF[t] === tier).flatMap(t => data.templates?.[t] ?? []);
-  const tmplById = new Map(tierTemplates.map(t => [t.id, t]));
-
   const rows: (string | number)[][] = [];
   const eqs = (data.equipments ?? []).filter(e => LAYOUT_OF[e.type] === tier);
   for (const eq of eqs) {
@@ -154,9 +172,7 @@ export function buildTierMatrix(
       rows.push([eq.name, ...deviceCols.map(() => ''), ...propCols.map(() => '')]);
       continue;
     }
-    devices.forEach((row, ri) => {
-      const tmpl  = row.templateId ? tmplById.get(row.templateId) : undefined;
-      const parts = tmpl ? templateParts(tmpl) : {};
+    equipmentFeeders(data, eq).forEach(({ row, parts }, ri) => {
       const baseValues = deviceCols.map(c => {
         const raw = (row as any)[c.key];
         return raw == null ? '' : String(raw);

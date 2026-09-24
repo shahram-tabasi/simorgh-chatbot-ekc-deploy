@@ -22,8 +22,8 @@
 // guessed — the add-in treats an empty string as "not stated".
 //
 // Pure: no network. `services/eplanApi.ts` does the sending.
-import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../types/project';
-import { templateParts, getEplanixValue, stripLocaleTags } from './tierEquipmentMatrix';
+import { ProjectData, Equipment } from '../types/project';
+import { getEplanixValue, stripLocaleTags, equipmentFeeders } from './tierEquipmentMatrix';
 import { buildPanelLayout } from './panelLayout';
 import { buildOutline } from './outline';
 import { LAYOUT_OF } from './tiers';
@@ -192,8 +192,9 @@ export function buildEplanDataForEquipment(
       })
     : null;
 
-  const templates = new Map(
-    (data.templates?.[equipment.type] ?? []).map(t => [t.id, t as TemplateItem]));
+  // The feeders exactly as the Output tab reads them — same rows, same
+  // templates, same parts. Nothing here is read from anywhere but the project.
+  const feeders = equipmentFeeders(data, equipment);
   const layout = buildPanelLayout(data, equipment);
   const spec = layout.spec;
   const tech = data.techSettings;
@@ -203,8 +204,7 @@ export function buildEplanDataForEquipment(
   // brings its own column names along on the template (`__displayNames`);
   // anything else falls back to the caption the app itself uses.
   const displayNames: Record<string, string> = (() => {
-    for (const line of lines) {
-      const template = line.templateId ? templates.get(line.templateId) : undefined;
+    for (const { template } of feeders) {
       const names = (template?.properties as any)?.__displayNames;
       if (names && typeof names === 'object') return names as Record<string, string>;
     }
@@ -355,9 +355,7 @@ export function buildEplanDataForEquipment(
     OldPageUserSupplementaryFields: options.oldPageUserSupplementaryFields ?? null,
   };
 
-  return lines.map((line: DeviceTableRow, index: number): EplanData => {
-    const template = line.templateId ? templates.get(line.templateId) : undefined;
-    const parts = template ? templateParts(template) : {};
+  return feeders.map(({ row: line, parts }, index: number): EplanData => {
     // One outline record per line, in the same order — the add-in reads them
     // by position, and so does Eplanix.
     const cell = outline?.feeders[index];
