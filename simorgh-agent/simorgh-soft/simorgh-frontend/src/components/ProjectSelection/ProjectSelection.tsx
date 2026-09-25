@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ProjectData, Revision } from '../../types/project';
 import { projectService, tpmsService, TpmsOption } from '../../services/projectService';
 import { syncProjectFromTpms, findLinkedProject, TpmsSyncResult } from '../../services/tpmsSync';
+import { Starfield, SkyTitle } from './SkyIntro';
 import { TpmsProjectHeader } from '../../utils/tpmsProjectImport';
 import logoMark from '../../assets/logo-mark.png';
 
@@ -335,7 +336,8 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   return (
     <div
       className="fixed inset-0 flex items-center justify-center overflow-auto p-6"
-      style={{ background: 'radial-gradient(1200px 800px at 10% 10%, #14335f 0%, #0a1a33 45%, #060e1e 100%)' }}
+      // Night sky: the stars and the meteors are drawn over this by Starfield.
+      style={{ background: 'radial-gradient(1200px 800px at 15% 8%, #0f2a52 0%, #071630 42%, #030814 100%)' }}
     >
       <style>{`
         @keyframes suiteSheen {
@@ -363,14 +365,15 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
         }
       `}</style>
 
-      {/* Faint dot grid, matching the loading screen's texture */}
-      <div
-        className="absolute inset-0 opacity-[0.12] pointer-events-none"
-        style={{ backgroundImage: 'radial-gradient(rgba(255,255,255,0.5) 1px, transparent 1px)', backgroundSize: '22px 22px' }}
-      />
+      {/* Stars and a meteor shower, behind everything — see SkyIntro.tsx. */}
+      <Starfield />
+
+      {/* The title, with the Simorgh over it, and the dialog under it. */}
+      <div className="relative flex flex-col items-center gap-2 my-auto w-full">
+      <SkyTitle />
 
       {/* ── The single dialog ── */}
-      <div className="relative bg-white rounded-2xl shadow-2xl w-[600px] max-w-full flex flex-col my-auto">
+      <div className="relative bg-white rounded-2xl shadow-2xl w-[600px] max-w-full flex flex-col">
         {/* Header */}
         <div className="flex items-center gap-4 px-6 py-5 border-b border-gray-100">
           <img src={logoMark} alt="Simorgh" data-theme-invert className="h-20 w-auto" />
@@ -816,6 +819,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
             </button>
           )}
         </div>
+      </div>
       </div>
     </div>
   );
