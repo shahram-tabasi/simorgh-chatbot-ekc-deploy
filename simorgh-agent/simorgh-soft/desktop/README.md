@@ -103,6 +103,20 @@ The installer lands in `desktop\release\SimorghDesignSuite-Setup-<version>.exe`.
 It installs per-user (no admin rights), lets the user pick the folder, and adds
 Desktop and Start-menu shortcuts.
 
+## How it looks
+
+- **Installer** (`build/installer.nsh`): welcome and finish pages drawn in the
+  artwork's night blue with the Simorgh over the globe beside them
+  (`build/installerSidebar.bmp`), the logo in the header strip of the pages
+  in between (`build/installerHeader.bmp`), the EULA (`build/license.txt`)
+  accepted with a checkbox, and "Launch Simorgh Design Suite now" at the end.
+  The artwork is cut from the office's setup mock-ups.
+- **Icon** (`build/icon.ico`, `build/icon.png`): the Simorgh in white with a
+  thin navy edge, so it reads on a dark taskbar and a light one alike.
+- **Welcome window** (`welcome.html`, `welcome-art.jpg`): shown every time the
+  app starts, while the suite loads behind it; it closes as the suite appears
+  (after at least 3.2 s, and at most 20 s even if the server never answers).
+
 ## Running it during development
 
 ```bash

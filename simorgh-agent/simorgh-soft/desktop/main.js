@@ -69,8 +69,41 @@ function normaliseUrl(raw) {
 
 let mainWindow = null;
 let setupWindow = null;
+let welcomeWindow = null;
 
-function createMainWindow(url) {
+// The welcome window, every time the app starts: the Simorgh artwork and
+// "Opening your workspace…", up while the suite loads behind it in a hidden
+// window. It is a local page, so it appears at once — before the server has
+// answered — and the first thing seen is never a blank window.
+//
+// Held for at least WELCOME_MIN_MS so it is seen rather than flashed, and for
+// at most WELCOME_MAX_MS so a server that never answers cannot keep the suite
+// (or its error page) from being shown.
+const WELCOME_MIN_MS = 3200;
+const WELCOME_MAX_MS = 20000;
+
+function createWelcomeWindow() {
+  welcomeWindow = new BrowserWindow({
+    width: 560,
+    height: 420,
+    frame: false,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    center: true,
+    show: false,
+    backgroundColor: '#01112a',
+    icon: path.join(__dirname, 'build', 'icon.png'),
+    webPreferences: { contextIsolation: true, nodeIntegration: false, spellcheck: false },
+  });
+  welcomeWindow.once('ready-to-show', () => welcomeWindow?.show());
+  welcomeWindow.on('closed', () => { welcomeWindow = null; });
+  welcomeWindow.loadFile(path.join(__dirname, 'welcome.html'), { query: { v: app.getVersion() } });
+}
+
+function createMainWindow(url, { welcome = false } = {}) {
+  if (welcome) createWelcomeWindow();
+  const openedAt = Date.now();
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -89,8 +122,24 @@ function createMainWindow(url) {
     },
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
-  mainWindow.on('closed', () => { mainWindow = null; });
+  // Shown when it is ready — and, while the welcome window is up, not before
+  // the welcome has had its moment; the welcome closes as the suite appears.
+  let shown = false;
+  const reveal = () => {
+    if (shown || !mainWindow) return;
+    shown = true;
+    mainWindow.show();
+    if (welcomeWindow) welcomeWindow.close();
+  };
+  mainWindow.once('ready-to-show', () => {
+    const wait = welcomeWindow ? Math.max(0, WELCOME_MIN_MS - (Date.now() - openedAt)) : 0;
+    setTimeout(reveal, wait);
+  });
+  if (welcome) setTimeout(reveal, WELCOME_MAX_MS);
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    if (welcomeWindow) welcomeWindow.close();
+  });
 
   // Links to anywhere else open in the user's browser, not inside the app.
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
@@ -181,7 +230,7 @@ ipcMain.handle('simorgh:save-server-url', (_event, raw) => {
   writeConfig({ ...readConfig(), serverUrl: url });
   if (setupWindow) { setupWindow.close(); }
   if (mainWindow) mainWindow.loadURL(url);
-  else createMainWindow(url);
+  else createMainWindow(url, { welcome: true });
   return true;
 });
 
@@ -230,6 +279,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
+    if (welcomeWindow) { welcomeWindow.focus(); return; }
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
@@ -239,13 +289,13 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     buildMenu();
     const saved = readConfig().serverUrl;
-    if (saved) createMainWindow(saved);
+    if (saved) createMainWindow(saved, { welcome: true });
     else createSetupWindow(DEFAULT_URL);
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         const url = readConfig().serverUrl;
-        if (url) createMainWindow(url); else createSetupWindow(DEFAULT_URL);
+        if (url) createMainWindow(url, { welcome: true }); else createSetupWindow(DEFAULT_URL);
       }
     });
   });
