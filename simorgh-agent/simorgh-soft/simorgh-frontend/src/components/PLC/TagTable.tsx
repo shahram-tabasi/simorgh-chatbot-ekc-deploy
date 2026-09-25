@@ -25,6 +25,7 @@ import { PlcProject, PlcTag, PlcTagTable, newId } from '../../utils/plc/model';
 import { DATA_TYPE_NAMES, addressProblem, dataTypeInfo } from '../../utils/plc/dataTypes';
 import { Lang, Strings } from './lang';
 import { CHECK_STRINGS, CheckStrings } from '../../utils/plc/checkLang';
+import { appAlert, appConfirm, appPrompt } from '../shared/AppDialog';
 
 interface Props {
   project: PlcProject;
@@ -119,23 +120,23 @@ export const TagTable: React.FC<Props> = ({
   const removeTag = (id: string) =>
     patchTable(open.id, { tags: open.tags.filter(t => t.id !== id) });
 
-  const addTable = () => {
-    const name = window.prompt(t.tableNameAsk, `${t.tagTable} ${tables.length + 1}`);
+  const addTable = async () => {
+    const name = await appPrompt(t.tableNameAsk, `${t.tagTable} ${tables.length + 1}`);
     if (!name?.trim()) return;
     const table: PlcTagTable = { id: newId('tt'), name: name.trim(), tags: [] };
     onChange([...tables, table]);
     onTableId(table.id);
   };
 
-  const removeTable = (id: string) => {
+  const removeTable = async (id: string) => {
     const table = tables.find(t => t.id === id);
     if (!table) return;
     if (table.isDefault) {
-      window.alert(t.defaultTableKept);
+      void appAlert(t.defaultTableKept);
       return;
     }
     if (table.tags.length > 0
-      && !window.confirm(`"${table.name}" — ${table.tags.length} — ${t.deleteTableAsk}`)) {
+      && !await appConfirm(`"${table.name}" — ${table.tags.length} — ${t.deleteTableAsk}`, { danger: true })) {
       return;
     }
     onChange(tables.filter(t => t.id !== id));

@@ -42,6 +42,7 @@ import { briefing } from '../../utils/plc/instructions';
 import { blockToScl } from '../../utils/plc/sclExport';
 import { SimorghMark } from '../shared/SimorghMark';
 import { Lang, Strings } from './lang';
+import { appAlert } from '../shared/AppDialog';
 
 interface Props {
   project: PlcProject;
@@ -199,9 +200,9 @@ export const PlcAssistant: React.FC<Props> = ({
     });
     try {
       await navigator.clipboard.writeText(text);
-      window.alert(t.copyContextDone);
+      void appAlert(t.copyContextDone);
     } catch {
-      window.alert('The clipboard could not be written to. Use "Export SCL" on the toolbar '
+      void appAlert('The clipboard could not be written to. Use "Export SCL" on the toolbar '
         + 'instead.');
     }
   };

@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { PlusIcon, UploadIcon, MoveIcon, Trash2Icon, ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
 import { DeviceItem, DeviceRow } from '../../types/project';
 import * as XLSX from 'xlsx-js-style';
+import { appAlert } from '../shared/AppDialog';
 
 interface DeviceTableProps {
   devices: DeviceItem[];
@@ -27,7 +28,7 @@ export const DeviceTable: React.FC<DeviceTableProps> = ({ devices, onDevicesUpda
 
   const handleMoveRows = () => {
     const targetRow = parseInt(moveToRowNumber);
-    if (isNaN(targetRow) || targetRow < 1) { alert('Please enter a valid row number'); return; }
+    if (isNaN(targetRow) || targetRow < 1) { void appAlert('Please enter a valid row number'); return; }
     const newDevices = [...devices];
     const selectedDevices = newDevices.filter(d => selectedRows.has(d.id));
     const unselectedDevices = newDevices.filter(d => !selectedRows.has(d.id));
@@ -102,10 +103,10 @@ export const DeviceTable: React.FC<DeviceTableProps> = ({ devices, onDevicesUpda
           selectedParts: []
         }));
         onDevicesUpdate([...devices, ...importedDevices]);
-        alert(`Successfully imported ${importedDevices.length} devices`);
+        void appAlert(`Successfully imported ${importedDevices.length} devices`);
       } catch (error) {
         console.error('Error importing Excel:', error);
-        alert('Error importing Excel file. Please check the format.');
+        void appAlert('Error importing Excel file. Please check the format.');
       }
     };
     reader.readAsArrayBuffer(file);

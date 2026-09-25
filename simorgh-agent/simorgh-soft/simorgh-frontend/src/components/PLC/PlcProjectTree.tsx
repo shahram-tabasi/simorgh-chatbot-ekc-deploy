@@ -30,6 +30,7 @@ import {
 } from '../../utils/plc/model';
 import { Problem } from '../../utils/plc/analyze';
 import { Strings } from './lang';
+import { appAlert, appConfirm, appPrompt } from '../shared/AppDialog';
 
 export type TreeSelection =
   | { what: 'block'; id: string }
@@ -115,15 +116,15 @@ export const PlcProjectTree: React.FC<Props> = ({
 
   // ── Things done to a block ────────────────────────────────────────────────
 
-  const rename = (block: PlcBlock) => {
-    const next = window.prompt(t.renameAsk, block.name);
+  const rename = async (block: PlcBlock) => {
+    const next = await appPrompt(t.renameAsk, block.name);
     if (!next?.trim() || next.trim() === block.name) return;
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(next.trim())) {
-      window.alert(t.renameBadName);
+      void appAlert(t.renameBadName);
       return;
     }
     if (project.blocks.some(b => b.id !== block.id && b.name.toLowerCase() === next.trim().toLowerCase())) {
-      window.alert(t.renameTaken);
+      void appAlert(t.renameTaken);
       return;
     }
     // Every call of it, renamed with it. A rename that leaves ten calls
@@ -166,7 +167,7 @@ export const PlcProjectTree: React.FC<Props> = ({
     onSelect({ what: 'block', id: copy.id });
   };
 
-  const remove = (block: PlcBlock) => {
+  const remove = async (block: PlcBlock) => {
     const instances = project.blocks.filter(b => b.instanceOf === block.id);
     const callers = project.blocks.filter(b =>
       b.id !== block.id
@@ -184,10 +185,11 @@ export const PlcProjectTree: React.FC<Props> = ({
         + `${callers.map(b => b.name).join(', ')}`);
     }
 
-    const ok = window.confirm(
+    const ok = await appConfirm(
       `${t.deleteAsk} ${block.kind} "${block.name}"\n\n`
       + (warnings.length > 0 ? `${warnings.join('\n')}\n\n` : '')
       + t.deleteCannotUndo,
+      { danger: true },
     );
     if (!ok) return;
     onChange({ ...project, blocks: project.blocks.filter(b => b.id !== block.id) });

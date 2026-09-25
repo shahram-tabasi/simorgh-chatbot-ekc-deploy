@@ -3,6 +3,7 @@ import {
   XIcon, DownloadIcon, MessageSquareIcon, TrashIcon, HighlighterIcon,
 } from 'lucide-react';
 import { DocumentComment, DocumentHighlight, ProjectDocument, documentsApi } from '../../services/documentsApi';
+import { appAlert } from '../shared/AppDialog';
 
 // Opens one uploaded document and carries comments (and, for images, click-
 // drag highlights) on it.
@@ -55,7 +56,7 @@ export const DocumentViewer: React.FC<Props> = ({ document: doc, onClose, onChan
       const updated = { ...doc, comments: next.comments ?? comments, highlights: next.highlights ?? highlights };
       onChanged?.(updated);
     } catch (err) {
-      alert(`Could not save: ${(err as Error).message}`);
+      void appAlert(`Could not save: ${(err as Error).message}`);
     }
   };
 

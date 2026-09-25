@@ -15,6 +15,7 @@ import { History, emptyHistory, record, undo, redo } from '../../utils/tableHist
 import { templateMeta } from '../../utils/templateMeta';
 import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, LAYOUT_OF, emptyTiers } from '../../utils/tiers';
 import { saveExcelHandle, loadExcelHandle, mayRead } from '../../utils/fileHandleStore';
+import { appAlert, appConfirm } from '../shared/AppDialog';
 
 /** The spreadsheet one switchgear was last filled from. */
 interface ExcelMemory {
@@ -1221,14 +1222,14 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
   /** The selected rows, gone — asked for first, because it cannot be seen
    *  afterwards that they were ever there. Ctrl+Z brings them back. */
-  const handleDeleteRows = () => {
+  const handleDeleteRows = async () => {
     const chosen = rows.filter(r => selectedRows.has(r.id));
     if (chosen.length === 0) return;
     const what = chosen.length === 1
       ? `row ${rows.findIndex(r => r.id === chosen[0].id) + 1}`
       + (chosen[0].feederNo ? ` (feeder ${chosen[0].feederNo})` : '')
       : `${chosen.length} rows`;
-    if (!window.confirm(`Delete ${what}?\n\nCtrl+Z puts them back.`)) return;
+    if (!await appConfirm(`Delete ${what}?\n\nCtrl+Z puts them back.`, { danger: true, confirmLabel: 'Delete' })) return;
     setRows(prev => renumber(prev.filter(r => !selectedRows.has(r.id))));
     setSelectedRows(new Set());
     handleCloseContextMenu();
@@ -1263,7 +1264,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const handleMoveToRow = () => {
     const targetRowNum = parseInt(moveToRow);
     if (!targetRowNum || targetRowNum < 1 || targetRowNum > rows.length) {
-      alert('Invalid row number');
+      void appAlert('Invalid row number');
       return;
     }
 
@@ -1305,7 +1306,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     }
 
     if (templateType && templateType !== selectedEquipment.type) {
-      alert(`Cannot add ${templateType} template to ${selectedEquipment.type} equipment!`);
+      void appAlert(`Cannot add ${templateType} template to ${selectedEquipment.type} equipment!`);
       return;
     }
 
@@ -1330,7 +1331,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     }
 
     if (templateType && templateType !== selectedEquipment.type) {
-      alert(`Cannot add ${templateType} template to ${selectedEquipment.type} equipment!`);
+      void appAlert(`Cannot add ${templateType} template to ${selectedEquipment.type} equipment!`);
       return;
     }
 
@@ -1355,7 +1356,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
   const handleAddRow = () => {
     if (!selectedEquipment) {
-      alert('Please select an equipment first!');
+      void appAlert('Please select an equipment first!');
       return;
     }
 
@@ -1460,7 +1461,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
   const handleImportSimaris = () => {
     if (!selectedEquipment) {
-      alert('Please select an equipment first!');
+      void appAlert('Please select an equipment first!');
       return;
     }
     simarisInputRef.current?.click();
@@ -1482,7 +1483,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         });
         const parsed = parseSimarisRows(grid as string[][]);
         if (parsed.feeders.length === 0) {
-          alert(
+          void appAlert(
             'No feeders found in that file.\n\n' +
             'A SIMARIS feeder list needs the columns "Feeder name", "Cubicle name" ' +
             'and "Location". Rows without a feeder name (SPACE, empty compartments) ' +
@@ -1498,7 +1499,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         });
       } catch (error) {
         console.error('SIMARIS import error:', error);
-        alert('Could not read that file. It should be the SIMARIS feeder-list export (.xlsx or .csv).');
+        void appAlert('Could not read that file. It should be the SIMARIS feeder-list export (.xlsx or .csv).');
       }
     };
     reader.readAsArrayBuffer(file);
@@ -1517,7 +1518,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
   const handleImportExcel = async () => {
     if (!selectedEquipment) {
-      alert('Please select an equipment first!');
+      void appAlert('Please select an equipment first!');
       return;
     }
     // Ask for a handle first: it costs the same click and buys Update.
@@ -1617,7 +1618,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         });
 
         if (grid.length < 2) {
-          alert('That file has no rows under its header.');
+          void appAlert('That file has no rows under its header.');
           return;
         }
 
@@ -1627,7 +1628,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           readFills(worksheet, grid.length, width),
         );
         if (plan.matchedColumns.length === 0) {
-          alert(
+          void appAlert(
             'None of the columns in that file match this table.\n\n'
             + `It has: ${plan.unknownColumns.slice(0, 8).join(', ')}\n`
             + `This table expects: ${activeColumns.filter(c => !c.isTemplate)
@@ -1643,7 +1644,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         setImportPlan({ plan, fileName: file.name, quiet });
       } catch (error) {
         console.error('Import error:', error);
-        alert('Could not read that file. It should be an Excel (.xlsx/.xls) or CSV file '
+        void appAlert('Could not read that file. It should be an Excel (.xlsx/.xls) or CSV file '
             + 'with a header row — the one Export Excel writes is the shape this expects.');
       }
     };
@@ -1694,7 +1695,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   // software (drag-and-drop or right-click), never via Excel.
   const handleExportExcel = async () => {
     if (!selectedEquipment) {
-      alert('Please select an equipment first!');
+      void appAlert('Please select an equipment first!');
       return;
     }
     const fillableColumns = activeColumns.filter(col => !col.isTemplate);

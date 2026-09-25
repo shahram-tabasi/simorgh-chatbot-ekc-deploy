@@ -8,6 +8,7 @@ import {
   DOCUMENT_CATEGORIES, DocumentCategory, ProjectDocument, documentsApi,
 } from '../../services/documentsApi';
 import { DocumentViewer } from './DocumentViewer';
+import { appConfirm } from '../shared/AppDialog';
 
 // The Documents tab: every file this project needs, filed under one of the
 // categories the office already uses (SPEC, SLD-OLD, Site Layout, Logic,
@@ -79,7 +80,7 @@ export const DocumentsTab: React.FC = () => {
 
   const handleDelete = async (doc: ProjectDocument, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm(`Delete "${doc.filename}"? This cannot be undone.`)) return;
+    if (!await appConfirm(`Delete "${doc.filename}"? This cannot be undone.`, { danger: true, confirmLabel: 'Delete' })) return;
     try {
       await documentsApi.remove(doc._id);
       setDocuments(prev => prev.filter(d => d._id !== doc._id));

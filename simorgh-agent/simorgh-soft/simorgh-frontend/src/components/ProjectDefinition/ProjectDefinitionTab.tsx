@@ -16,6 +16,7 @@ import {
 } from '../../utils/deviceProperties';
 import { readSpecUpdateFromTpms, TpmsSpecUpdate } from '../../services/tpmsSync';
 import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, emptyTiers } from '../../utils/tiers';
+import { appConfirm } from '../shared/AppDialog';
 
 // ──────────────────────────────────────────────────────────────
 // Stable helper components — MUST live outside any other component
@@ -569,12 +570,13 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
   // Paste a copied specification over an existing device — all of it, or one
   // tab. What is overwritten is said first: a paste has no undo here.
-  const pasteSpecInto = (target: DeviceLibraryItem, group?: SpecGroupId) => {
+  const pasteSpecInto = async (target: DeviceLibraryItem, group?: SpecGroupId) => {
     if (!copiedDevice) return;
     const what = group
       ? `the "${DEVICE_PROP_GROUPS.find(g => g.id === group)?.label}" tab`
       : 'the whole specification';
-    if (!window.confirm(`Replace ${what} of ${target.name} with ${copiedDevice.name}'s?`)) return;
+    if (!await appConfirm(`Replace ${what} of ${target.name} with ${copiedDevice.name}'s?`,
+      { title: 'Paste specification', confirmLabel: 'Replace' })) return;
     updateLib({ ...target, properties: pasteSpec(target.properties ?? {}, copiedDevice.properties ?? {}, group) });
   };
 

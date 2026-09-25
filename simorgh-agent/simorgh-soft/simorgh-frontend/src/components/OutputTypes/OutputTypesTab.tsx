@@ -18,6 +18,7 @@ import { RevisionDiff, diffProjectSnapshots, buildDiffRows } from '../../utils/r
 // Device Library breakdown and these sheets always read the same names.
 import { DEVICE_PROP_LABELS } from '../../utils/deviceProperties';
 import { TIERS, TIER_PILL, LAYOUT_OF, type Tier } from '../../utils/tiers';
+import { appAlert } from '../shared/AppDialog';
 
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ function exportBpmsExcel(
 ) {
   const sheets = buildBpmsSheets(data, { revisionNumber, tier, equipmentId });
   if (sheets.length === 0) {
-    alert(`No ${tier} switchgear to report on — pick one first.`);
+    void appAlert(`No ${tier} switchgear to report on — pick one first.`);
     return;
   }
   const wb = XLSX.utils.book_new();

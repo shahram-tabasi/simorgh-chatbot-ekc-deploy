@@ -10,6 +10,7 @@ import { EplanSymbolMap } from '../../utils/eplanSingleLine';
 import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import { templateMeta } from '../../utils/templateMeta';
 import { type Tier, LAYOUT_OF } from '../../utils/tiers';
+import { appConfirm } from '../shared/AppDialog';
 
 // Reserved keys inside template.properties used to carry per-template metadata.
 // These keys are NOT real property rows; the renderer skips them.
@@ -780,23 +781,25 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     });
   };
 
-  const pasteSection = (slot: string) => {
+  const pasteSection = async (slot: string) => {
     if (!clip) return;
     const current = properties[slot]?.parts ?? [];
-    if (current.length > 0 && !window.confirm(
+    if (current.length > 0 && !await appConfirm(
       `Replace the ${current.length} part(s) in ${getDisplayName(slot)} with the ` +
-      `${clip.parts.length} part(s) of ${clip.label} from ${clip.templateName}?`)) return;
+      `${clip.parts.length} part(s) of ${clip.label} from ${clip.templateName}?`,
+      { title: 'Paste section', confirmLabel: 'Replace' })) return;
     const parts: PartInfo[] = JSON.parse(JSON.stringify(clip.parts));
     const updated = { ...properties, [slot]: { parts } };
     setProperties(updated);
     updateTemplate(template.id, updated as any);
   };
 
-  const toggleLock = (rawName: string) => {
+  const toggleLock = async (rawName: string) => {
     if (lockedRows.includes(rawName)) {
       // Unlocking — show the warning required by spec.
-      const ok = window.confirm(
-        '⚠ Warning: this equipment will not be displayed in the single-line diagrams below.\n\nUnlock anyway?'
+      const ok = await appConfirm(
+        'This equipment will not be displayed in the single-line diagrams below.\n\nUnlock anyway?',
+        { title: 'Unlock row', confirmLabel: 'Unlock' },
       );
       if (!ok) return;
       writeMetadata(displayNames, lockedRows.filter(r => r !== rawName));
@@ -879,14 +882,15 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     });
   };
 
-  const handleRemovePart = (propertyName: string, partIndex: number) => {
+  const handleRemovePart = async (propertyName: string, partIndex: number) => {
     const currentProperty = properties[propertyName];
     if (!currentProperty) return;
     // Asked first: there is no undo here, and the button sits one column from
     // the ones clicked all day.
     const part = currentProperty.parts[partIndex];
-    if (!window.confirm(
-      `Delete ${part?.partNumber || 'this part'} from ${getDisplayName(propertyName)}?`)) return;
+    if (!await appConfirm(
+      `Delete ${part?.partNumber || 'this part'} from ${getDisplayName(propertyName)}?`,
+      { danger: true, confirmLabel: 'Delete' })) return;
 
     const updatedProperty = {
       parts: currentProperty.parts.filter((_, index) => index !== partIndex)

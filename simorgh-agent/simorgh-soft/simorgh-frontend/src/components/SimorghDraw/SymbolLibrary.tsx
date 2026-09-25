@@ -36,6 +36,7 @@ import { useProject } from '../../context/ProjectContext';
 import { Strings, dirOf, Lang } from './lang';
 import { useOverlayHost } from './overlayHost';
 import { ThemeId } from './theme';
+import { appConfirm } from '../shared/AppDialog';
 
 // The symbol library, and everything that can come into a drawing through it.
 //
@@ -898,7 +899,7 @@ export const SymbolLibrary: React.FC<Props> = ({
                         <button
                           onClick={async () => {
                             const own = officeSymbols().find(o => `office:${o.id}` === chosen.key);
-                            if (!own || !window.confirm(t.libDeleteAsk(own.name))) return;
+                            if (!own || !await appConfirm(t.libDeleteAsk(own.name), { danger: true })) return;
                             try {
                               await symbolLibraryService.remove(own.id);
                               forgetOfficeSymbol(own.id);

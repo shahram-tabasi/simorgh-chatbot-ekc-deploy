@@ -39,6 +39,7 @@ import {
   DrawingGroups, DrawingPage, newPage, pageKey, readGroups, readPages,
 } from '../../utils/cad/pages';
 import { TIERS } from '../../utils/tiers';
+import { appAlert } from '../shared/AppDialog';
 
 // The Simorgh Draw tab: the drawings-and-lists outputs that come off the
 // switchgear itself — the single line, the panel layout, and the mechanical
@@ -78,7 +79,7 @@ function exportSingleLineDxf(
 
 function openPrintable(html: string, what: string) {
   const w = window.open('', '_blank');
-  if (!w) { alert(`Allow pop-ups to open the ${what}.`); return; }
+  if (!w) { void appAlert(`Allow pop-ups to open the ${what}.`); return; }
   w.document.write(html);
   w.document.close();
 }
@@ -110,7 +111,7 @@ function exportLayoutExcel(data: ProjectData, equipments: Equipment[]) {
 function exportMechanicalExcel(data: ProjectData, equipments: Equipment[]) {
   const rows = buildMechanicalRows(data, equipments);
   if (rows.length === 0) {
-    alert('Nothing to list yet — these switchgears have no panel specification in Device Library.');
+    void appAlert('Nothing to list yet — these switchgears have no panel specification in Device Library.');
     return;
   }
   const wb = XLSX.utils.book_new();

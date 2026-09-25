@@ -39,6 +39,7 @@ import {
   insertElement, moveElement, moveOutput, patchElement, patchOutput, patchPin,
   placeInstruction, positions, removeBranch, removeElement, removeOutput, samePos,
 } from '../../utils/plc/ladderEdit';
+import { appConfirm } from '../shared/AppDialog';
 
 // ── Layout numbers ──────────────────────────────────────────────────────────
 // All of them in pixels, all of them here. A magic number in the middle of a
@@ -410,10 +411,10 @@ export const LadderEditor: React.FC<Props> = ({
     onChange(renumber(next));
   };
 
-  const deleteNetwork = (id: string) => {
+  const deleteNetwork = async (id: string) => {
     const net = networks.find(n => n.id === id);
     const filled = net && (net.rung.groups.length > 0 || net.rung.outputs.length > 0);
-    if (filled && !window.confirm(`${t.deleteNetwork} ${net.rung.number}?\n${t.deleteNetworkAsk}`)) {
+    if (filled && !await appConfirm(`${t.deleteNetwork} ${net.rung.number}?\n${t.deleteNetworkAsk}`, { danger: true })) {
       return;
     }
     onChange(renumber(networks.filter(n => n.id !== id)));

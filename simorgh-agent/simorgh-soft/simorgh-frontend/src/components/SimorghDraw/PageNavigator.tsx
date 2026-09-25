@@ -16,6 +16,7 @@ import { SYMBOL_LIBRARIES, libraryOf } from '../../utils/cad/symbolLibraries';
 import { IoListImport } from './IoListImport';
 import { DrawingReportsModal } from './DrawingReportsModal';
 import { ContextMenu, Field, MenuItem, PropertiesModal } from './PageMenu';
+import { appConfirm } from '../shared/AppDialog';
 
 // The page tree.
 //
@@ -166,12 +167,12 @@ export const PageNavigator: React.FC<Props> = ({
     setInto(cur => (same(cur, path) ? next : cur));
   };
 
-  const dropFolder = (path: string[]) => {
+  const dropFolder = async (path: string[]) => {
     const count = countPages(under(tree, path));
     const warn = count
       ? `Delete ${pathLabel(path)} and the ${count} page${count === 1 ? '' : 's'} in it?`
       : `Delete ${pathLabel(path)}?`;
-    if (!window.confirm(warn)) return;
+    if (!await appConfirm(warn, { danger: true, confirmLabel: 'Delete' })) return;
     const gone = removeGroup(pages, groups, path);
     const next = { ...(edits ?? {}) };
     for (const p of gone.removed) delete next[pageKey(p.id)];
@@ -218,12 +219,12 @@ export const PageNavigator: React.FC<Props> = ({
     put(list, next, groups);
   };
 
-  const remove = (page: DrawingPage) => {
+  const remove = async (page: DrawingPage) => {
     const drawn = Boolean(edits?.[pageKey(page.id)]?.shapes?.length);
     const warn = drawn
       ? `Delete ${page.name}? Everything drawn on it goes with it.`
       : `Delete ${page.name}?`;
-    if (!window.confirm(warn)) return;
+    if (!await appConfirm(warn, { danger: true, confirmLabel: 'Delete' })) return;
     const next = { ...(edits ?? {}) };
     delete next[pageKey(page.id)];
     put(pages.filter(p => p.id !== page.id), next,

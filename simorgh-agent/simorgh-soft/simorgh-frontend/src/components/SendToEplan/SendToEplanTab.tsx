@@ -15,6 +15,7 @@ import { catalogFor, estimatesFor } from '../../utils/mechanical';
 import { buildMechanicalReport, mechanicalReportName } from '../../utils/mechanicalReport';
 import { downloadText, fileSafe } from '../../utils/download';
 import { CreatingProjectSlideshow } from './CreatingProjectSlideshow';
+import { appAlert, appChoose } from '../shared/AppDialog';
 
 // The "Send to EPLAN" tab — pulled out of Simorgh Draw so sending a project
 // to EPLAN is its own place, not tucked inside the drawing preview. Mirrors
@@ -425,17 +426,20 @@ export const SendToEplanTab: React.FC = () => {
         if (last && last.revName.trim() === revNameNow) {
           const when = `${storedEquipment.name} was already sent to EPLAN at REV ${revision}`
             + `${revNameNow ? ` / ${revNameNow}` : ''} on ${new Date(last.at).toLocaleString()}.\n\n`;
-          if (window.confirm(when
-            + 'OK — delete that project and draw it again from the current data. Rows added or '
-            + 'removed since, changed templates and specifications all come through.\n\n'
-            + 'Cancel — other choices.')) {
+          const how = await appChoose(
+            `${when}EPLAN will not create the same project twice. What should this send do?`,
+            [
+              { id: 'recreate', primary: true, label: 'Delete and draw again',
+                note: 'Rows added or removed since, changed templates and specifications all come through.' },
+              { id: 'update', label: 'Update the existing project',
+                note: 'Only its tables and switchboard values are rewritten — a new row does not get a page, and the outline is not redrawn.' },
+            ],
+            { title: 'Already sent to EPLAN', cancelLabel: 'Do not send' },
+          );
+          if (how === 'recreate') {
             setRecreateProject(true);
             sendOptions = { ...options, recreateProject: true };
-          } else if (window.confirm(
-            'Update the existing project instead?\n\n'
-            + 'Only its tables and switchboard values are rewritten — a new row does not get a '
-            + 'page, and the outline is not redrawn.\n\n'
-            + 'Cancel — do not send.')) {
+          } else if (how === 'update') {
             setUpdateExisting(true);
             sendOptions = { ...options, updateExisting: true };
           } else {
@@ -534,7 +538,7 @@ export const SendToEplanTab: React.FC = () => {
     if (!equipment) return;
     const cells = equipment.devices ?? [];
     if (cells.length === 0) {
-      alert('Nothing to report yet — this switchgear has no feeders in Device Selection.');
+      void appAlert('Nothing to report yet — this switchgear has no feeders in Device Selection.');
       return;
     }
     const revision = currentRevision?.revisionNumber ? String(currentRevision.revisionNumber) : '';

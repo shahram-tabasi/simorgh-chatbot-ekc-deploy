@@ -51,6 +51,7 @@ import { blockToScl, projectToScl, tagsToCsv } from '../../utils/plc/sclExport';
 import { LadderCursor, placeInstruction } from '../../utils/plc/ladderEdit';
 import { downloadText, fileSafe } from '../../utils/download';
 import { LANGS, Lang, STRINGS, dirOf, loadLang, saveLang } from './lang';
+import { appConfirm } from '../shared/AppDialog';
 
 /**
  * A pane the engineer can drag bigger.
@@ -463,12 +464,12 @@ export const PlcTab: React.FC = () => {
                   value={block.language}
                   disabled={readOnly}
                   title={t.languageOf}
-                  onChange={e => {
+                  onChange={async e => {
                     const next = e.target.value as PlcBlock['language'];
                     const wasGraphical = isGraphical(block.language);
                     const willBeGraphical = isGraphical(next);
                     if (wasGraphical !== willBeGraphical
-                      && !window.confirm(
+                      && !await appConfirm(
                         `"${block.name}": ${block.language} → ${next}\n\n${t.changeLanguageAsk}`)) {
                       return;
                     }

@@ -3,6 +3,7 @@ import { XIcon, DownloadIcon, RotateCcwIcon, HistoryIcon, AlertTriangleIcon } fr
 import { ProjectData } from '../../types/project';
 import { ProjectVersion, VersionSwitchgear, projectService } from '../../services/projectService';
 import { downloadText, fileSafe } from '../../utils/download';
+import { appConfirm } from './AppDialog';
 
 // Every version of this project the server kept, and the two ways back.
 //
@@ -66,20 +67,20 @@ export const ProjectHistoryModal: React.FC<Props> = ({
     }
   };
 
-  const restoreWhole = (v: ProjectVersion) => {
-    if (!window.confirm(
+  const restoreWhole = async (v: ProjectVersion) => {
+    if (!await appConfirm(
       `Put the whole project back as it was at ${new Date(v.savedAt).toLocaleString()}?\n\n`
       + 'Everything since then is replaced. The project as it is now is written to a '
-      + 'file first, so this can be undone.')) return;
+      + 'file first, so this can be undone.', { title: 'Restore the project', confirmLabel: 'Restore' })) return;
     withVersion(v, project => { onRestoreProject(project); onClose(); });
   };
 
-  const restoreOne = (v: ProjectVersion, sw: VersionSwitchgear) => {
-    if (!window.confirm(
+  const restoreOne = async (v: ProjectVersion, sw: VersionSwitchgear) => {
+    if (!await appConfirm(
       `Put ${sw.name || 'this switchgear'} back as it was at `
       + `${new Date(v.savedAt).toLocaleString()} — ${sw.rows} row(s)?\n\n`
       + 'Nothing else in the project is touched, and the project as it is now is '
-      + 'written to a file first.')) return;
+      + 'written to a file first.', { title: 'Restore a switchgear', confirmLabel: 'Restore' })) return;
     withVersion(v, project => { onRestoreSwitchgear(project, sw.id); onClose(); });
   };
 

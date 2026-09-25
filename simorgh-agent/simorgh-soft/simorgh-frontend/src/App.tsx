@@ -40,6 +40,7 @@ import { DesktopInstallerInfo } from './services/projectService';
 import { Revision } from './types/project';
 import { useSymbolLibrary } from './utils/cad/useSymbols';
 import { TIERS } from './utils/tiers';
+import { appAlert, appConfirm } from './components/shared/AppDialog';
 
 // The build shown in Help → About.
 const APP_VERSION = '1.0.0';
@@ -47,19 +48,20 @@ const APP_VERSION = '1.0.0';
 /** Read a project back out of a .json file this application wrote. */
 function readProjectFile(file: File, onLoad: (project: any) => void): void {
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const data = JSON.parse(String(reader.result));
       if (!data || typeof data !== 'object' || !('projectName' in data)) {
-        alert('That file is not a project saved by this application.');
+        void appAlert('That file is not a project saved by this application.');
         return;
       }
-      if (!window.confirm(
+      if (!(await appConfirm(
         `Replace what is on screen with "${data.projectName}" from this file?\n\n`
-        + 'The project as it is now is written to a file first, so this can be undone.')) return;
+        + 'The project as it is now is written to a file first, so this can be undone.',
+        { title: 'Restore from file', confirmLabel: 'Replace' }))) return;
       onLoad(data);
     } catch {
-      alert('That file could not be read as a project.');
+      void appAlert('That file could not be read as a project.');
     }
   };
   reader.readAsText(file);
@@ -314,13 +316,13 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
   const handleSave = async () => {
     try {
       await saveProject();
-      alert('✅ Project saved successfully!');
+      void appAlert('✅ Project saved successfully!');
       setActiveMenu(null);
     } catch (error) {
       // A locked revision raises its own dialog from the context — don't
       // stack a second alert on top of it.
       if (isCurrentRevisionEditable !== false) {
-        alert('❌ ' + ((error as Error)?.message || 'Error saving project'));
+        void appAlert('❌ ' + ((error as Error)?.message || 'Error saving project'));
       }
     }
   };
@@ -359,7 +361,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
     setActiveMenu(null);
     const field = lastFieldRef.current;
     if (!field || !field.isConnected) {
-      alert('Click inside a field first, then use Edit → ' + action + '.');
+      void appAlert('Click inside a field first, then use Edit → ' + action + '.');
       return;
     }
     field.focus();
@@ -377,7 +379,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
         writeField(field, field.value.slice(0, start) + field.value.slice(end), start);
       }
     } catch {
-      alert('The browser would not give the app the clipboard — use Ctrl+X / Ctrl+C / Ctrl+V instead.');
+      void appAlert('The browser would not give the app the clipboard — use Ctrl+X / Ctrl+C / Ctrl+V instead.');
     }
   };
 
@@ -1069,7 +1071,7 @@ const MainApp: React.FC = () => {
       setNewRevisionDescription('');
     } catch (err) {
       console.error('Failed to create revision:', err);
-      alert('Failed to create revision: ' + (err as Error).message);
+      void appAlert('Failed to create revision: ' + (err as Error).message);
     } finally {
       setCreatingRevision(false);
     }
@@ -1088,7 +1090,7 @@ const MainApp: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to switch revision:', err);
-      alert('Failed to switch revision: ' + (err as Error).message);
+      void appAlert('Failed to switch revision: ' + (err as Error).message);
     } finally {
       setSwitchingRevision(false);
     }
@@ -1096,7 +1098,7 @@ const MainApp: React.FC = () => {
 
   const handleDeleteRevisionClick = (revision: Revision) => {
     if (revisions.length <= 1) {
-      alert('⚠️ Cannot delete the only remaining revision. A project must always have at least one revision.');
+      void appAlert('⚠️ Cannot delete the only remaining revision. A project must always have at least one revision.');
       return;
     }
     setRevisionToDelete(revision);
@@ -1111,7 +1113,7 @@ const MainApp: React.FC = () => {
       setRevisionToDelete(null);
       setDeletePassword('');
     } catch (err) {
-      alert('❌ ' + (err as Error).message);
+      void appAlert('❌ ' + (err as Error).message);
     } finally {
       setDeletingRevision(false);
     }

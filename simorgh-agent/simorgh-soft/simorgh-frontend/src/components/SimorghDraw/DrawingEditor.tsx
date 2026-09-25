@@ -68,6 +68,7 @@ import {
 } from '../../utils/cad/symbolSource';
 import { ThemeId, loadTheme, saveTheme } from './theme';
 import { DRAWS, DrawingCanvas, PICKS, Tool, Viewport, fitView, viewOn } from './DrawingCanvas';
+import { appConfirm, appPrompt } from '../shared/AppDialog';
 
 // Simorgh Draw — the drawing, open for editing.
 //
@@ -1319,8 +1320,8 @@ export const DrawingEditor: React.FC<Props> = ({
   const dragTree = useMemo(() => dragPanel(setTreeAt), [dragPanel]);
 
   /** The text tool has a place; the words come from here. */
-  const placeText = useCallback((at: { x: number; y: number }) => {
-    const value = window.prompt(T.promptText);
+  const placeText = useCallback(async (at: { x: number; y: number }) => {
+    const value = await appPrompt(T.promptText);
     if (value == null || value.trim() === '') return;
     draw([{
       t: 'text', x: at.x, y: at.y, s: value, size: textSize,
@@ -1336,11 +1337,11 @@ export const DrawingEditor: React.FC<Props> = ({
    * typed over it in one go. Naming is not optional: an unnamed point is a
    * circle, and a circle connects nothing.
    */
-  const placePin = useCallback((at: { x: number; y: number }) => {
+  const placePin = useCallback(async (at: { x: number; y: number }) => {
     const used = new Set(shapes.map(s => s.pin).filter(Boolean) as string[]);
     let n = 1;
     while (used.has(String(n))) n += 1;
-    const value = window.prompt(T.promptPin, String(n));
+    const value = await appPrompt(T.promptPin, String(n));
     if (value == null) return;
     const name = value.trim();
     if (!name) { setNotice(T.promptPinName); return; }
@@ -1403,8 +1404,8 @@ export const DrawingEditor: React.FC<Props> = ({
 
   const rotateBy = (deg: number) => transform((cx, cy) => rotation(cx, cy, deg));
 
-  const rotateFree = () => {
-    const answer = window.prompt(T.promptRotate, '90');
+  const rotateFree = async () => {
+    const answer = await appPrompt(T.promptRotate, '90');
     const deg = Number(answer);
     if (answer == null || !Number.isFinite(deg) || deg === 0) return;
     // A drawing office says a turn anticlockwise; sheet space counts the other
@@ -1412,8 +1413,8 @@ export const DrawingEditor: React.FC<Props> = ({
     rotateBy(-deg);
   };
 
-  const scaleFree = () => {
-    const answer = window.prompt(T.promptScale, '2');
+  const scaleFree = async () => {
+    const answer = await appPrompt(T.promptScale, '2');
     const k = Number(answer);
     if (answer == null || !Number.isFinite(k) || k <= 0 || k === 1) return;
     transform((cx, cy) => scaling(cx, cy, k));
@@ -1480,7 +1481,7 @@ export const DrawingEditor: React.FC<Props> = ({
     pinX: d.pinX,
   });
 
-  const applyRedrawnSymbol = (
+  const applyRedrawnSymbol = async (
     symbolId: SymbolId,
     before: SymbolArtOverride | undefined,
     after: SymbolArtOverride | undefined,
@@ -1514,7 +1515,7 @@ export const DrawingEditor: React.FC<Props> = ({
       return;
     }
     const pageCount = counts.filter(c => c > 0).length;
-    if (!window.confirm(T.symbolRedrawnAsk(title, places, pageCount))) {
+    if (!await appConfirm(T.symbolRedrawnAsk(title, places, pageCount))) {
       setNotice(T.symbolRedrawnKept(title));
       return;
     }
@@ -1671,7 +1672,7 @@ export const DrawingEditor: React.FC<Props> = ({
    * the time, which is the moment both versions are still known, and this is
    * for catching up everything that was not there for it.
    */
-  const redrawAllSymbols = () => {
+  const redrawAllSymbols = async () => {
     const ids = redrawnSymbolIds();
     if (ids.length === 0) { setNotice(T.redrawAllNothingRedrawn); return; }
 
@@ -1689,7 +1690,7 @@ export const DrawingEditor: React.FC<Props> = ({
     const places = counts.reduce((n, c) => n + c, 0);
     if (places === 0) { setNotice(T.redrawAllNone); return; }
     const pageCount = counts.filter(c => c > 0).length;
-    if (!window.confirm(T.redrawAllAsk(work.length, places, pageCount))) return;
+    if (!await appConfirm(T.redrawAllAsk(work.length, places, pageCount))) return;
 
     const next: Record<number, Shape[]> = { ...edits };
     const changed = new Set<number>(touched);
@@ -1771,11 +1772,11 @@ export const DrawingEditor: React.FC<Props> = ({
     setNotice(T.pageAdded(made.name));
   };
 
-  const renamePage = () => {
+  const renamePage = async () => {
     if (!pages || !onPages || !page) return;
-    const name = window.prompt(T.pageRenameAsk, page.name);
+    const name = await appPrompt(T.pageRenameAsk, page.name);
     if (name == null) return;
-    const note = window.prompt(T.pageNoteAsk, page.description ?? '');
+    const note = await appPrompt(T.pageNoteAsk, page.description ?? '');
     if (note == null) return;
     onPages(
       pages.map(p => (p.id === page.id
@@ -1799,10 +1800,10 @@ export const DrawingEditor: React.FC<Props> = ({
     setNotice(T.pageAdded(copy.name));
   };
 
-  const deletePage = () => {
+  const deletePage = async () => {
     if (!pages || !onPages || !page) return;
     if (pages.length < 2) { setNotice(T.pageLastOne); return; }
-    if (!window.confirm(T.pageDeleteAsk(page.name))) return;
+    if (!await appConfirm(T.pageDeleteAsk(page.name), { danger: true })) return;
     const next = pendingEdits();
     delete next[pageKey(page.id)];
     onPages(pages.filter(p => p.id !== page.id), next, pageGroups);
@@ -2768,13 +2769,13 @@ export const DrawingEditor: React.FC<Props> = ({
               setPlacing(null);
               setTool('select');
             }}
-            onEditText={i => {
+            onEditText={async i => {
               const current = shapes[i];
               // A connection point carries its name on the pen rather than as
               // words on the sheet, so renaming it is a different edit from
               // retyping a label — the same gesture, a different field.
               if (current.pin && current.t !== 'text') {
-                const value = window.prompt(T.promptPin, current.pin);
+                const value = await appPrompt(T.promptPin, current.pin);
                 if (value == null) return;
                 const name = value.trim();
                 if (!name) { setNotice(T.promptPinName); return; }
@@ -2784,7 +2785,7 @@ export const DrawingEditor: React.FC<Props> = ({
                 return;
               }
               if (current.t !== 'text') return;
-              const value = window.prompt(T.promptText, current.s);
+              const value = await appPrompt(T.promptText, current.s);
               if (value !== null && value !== current.s) commit(setText(shapes, i, value));
             }}
           />

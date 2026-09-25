@@ -20,6 +20,7 @@ import { DrawingEditor, EditorSheet } from './DrawingEditor';
 import { Strings, dirOf, Lang } from './lang';
 import { useOverlayHost } from './overlayHost';
 import { ThemeId } from './theme';
+import { appConfirm } from '../shared/AppDialog';
 
 // Adding a symbol to the office's library.
 //
@@ -571,10 +572,10 @@ export const SymbolMaker: React.FC<Props> = ({
               {t.libDrawNote}
             </span>
             <button
-              onClick={() => {
+              onClick={async () => {
                 // Leaving without saving loses the drawing, so it is said out
                 // loud rather than found out afterwards.
-                if (!drawn && !window.confirm(t.libDrawLose)) return;
+                if (!drawn && !await appConfirm(t.libDrawLose)) return;
                 setDrawing(false);
               }}
               className="ms-auto flex items-center gap-1.5 px-3 py-1.5 rounded bg-white/15 text-white text-xs font-medium hover:bg-white/25"
