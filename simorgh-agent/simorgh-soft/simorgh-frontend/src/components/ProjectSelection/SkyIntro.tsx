@@ -14,16 +14,19 @@
 // tips that leave the frame fade out rather than stop at a line.
 //
 // Nothing here takes a click. It is all behind or above the dialog with
-// pointer-events off, and "reduce motion" leaves a still sky and the title.
+// pointer-events off.
+//
+// It plays whatever the operating system says about reduced motion. Windows
+// sends that signal whenever "Show animations in Windows" is off — which it
+// is on most servers and remote-desktop sessions, not only for people who
+// asked for it — and honouring it left this screen a still sky with no
+// meteors and no Simorgh, on exactly the machines the office opens it on.
 
 import React, { useEffect, useRef, useState } from 'react';
 
 const BASE = ((import.meta as { env?: Record<string, string> }).env?.BASE_URL ?? '/').replace(/\/+$/, '/');
 const asset = (name: string) => `${BASE}intro/${name}`;
 
-const prefersReducedMotion = () =>
-  typeof window !== 'undefined'
-  && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 // ── Stars and meteors ───────────────────────────────────────────────────────
 
@@ -38,7 +41,7 @@ export const Starfield: React.FC = () => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) return;
-    const still = prefersReducedMotion();
+    const still = false;
 
     let w = 0, h = 0, dpr = 1;
     let stars: Star[] = [];
@@ -228,7 +231,6 @@ const SimorghFlight: React.FC = () => {
   });
 
   useEffect(() => {
-    if (prefersReducedMotion()) { setPhase('gone'); return; }
     // One full beat of the wings where the artwork puts it, then away.
     const t = window.setTimeout(() => setPhase('fly'), 5600);
     return () => window.clearTimeout(t);
@@ -264,14 +266,14 @@ export const SkyTitle: React.FC = () => (
     <style>{`
       /* Everything is sized from one width, so the bird keeps its place over
          the title at any window size: the title is 0.350 of its width tall,
-         the bird is 0.62 of it wide and 0.646 of its own width tall, and it
+         the bird is 0.78 of it wide and 0.646 of its own width tall, and it
          stands with its tail 42% of the way down the title — where it is in
          the office's artwork. The block reserves the room above the title the
          bird needs, so it is never cut off at the top of a short window. */
       .simorgh-title-block {
-        --tw: min(620px, 90vw, 62vh);
+        --tw: min(440px, 80vw, 46vh);
         --th: calc(var(--tw) * 0.3504);
-        --bw: calc(var(--tw) * 0.62);
+        --bw: calc(var(--tw) * 0.78);
         --bh: calc(var(--bw) * 0.6458);
         position: relative;
         width: var(--tw);
@@ -336,9 +338,6 @@ export const SkyTitle: React.FC = () => (
         0%   { transform: translate(0, 0) scale(1) rotate(0deg); opacity: 1; }
         25%  { transform: translate(4vw, -6vh) scale(.92) rotate(-4deg); opacity: 1; }
         100% { transform: translate(62vw, -95vh) scale(.35) rotate(-14deg); opacity: 0; }
-      }
-      @media (prefers-reduced-motion: reduce) {
-        .simorgh-title, .simorgh-title-sheen { animation: none; }
       }
     `}</style>
     <SimorghFlight />
