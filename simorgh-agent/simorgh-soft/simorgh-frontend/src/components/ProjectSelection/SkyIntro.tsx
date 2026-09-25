@@ -222,7 +222,7 @@ export const Starfield: React.FC = () => {
  * The Simorgh, beating its wings over the title for one full cycle of the
  * artwork, then flying up and out of the screen. Gone once it has left.
  */
-const SimorghFlight: React.FC = () => {
+const SimorghFlight: React.FC<{ onLeave: () => void }> = ({ onLeave }) => {
   const [phase, setPhase] = useState<'arrive' | 'fly' | 'gone'>('arrive');
   const [useVideo] = useState(() => {
     if (typeof document === 'undefined') return false;
@@ -231,9 +231,10 @@ const SimorghFlight: React.FC = () => {
   });
 
   useEffect(() => {
-    // One full beat of the wings where the artwork puts it, then away.
-    const t = window.setTimeout(() => setPhase('fly'), 5600);
+    // In place (1.4 s), a beat of the wings, then away.
+    const t = window.setTimeout(() => { setPhase('fly'); onLeave(); }, 2600);
     return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (phase === 'gone') return null;
@@ -261,8 +262,13 @@ const SimorghFlight: React.FC = () => {
 };
 
 /** The title above the dialog, with the Simorgh standing over it. */
-export const SkyTitle: React.FC = () => (
-  <div className="simorgh-title-block">
+export const SkyTitle: React.FC = () => {
+  // Once the bird has taken off, the room held for it above the title closes,
+  // so the title and the dialog under it move up instead of leaving an empty
+  // band of sky that pushes the dialog below the fold.
+  const [flown, setFlown] = useState(false);
+  return (
+  <div className={`simorgh-title-block${flown ? ' simorgh-title-block-flown' : ''}`}>
     <style>{`
       /* Everything is sized from one width, so the bird keeps its place over
          the title at any window size: the title is 0.350 of its width tall,
@@ -278,9 +284,11 @@ export const SkyTitle: React.FC = () => (
         position: relative;
         width: var(--tw);
         padding-top: calc(var(--bh) - var(--th) * 0.42);
+        transition: padding-top 1.4s cubic-bezier(.4,0,.2,1);
         pointer-events: none;
         user-select: none;
       }
+      .simorgh-title-block-flown { padding-top: 0; }
       .simorgh-title {
         position: relative;
         display: block;
@@ -340,10 +348,11 @@ export const SkyTitle: React.FC = () => (
         100% { transform: translate(62vw, -95vh) scale(.35) rotate(-14deg); opacity: 0; }
       }
     `}</style>
-    <SimorghFlight />
+    <SimorghFlight onLeave={() => setFlown(true)} />
     <div style={{ position: 'relative' }}>
       <img className="simorgh-title" src={asset('simorgh-title.webp')} alt="Simorgh Design Suite" draggable={false} />
       <div className="simorgh-title-sheen" />
     </div>
   </div>
-);
+  );
+};

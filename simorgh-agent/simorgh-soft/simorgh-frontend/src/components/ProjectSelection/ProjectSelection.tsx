@@ -335,8 +335,10 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
 
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center overflow-auto p-6"
+      className="fixed inset-0 flex items-center justify-center overflow-y-auto overflow-x-hidden px-6 py-4"
       // Night sky: the stars and the meteors are drawn over this by Starfield.
+      // No sideways scroll: the Simorgh flies out past the right edge, and a
+      // transformed element still counts toward the scroll area.
       style={{ background: 'radial-gradient(1200px 800px at 15% 8%, #0f2a52 0%, #071630 42%, #030814 100%)' }}
     >
       <style>{`
