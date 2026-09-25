@@ -83,6 +83,19 @@ jobs:
           path: simorgh-agent/simorgh-soft/desktop/release/*.exe
           if-no-files-found: error
 
+      # desktop-latest holds one installer: the one built now. The action
+      # below adds files but never removes them, so an older version's .exe
+      # stayed beside the new one — and was the one picked up.
+      - name: Clear the previous build from desktop-latest
+        if: github.event_name != 'workflow_dispatch' || !inputs.make_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for a in $(gh release view desktop-latest --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null); do
+            gh release delete-asset desktop-latest "$a" --repo "$GITHUB_REPOSITORY" -y
+          done
+
       # The newest build, always at the same address, whatever the artifact
       # storage is doing:
       #   .../releases/download/desktop-latest/SimorghDesignSuite-Setup-<version>.exe

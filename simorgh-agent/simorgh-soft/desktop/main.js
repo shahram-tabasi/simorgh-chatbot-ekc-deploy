@@ -135,7 +135,9 @@ function createMainWindow(url, { welcome = false } = {}) {
     const wait = welcomeWindow ? Math.max(0, WELCOME_MIN_MS - (Date.now() - openedAt)) : 0;
     setTimeout(reveal, wait);
   });
-  if (welcome) setTimeout(reveal, WELCOME_MAX_MS);
+  // Never left hidden: a server that neither answers nor fails would keep
+  // ready-to-show from firing, and the app would look as if it never opened.
+  setTimeout(reveal, WELCOME_MAX_MS);
   mainWindow.on('closed', () => {
     mainWindow = null;
     if (welcomeWindow) welcomeWindow.close();
