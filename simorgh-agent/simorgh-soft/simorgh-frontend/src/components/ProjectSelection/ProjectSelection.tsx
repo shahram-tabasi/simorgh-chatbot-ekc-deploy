@@ -335,7 +335,8 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
 
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center overflow-y-auto overflow-x-hidden px-6 py-4"
+      data-sky-scroll
+      className="fixed inset-0 flex items-center justify-center overflow-y-auto overflow-x-hidden p-6"
       // Night sky: the stars and the meteors are drawn over this by Starfield.
       // No sideways scroll: the Simorgh flies out past the right edge, and a
       // transformed element still counts toward the scroll area.

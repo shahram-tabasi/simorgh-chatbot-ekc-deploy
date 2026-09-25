@@ -232,7 +232,7 @@ const SimorghFlight: React.FC<{ onLeave: () => void }> = ({ onLeave }) => {
 
   useEffect(() => {
     // In place (1.4 s), a beat of the wings, then away.
-    const t = window.setTimeout(() => { setPhase('fly'); onLeave(); }, 2600);
+    const t = window.setTimeout(() => setPhase('fly'), 2600);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -241,7 +241,7 @@ const SimorghFlight: React.FC<{ onLeave: () => void }> = ({ onLeave }) => {
   const common = {
     className: `simorgh-bird ${phase === 'fly' ? 'simorgh-bird-fly' : 'simorgh-bird-arrive'}`,
     onAnimationEnd: (e: React.AnimationEvent) => {
-      if (e.animationName === 'simorghFlyAway') setPhase('gone');
+      if (e.animationName === 'simorghFlyAway') { setPhase('gone'); onLeave(); }
     },
     'aria-hidden': true as const,
   };
@@ -263,12 +263,32 @@ const SimorghFlight: React.FC<{ onLeave: () => void }> = ({ onLeave }) => {
 
 /** The title above the dialog, with the Simorgh standing over it. */
 export const SkyTitle: React.FC = () => {
-  // Once the bird has taken off, the room held for it above the title closes,
-  // so the title and the dialog under it move up instead of leaving an empty
-  // band of sky that pushes the dialog below the fold.
-  const [flown, setFlown] = useState(false);
+  // Once the bird has gone, and only when the page no longer fits the window
+  // (a TPMS project's switchgear list open under the dialog), the room held
+  // for it above the title closes, so the dialog moves up instead of starting
+  // below an empty band of sky. While the page fits it stays as it is: the
+  // dialog is centred then, and closing the room would only shift it.
+  // Closed for good once closed — opening it again would make the page fit
+  // again, and it would close and open in a loop.
+  const blockRef = useRef<HTMLDivElement>(null);
+  const [gone, setGone] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    if (!gone || collapsed) return;
+    const scroller = blockRef.current?.closest('[data-sky-scroll]') as HTMLElement | null;
+    if (!scroller) return;
+    const check = () => {
+      if (scroller.scrollHeight > scroller.clientHeight + 1) setCollapsed(true);
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(scroller);
+    if (scroller.firstElementChild) ro.observe(scroller.firstElementChild);
+    Array.from(scroller.children).forEach(c => ro.observe(c));
+    return () => ro.disconnect();
+  }, [gone, collapsed]);
   return (
-  <div className={`simorgh-title-block${flown ? ' simorgh-title-block-flown' : ''}`}>
+  <div ref={blockRef} className={`simorgh-title-block${collapsed ? ' simorgh-title-block-flown' : ''}`}>
     <style>{`
       /* Everything is sized from one width, so the bird keeps its place over
          the title at any window size: the title is 0.350 of its width tall,
@@ -348,7 +368,7 @@ export const SkyTitle: React.FC = () => {
         100% { transform: translate(62vw, -95vh) scale(.35) rotate(-14deg); opacity: 0; }
       }
     `}</style>
-    <SimorghFlight onLeave={() => setFlown(true)} />
+    <SimorghFlight onLeave={() => setGone(true)} />
     <div style={{ position: 'relative' }}>
       <img className="simorgh-title" src={asset('simorgh-title.webp')} alt="Simorgh Design Suite" draggable={false} />
       <div className="simorgh-title-sheen" />
