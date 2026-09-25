@@ -87,6 +87,14 @@ records. So a correction made in this app reaches the drawing whether or not
 TPMS has it; nothing on the way to EPLAN reads TPMS. `GET /api/eplan/data`
 returns what was last handed over.
 
+The records are the table Eplanix itself sends (EplanixController:
+`GroupAndPivotEquipment` → `TransformToEplanDataAsync`): its headings, cells
+written `label:code` (` * qty` above one, a line per part), the equipment
+columns by Eplanix's slot numbers, and **one record per feeder number** — rows
+sharing a FEEDER NO. are merged, values from the first, parts of all of them by
+priority. The interlocks (LEO/LEC/LQ/ICO/IEB/QC1/QC2) and the rest of the
+outline come from the template part labels in the same project.
+
 A GIS switchgear is sent as `PanelType: MV` and an OTHER one as `LV` — the
 columns they are built with — since the add-in knows LV, MV and HV only.
 

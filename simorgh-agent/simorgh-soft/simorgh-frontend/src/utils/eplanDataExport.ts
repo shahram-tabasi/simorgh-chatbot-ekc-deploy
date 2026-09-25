@@ -488,10 +488,34 @@ export function buildEplanDataForEquipment(
     OldPageUserSupplementaryFields: options.oldPageUserSupplementaryFields ?? null,
   };
 
-  return feeders.map(({ row: line, parts }, index: number): EplanData => {
-    // One outline record per line, in the same order — the add-in reads them
-    // by position, and so does Eplanix.
-    const cell = outline?.feeders[index];
+  // One record per feeder number, as Eplanix's GroupAndPivotEquipment makes
+  // it: every row carrying the same FEEDER NO. becomes one line of the table,
+  // its own values taken from the first of them and each equipment column
+  // holding the parts of all of them, by priority. This is how the office's
+  // drawings have been made for a year and it is kept exactly — a busbar
+  // section written as several rows under one number is one feeder on the
+  // single line. Groups keep the order their first row has in the table.
+  const groups: { first: number; parts: Record<string, any[]> }[] = [];
+  const byNumber = new Map<string, number>();
+  feeders.forEach(({ row, parts }, index) => {
+    const key = text(row.feederNo);
+    let at = byNumber.get(key);
+    if (at === undefined) {
+      at = groups.length;
+      byNumber.set(key, at);
+      groups.push({ first: index, parts: {} });
+    }
+    const merged = groups[at].parts;
+    for (const [property, list] of Object.entries(parts)) {
+      merged[property] = [...(merged[property] ?? []), ...list];
+    }
+  });
+
+  return groups.map(({ first, parts }, index: number): EplanData => {
+    const line = feeders[first].row;
+    // The outline record of the feeder's first row — the add-in reads them by
+    // position, one per record, and so does Eplanix.
+    const cell = outline?.feeders[first];
     return {
       ...common,
       Id: index + 1,
@@ -530,10 +554,11 @@ export function buildEplanDataForEquipment(
       CableSize:   text(line.cableSize),
 
       // The ratings TPMS gave the line when it came from there; otherwise the
-      // RATING column (Designation 3) of the part that fills that slot.
-      CBRating: text((line as any).cbRating) || partRating(parts, slots[1]),
-      ContactorRating: text((line as any).contactorRating) || partRating(parts, slots[3]),
-      OverloadRelayRating: text((line as any).overloadRating) || partRating(parts, slots[4]),
+      // RATING column (Designation 3) of the part that fills that slot. Both
+      // from the feeder's first row, as Eplanix takes them.
+      CBRating: text((line as any).cbRating) || partRating(feeders[first].parts, slots[1]),
+      ContactorRating: text((line as any).contactorRating) || partRating(feeders[first].parts, slots[3]),
+      OverloadRelayRating: text((line as any).overloadRating) || partRating(feeders[first].parts, slots[4]),
       // The equipment columns, by Eplanix's slot numbers (GetEquipmentColumn).
       // Slot 2, the accessory, has no field in EplanData — as in Eplanix.
       CBOrder: slotCell(parts, slots[1]),
