@@ -323,9 +323,13 @@ export function buildTpmsImport(
     // belongs.
     const displayNames: Record<string, string> = {};
     const slotBrands: Record<string, string> = {};
+    // The headings exactly as TPMS writes them, brand and all — what Eplanix
+    // puts in the EPLAN table's header (FormatHeader / FormatDualInfo).
+    const columnNames: Record<string, string> = {};
     for (const [slot, raw] of Object.entries(payload.columnNames ?? {})) {
       const property = payload.slotProperties[slot];
       if (!property || !raw) continue;
+      columnNames[property] = String(raw);
       const { name, brand } = splitColumnName(raw);
       if (name && name !== property) displayNames[property] = name;
       if (brand) slotBrands[slot] = brand;
@@ -366,6 +370,7 @@ export function buildTpmsImport(
           summary.parts += parts.length;
         }
         if (Object.keys(displayNames).length > 0) properties.__displayNames = displayNames;
+        if (Object.keys(columnNames).length > 0) properties.__columnNames = columnNames;
 
         // Another switchgear of the same project can use the same draft name
         // for a different part set; the second one carries its switchgear so
@@ -415,6 +420,9 @@ export function buildTpmsImport(
         size: line.size,
         sfdHfd: codeCase(line.sfdHfd),
         cableSize: line.cableSize,
+        cbRating: line.cbRating,
+        contactorRating: line.contactorRating,
+        overloadRating: line.overloadRating,
         equipmentId: '',
       });
     });

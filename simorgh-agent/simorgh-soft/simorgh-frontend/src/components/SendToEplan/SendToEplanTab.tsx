@@ -5,7 +5,7 @@ import {
   ClipboardIcon, DownloadIcon, ListChecksIcon, SaveIcon, UploadIcon,
 } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
-import { buildEplanData, EplanData, EplanDataOptions } from '../../utils/eplanDataExport';
+import { buildEplanData, EplanData, EplanDataOptions, EPLAN_TABLE_COLUMNS } from '../../utils/eplanDataExport';
 import { eplanApi, EplanTarget, EplanProject } from '../../services/eplanApi';
 import { projectService } from '../../services/projectService';
 import { ProjectData } from '../../types/project';
@@ -297,7 +297,7 @@ export const SendToEplanTab: React.FC = () => {
       if (projectId && storedEquipment && !options.updateExisting && !options.recreateProject) {
         const before = await eplanApi.getData(projectId, storedEquipment.id, revision).catch(() => null);
         const last = before?.lastSend;
-        const revNameNow = (options.revName || options.revisionName || '').trim();
+        const revNameNow = (options.revName || '').trim() || '00.0';
         if (last && last.revName.trim() === revNameNow) {
           const when = `${storedEquipment.name} was already sent to EPLAN at REV ${revision}`
             + `${revNameNow ? ` / ${revNameNow}` : ''} on ${new Date(last.at).toLocaleString()}.\n\n`;
@@ -726,40 +726,49 @@ export const SendToEplanTab: React.FC = () => {
               <details className="border border-gray-200 rounded-lg" open>
                 <summary className="px-4 py-2.5 cursor-pointer text-sm font-semibold text-gray-700 flex items-center gap-2">
                   <ListChecksIcon className="w-4 h-4 text-emerald-700" />
-                  What will be sent — {records.length} feeder(s)
+                  EPLAN draft table — {records.length} feeder(s), as Eplanix sends it
                   <span className="ml-auto text-[11px] font-normal text-gray-500">
                     Source: Simorgh project{currentRevision ? ` · REV ${currentRevision.revisionNumber}` : ''} (same data as the Output tab)
                   </span>
                 </summary>
-                <div className="overflow-auto max-h-80 border-t">
-                  <table className="min-w-full text-xs">
-                    <thead className="bg-gray-50 sticky top-0">
-                      <tr>
-                        {['#', 'BUS', 'FEEDER', 'WIRING', 'POWER', 'FLC', 'TAG', 'DESCRIPTION', 'CB / VCB', 'CONTACTOR', 'O/L RELAY', 'PROT. RELAY', 'CT'].map(h => (
-                          <th key={h} className="px-2 py-1.5 text-left font-medium text-gray-600 whitespace-nowrap border-b">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {records.map(r => (
-                        <tr key={r.Id} className="border-b border-gray-100">
-                          <td className="px-2 py-1 text-gray-400">{r.Id}</td>
-                          <td className="px-2 py-1">{r.BusSection}</td>
-                          <td className="px-2 py-1 font-medium">{r.LineNumber}</td>
-                          <td className="px-2 py-1 whitespace-nowrap">{r.WiringType}</td>
-                          <td className="px-2 py-1">{r.RatingPower}</td>
-                          <td className="px-2 py-1">{r.FLC}</td>
-                          <td className="px-2 py-1 whitespace-nowrap">{r.TagName}</td>
-                          <td className="px-2 py-1 whitespace-nowrap">{r.Description}</td>
-                          <td className="px-2 py-1 whitespace-nowrap">{r.CBOrder}</td>
-                          <td className="px-2 py-1 whitespace-nowrap">{r.ContactorOrder}</td>
-                          <td className="px-2 py-1 whitespace-nowrap">{r.OverloadRelayOrder}</td>
-                          <td className="px-2 py-1 whitespace-nowrap">{r.ProtectionRelayOrder}</td>
-                          <td className="px-2 py-1 whitespace-nowrap">{r.CTRating}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                {/* The same table Eplanix hands the add-in: its columns, its
+                    headings (the project's own column names underneath), and
+                    its cells — "label:code", one part per line. A column whose
+                    heading is empty is one Eplanix leaves out, so it is left
+                    out here as well. */}
+                <div className="overflow-auto max-h-[28rem] border-t">
+                  {(() => {
+                    const first = records[0];
+                    const columns = first
+                      ? EPLAN_TABLE_COLUMNS.filter(c => String(first[c.header] ?? '').trim() !== '')
+                      : [];
+                    return (
+                      <table className="min-w-full text-[11px] border-collapse">
+                        <thead className="bg-gray-100 sticky top-0 z-10">
+                          <tr>
+                            <th className="px-2 py-1.5 border border-gray-300 text-gray-500 font-medium">#</th>
+                            {columns.map(c => (
+                              <th key={c.header} className="px-2 py-1.5 border border-gray-300 text-left font-semibold text-gray-700 whitespace-pre align-bottom">
+                                {String(first[c.header])}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {records.map(r => (
+                            <tr key={r.Id} className="odd:bg-white even:bg-gray-50">
+                              <td className="px-2 py-1 border border-gray-200 text-gray-400 align-top">{r.Id}</td>
+                              {columns.map(c => (
+                                <td key={c.value} className="px-2 py-1 border border-gray-200 whitespace-pre align-top">
+                                  {String(r[c.value] ?? '')}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    );
+                  })()}
                 </div>
               </details>
 

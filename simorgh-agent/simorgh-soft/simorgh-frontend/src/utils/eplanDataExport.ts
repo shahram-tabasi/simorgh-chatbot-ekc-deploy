@@ -30,22 +30,98 @@ import { LAYOUT_OF } from './tiers';
 
 const text = (v: any) => (v == null ? '' : String(v).trim());
 
-/** The order numbers under one template property, "a + b" when there are several. */
-function slotValue(parts: Record<string, any[]>, ...slots: string[]): string {
-  for (const slot of slots) {
-    const found = parts[slot];
-    if (!found || found.length === 0) continue;
-    const codes = found
-      .map(p => getEplanixValue(p?.fullData) || stripLocaleTags(p?.label))
-      .filter(Boolean);
-    if (codes.length > 0) return codes.join(' + ');
+// ── The table, as Eplanix builds it ─────────────────────────────────────
+//
+// Everything below mirrors EplanixController (GroupAndPivotEquipment,
+// TransformToEplanDataAsync, FormatHeader, FormatDualInfo) so the add-in is
+// handed the same table Eplanix hands it — the same headings, the same cells
+// — only filled from this project instead of from TPMS.
+
+/** Which Eplanix equipment slot a template row is, per column layout. */
+const SLOT_OF: Record<'LV' | 'MV', Record<number, string>> = {
+  LV: {
+    1: 'CB ORDER', 3: 'CONTACTOR. ORDER', 4: 'OVER LOAD RELAY', 5: 'EARTH FAULT',
+    6: 'COREBALANCE CT', 7: 'PROTECTION RELAY', 8: 'CT RATING', 9: 'AMMETER',
+    10: 'AMMETER selector', 11: 'PT RATING', 12: 'VOLTMETER', 13: 'VOLTMETER selector',
+    14: 'MULTIMETER', 15: 'TEST BLOCK', 16: 'TRANSDUSER', 17: 'ALARM ANUNCIATOR',
+    18: 'SPARE 6', 19: 'SPARE 7',
+    20: 'SPARE 1', 21: 'SPARE 2', 22: 'SPARE 3', 23: 'SPARE 4', 24: 'SPARE 5',
+  },
+  MV: {
+    1: 'VCB OR VC/FUSE', 5: 'VOLTAGE INDICATOR', 6: 'COREBALANCE CT', 7: 'PROTECTION RELAY',
+    8: 'CT RATING', 9: 'AMMETER', 10: 'AMMETER selector', 11: 'PT RATING', 12: 'VOLTMETER',
+    13: 'VOLTMETER selector', 14: 'MULTIMETER', 15: 'TEST BLOCK', 16: 'TRANSDUSER',
+    17: 'ALARM WINDDOW', 19: 'SURGE ARRESTER',
+    20: 'SPARE 1', 21: 'SPARE 2', 22: 'SPARE 3', 23: 'SPARE 4', 24: 'SPARE 5',
+  },
+};
+
+/** The code a part is written with — the SIM-TABLE value of Create Template. */
+function partCode(part: any): string {
+  if (part?.simTableOverride != null && String(part.simTableOverride).trim() !== '') {
+    return stripLocaleTags(part.simTableOverride);
   }
-  return '';
+  const d = part?.fullData;
+  // A TPMS part carries Eplanix's own FormatSCODE result as its order, or its
+  // maker when that is all TPMS had — getEplanixValue reads it back the same.
+  if (d?.__tpms) return getEplanixValue(d);
+  const order = stripLocaleTags(d?.OrderNumber);
+  if (order && order !== '-' && order !== '_') return order;
+  return stripLocaleTags(d?.Designation3) || stripLocaleTags(part?.partNumber);
 }
 
-/** The caption a column carries, from the TPMS column names when there are any. */
-function caption(names: Record<string, string>, key: string, fallback: string): string {
-  return text(names[key]) || fallback;
+/** One equipment cell: "label:code * qty", one part per line, by priority. */
+function slotCell(parts: Record<string, any[]>, property?: string): string {
+  const list = property ? parts[property] ?? [] : [];
+  return [...list]
+    .sort((a, b) => (Number(a?.priority) || 0) - (Number(b?.priority) || 0))
+    .map(p => {
+      const label = stripLocaleTags(p?.label);
+      const qty = Number(p?.quantity) || 1;
+      return `${label ? `${label}:` : ''}${partCode(p)}${qty > 1 ? ` * ${qty}` : ''}`;
+    })
+    .filter(line => line.trim() !== '')
+    .join('\n');
+}
+
+/** A part's rating, from its RATING column (Designation 3) — not for TPMS parts. */
+function partRating(parts: Record<string, any[]>, property?: string): string {
+  const list = property ? parts[property] ?? [] : [];
+  return list
+    .filter(p => !p?.fullData?.__tpms)
+    .map(p => stripLocaleTags(p?.fullData?.Designation3))
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** EplanixController.FormatHeader. */
+function formatHeader(lvLabel: string, mvLabel: string, headerValue: string, panelType: 'LV' | 'MV'): string {
+  const label = panelType === 'LV' ? lvLabel : mvLabel;
+  if (!headerValue) return label;
+  const parts = headerValue.split('-');
+  const value = parts.length === 2 ? (panelType === 'LV' ? parts[0] : parts[1]) : headerValue;
+  return value ? `${label}\n${value}` : '';
+}
+
+/** EplanixController.FormatDualInfo — "equipment(brand)" split onto two lines. */
+function formatDualInfo(input: string, panelType: 'LV' | 'MV'): string {
+  if (!input || !input.includes('(') || !input.includes(')')) return '';
+  const pieces = input.split(/[()]/).filter(x => x !== '');
+  if (pieces.length < 2) return '';
+  const [equipmentPart, brandPart] = pieces;
+  let equipment: string;
+  let brand: string;
+  if (equipmentPart.includes('-') && brandPart.includes('-')) {
+    const e = equipmentPart.split('-');
+    const b = brandPart.split('-');
+    equipment = panelType === 'LV' ? (e[0] ?? '') : (e[1] ?? '');
+    brand = panelType === 'LV' ? (b[0] ?? '') : (b[1] ?? '');
+  } else {
+    equipment = equipmentPart.trim();
+    brand = brandPart.trim();
+  }
+  if (!equipment.trim() && !brand.trim()) return '';
+  return `${equipment}\n${brand}`;
 }
 
 // The EPLAN record. Property names and casing mirror the C# model exactly —
@@ -128,6 +204,51 @@ export interface EplanData {
   OldPageUserSupplementaryFields: Record<string, string> | null;
 }
 
+/**
+ * The draft table, column by column, in the order Eplanix lays it out: each
+ * column's heading field and the value field under it. A column whose heading
+ * comes out empty is one Eplanix leaves out of the table.
+ */
+export const EPLAN_TABLE_COLUMNS: { header: keyof EplanData; value: keyof EplanData }[] = [
+  { header: 'hBusSection', value: 'BusSection' },
+  { header: 'hLineNumber', value: 'LineNumber' },
+  { header: 'hWiringType', value: 'WiringType' },
+  { header: 'hRatingPower', value: 'RatingPower' },
+  { header: 'hFLC', value: 'FLC' },
+  { header: 'hTagName', value: 'TagName' },
+  { header: 'hDescription', value: 'Description' },
+  { header: 'hModuleNumber', value: 'ModuleNumber' },
+  { header: 'hSize', value: 'SizeType' },
+  { header: 'hSFD_HFD', value: 'SFDHFD' },
+  { header: 'hCableSize', value: 'CableSize' },
+  { header: 'hCBRating', value: 'CBRating' },
+  { header: 'hCBOrder', value: 'CBOrder' },
+  { header: 'hContactorRating', value: 'ContactorRating' },
+  { header: 'hContactorOrder', value: 'ContactorOrder' },
+  { header: 'hOverloadRating', value: 'OverloadRelayRating' },
+  { header: 'hOverloadOrder', value: 'OverloadRelayOrder' },
+  { header: 'hEarthFaultOrder', value: 'EarthFaultOrder' },
+  { header: 'hCorbalanceCTOrder', value: 'CorbalanceCTOrder' },
+  { header: 'hProtectionRelayOrder', value: 'ProtectionRelayOrder' },
+  { header: 'hCTRating', value: 'CTRating' },
+  { header: 'hAmmeterOrder', value: 'AmmeterOrder' },
+  { header: 'hAmmeterSelector', value: 'AmmeterSelectorOrder' },
+  { header: 'hPTRating', value: 'PTRating' },
+  { header: 'hVoltmeter', value: 'VoltmeterOrder' },
+  { header: 'hVoltmeterSelector', value: 'VoltmeterSelectorOrder' },
+  { header: 'hMultimeter', value: 'MultimeterOrder' },
+  { header: 'hTestBlock', value: 'TestBlockOrder' },
+  { header: 'hTransducer', value: 'Transducer' },
+  { header: 'hAlarmAnunnciator', value: 'AlarmAnunciatorOrder' },
+  { header: 'hVFD_Soft', value: 'VFD_Soft' },
+  { header: 'hSurge', value: 'Surge' },
+  { header: 'hSpare1', value: 'Spare1' },
+  { header: 'hSpare2', value: 'Spare2' },
+  { header: 'hSpare3', value: 'Spare3' },
+  { header: 'hSpare4', value: 'Spare4' },
+  { header: 'hSpare5', value: 'Spare5' },
+];
+
 export interface EplanDataOptions {
   /** The user the EPLAN server books the job under. */
   userName?: string;
@@ -200,18 +321,27 @@ export function buildEplanDataForEquipment(
   const tech = data.techSettings;
   const tpms = equipment.properties?.tpms ?? {};
 
-  // The captions the table header carries. A switchgear imported from TPMS
-  // brings its own column names along on the template (`__displayNames`);
-  // anything else falls back to the caption the app itself uses.
-  const displayNames: Record<string, string> = (() => {
-    for (const { template } of feeders) {
-      const names = (template?.properties as any)?.__displayNames;
-      if (names && typeof names === 'object') return names as Record<string, string>;
-    }
-    return {};
-  })();
-
   const isMv = LAYOUT_OF[equipment.type] === 'MV';
+  const panelType: 'LV' | 'MV' = isMv ? 'MV' : 'LV';
+  const slots = SLOT_OF[panelType];
+
+  // The project's own column names — what TPMS's View_draft_column holds, and
+  // what Eplanix reads into its headings. Kept raw on a TPMS template
+  // (__columnNames); a row renamed here (__displayNames) wins over it, and a
+  // template made here has only the latter.
+  const headerFor = (slot: number): string => {
+    const property = slots[slot];
+    if (!property) return '';
+    for (const { template } of feeders) {
+      const props = (template?.properties ?? {}) as any;
+      const raw = props.__columnNames?.[property];
+      const shown = props.__displayNames?.[property];
+      if (shown && (!raw || !String(raw).includes(String(shown)))) return String(shown);
+      if (raw) return String(raw);
+    }
+    return '';
+  };
+
   const cubicles = text(tpms.cellCount) || String(layout.columns.length || '');
 
   // Everything that is the same on every record of this switchgear.
@@ -221,48 +351,49 @@ export function buildEplanDataForEquipment(
     Revision: text(options.revision),
     ProjectName: text(data.projectName),
     ScopeName: text(equipment.name),
-    // The add-in knows LV, MV and HV. A GIS board is drawn as MV and an OTHER
-    // one as LV — the columns they are built with (LAYOUT_OF).
-    PanelType: text(LAYOUT_OF[equipment.type] ?? equipment.type),
+    // LV or MV, as Eplanix's DeterminePanelType gives it: the add-in builds a
+    // LV single line for "LV" and a MV one for anything else. GIS goes as MV
+    // and OTHER as LV — the columns they are built with (LAYOUT_OF).
+    PanelType: panelType,
 
-    // ── header ──
-    hBusSection:           caption(displayNames, 'BUS SECTION', 'BUS SECTION'),
-    hLineNumber:           caption(displayNames, 'FEEDER NO.', 'FEEDER NO.'),
-    hWiringType:           caption(displayNames, 'WIRING TYPE', 'WIRING TYPE'),
-    hRatingPower:          caption(displayNames, 'RATING POWER', 'RATING POWER (kW/kVA)'),
-    hFLC:                  caption(displayNames, 'FLC', 'FLC (A)'),
-    hTagName:              caption(displayNames, 'TAG', 'TAG'),
-    hDescription:          caption(displayNames, 'DESCRIPTION', 'DESCRIPTION'),
-    hModuleNumber:         caption(displayNames, 'MODULE NO.', 'MODULE NO.'),
-    hSize:                 caption(displayNames, 'SIZE', 'SIZE'),
-    hSFD_HFD:              caption(displayNames, 'SFD/HFD', 'SFD/HFD'),
-    hCableSize:            caption(displayNames, 'CABLE SIZE', 'CABLE SIZE'),
-    hCBRating:             caption(displayNames, 'CB RATING', 'CB RATING'),
-    hCBOrder:              caption(displayNames, isMv ? 'VCB OR VC/FUSE' : 'CB ORDER', isMv ? 'VCB OR VC/FUSE' : 'CB ORDER'),
-    hContactorRating:      caption(displayNames, 'CONTACTOR RATING', 'CONTACTOR RATING'),
-    hContactorOrder:       caption(displayNames, 'CONTACTOR. ORDER', 'CONTACTOR ORDER'),
-    hOverloadRating:       caption(displayNames, 'OVER LOAD RATING', 'OVERLOAD RATING'),
-    hOverloadOrder:        caption(displayNames, 'OVER LOAD RELAY', 'OVERLOAD RELAY'),
-    hEarthFaultOrder:      caption(displayNames, 'EARTH FAULT', 'EARTH FAULT'),
-    hCorbalanceCTOrder:    caption(displayNames, 'COREBALANCE CT', 'COREBALANCE CT'),
-    hProtectionRelayOrder: caption(displayNames, 'PROTECTION RELAY', 'PROTECTION RELAY'),
-    hCTRating:             caption(displayNames, 'CT RATING', 'CT RATING'),
-    hAmmeterOrder:         caption(displayNames, 'AMMETER', 'AMMETER'),
-    hAmmeterSelector:      caption(displayNames, 'AMMETER selector', 'AMMETER SELECTOR'),
-    hPTRating:             caption(displayNames, 'PT RATING', 'PT RATING'),
-    hVoltmeter:            caption(displayNames, 'VOLTMETER', 'VOLTMETER'),
-    hVoltmeterSelector:    caption(displayNames, 'VOLTMETER selector', 'VOLTMETER SELECTOR'),
-    hMultimeter:           caption(displayNames, 'MULTIMETER', 'MULTIMETER'),
-    hTestBlock:            caption(displayNames, 'TEST BLOCK', 'TEST BLOCK'),
-    hTransducer:           caption(displayNames, 'TRANSDUSER', 'TRANSDUCER'),
-    hAlarmAnunnciator:     caption(displayNames, isMv ? 'ALARM WINDDOW' : 'ALARM ANUNCIATOR', 'ALARM ANUNCIATOR'),
-    hVFD_Soft:             caption(displayNames, 'VFD/SOFT STARTER', 'VFD / SOFT STARTER'),
-    hSurge:                caption(displayNames, 'SURGE ARRESTER', 'SURGE ARRESTER'),
-    hSpare1:               caption(displayNames, 'SPARE 1', 'SPARE 1'),
-    hSpare2:               caption(displayNames, 'SPARE 2', 'SPARE 2'),
-    hSpare3:               caption(displayNames, 'SPARE 3', 'SPARE 3'),
-    hSpare4:               caption(displayNames, 'SPARE 4', 'SPARE 4'),
-    hSpare5:               caption(displayNames, 'SPARE 5', 'SPARE 5'),
+    // ── header — EplanixController.TransformToEplanDataAsync, heading by heading ──
+    hBusSection:           'BUS_SECTION',
+    hLineNumber:           panelType === 'LV' ? 'FEEDER_NO' : 'LINE',
+    hWiringType:           panelType === 'LV' ? 'WIRING_TYPE' : 'TYPE',
+    hRatingPower:          panelType === 'LV' ? 'RATING_POWER(KW/KVA)' : 'POWER(KW OR KVA)',
+    hFLC:                  'FLC(A)',
+    hTagName:              'TAG',
+    hDescription:          'DESCRIPTION',
+    hModuleNumber:         'MODULE NO',
+    hSize:                 'SIZE',
+    hSFD_HFD:              'SFD/HFD',
+    hCableSize:            'CABLE SIZE',
+    hCBRating:             'CB RATING(A)',
+    hContactorRating:      'CONTACTOR RATING(A)',
+    hOverloadRating:       'OVERLOAD RATING(A)',
+    hCBOrder:              formatHeader('CB ORDER', 'VCB OR VC/FUSE', headerFor(1), panelType),
+    hContactorOrder:       'CONTACTOR ORDER\n' + headerFor(3),
+    hOverloadOrder:        'OVERLOAD RELAY\n' + headerFor(4),
+    hEarthFaultOrder:      formatHeader('EARTH FAULT', 'VOLTAGE INDICATOR', headerFor(5), panelType),
+    hCorbalanceCTOrder:    formatHeader('CORBALANCE CT', 'CORBALANCE CT', headerFor(6), panelType),
+    hProtectionRelayOrder: formatHeader('PROTECTION RELAY', 'PROTECTION RELAY', headerFor(7), panelType),
+    hCTRating:             formatHeader('CT RATING', 'CT RATING', headerFor(8), panelType),
+    hAmmeterOrder:         formatHeader('AMMETER', 'AMMETER', headerFor(9), panelType),
+    hAmmeterSelector:      formatHeader('AMETER SELECTOR', 'AMETER SELECTOR', headerFor(10), panelType),
+    hPTRating:             formatHeader('PT RATING', 'PT/DAMPING RESISTOR', headerFor(11), panelType),
+    hVoltmeter:            formatHeader('VOLTMETER', 'VOLTMETER', headerFor(12), panelType),
+    hVoltmeterSelector:    formatHeader('VOLTMETER SELECTOR', 'VOLTMETER SELECTOR', headerFor(13), panelType),
+    hMultimeter:           formatHeader('MULTIMETER', 'MULTIMETER', headerFor(14), panelType),
+    hTestBlock:            formatHeader('TEST BLOCK', 'TEST BOX OR BLOCK', headerFor(15), panelType),
+    hTransducer:           formatHeader('TRANSDUCER', 'TRANSDUCER', headerFor(16), panelType),
+    hAlarmAnunnciator:     formatHeader('ALARAM ANUNCIATOR', 'ALARM WINDDOW', headerFor(17), panelType),
+    hVFD_Soft:             headerFor(18) ? 'F.C/SOFT\n' + headerFor(18) : '',
+    hSurge:                formatHeader('SURGE ARRESTER', 'SURGE ARRESTER', headerFor(19), panelType),
+    hSpare1:               formatDualInfo(headerFor(20), panelType),
+    hSpare2:               formatDualInfo(headerFor(21), panelType),
+    hSpare3:               formatDualInfo(headerFor(22), panelType),
+    hSpare4:               formatDualInfo(headerFor(23), panelType),
+    hSpare5:               formatDualInfo(headerFor(24), panelType),
 
     // ── switchboard: the Device Library panel specification ──
     SwitchgearType:                      text(tpms.switchgearType) || text(equipment.type),
@@ -320,7 +451,9 @@ export function buildEplanDataForEquipment(
     IsSingleCompartment: !!options.isSingleCompartment,
     FeedersPerPage: options.feedersPerPage && options.feedersPerPage > 0 ? options.feedersPerPage : 6,
     FeederDistance: options.feederDistance ?? 0,
-    RevName: text(options.revName) || text(options.revisionName),
+    // Eplanix's default when the internal revision number is left empty. It is
+    // part of the path EPLAN writes to, so it has to be the same one.
+    RevName: text(options.revName) || '00.0',
     PlotframeFileName: text(options.plotframeFileName),
 
     // ── optional props — the app has no extra project/panel fields yet ──
@@ -396,34 +529,36 @@ export function buildEplanDataForEquipment(
       SFDHFD:      text(line.sfdHfd),
       CableSize:   text(line.cableSize),
 
-      // The rating columns are held on the parts themselves here, so only the
-      // order numbers are stated; EPLAN reads the rating off the part.
-      CBRating: '',
-      CBOrder: slotValue(parts, 'CB ORDER', 'VCB OR VC/FUSE'),
-      ContactorRating: '',
-      ContactorOrder: slotValue(parts, 'CONTACTOR. ORDER'),
-      OverloadRelayRating: '',
-      OverloadRelayOrder: slotValue(parts, 'OVER LOAD RELAY'),
-      EarthFaultOrder: slotValue(parts, 'EARTH FAULT'),
-      CorbalanceCTOrder: slotValue(parts, 'COREBALANCE CT'),
-      ProtectionRelayOrder: slotValue(parts, 'PROTECTION RELAY'),
-      CTRating: slotValue(parts, 'CT RATING'),
-      AmmeterOrder: slotValue(parts, 'AMMETER'),
-      AmmeterSelectorOrder: slotValue(parts, 'AMMETER selector'),
-      PTRating: slotValue(parts, 'PT RATING'),
-      VoltmeterOrder: slotValue(parts, 'VOLTMETER'),
-      VoltmeterSelectorOrder: slotValue(parts, 'VOLTMETER selector'),
-      MultimeterOrder: slotValue(parts, 'MULTIMETER'),
-      TestBlockOrder: slotValue(parts, 'TEST BLOCK'),
-      Transducer: slotValue(parts, 'TRANSDUSER'),
-      AlarmAnunciatorOrder: slotValue(parts, 'ALARM ANUNCIATOR', 'ALARM WINDDOW'),
-      VFD_Soft: slotValue(parts, 'VFD/SOFT STARTER'),
-      Surge: slotValue(parts, 'SURGE ARRESTER', 'VOLTAGE INDICATOR'),
-      Spare1: slotValue(parts, 'SPARE 1'),
-      Spare2: slotValue(parts, 'SPARE 2'),
-      Spare3: slotValue(parts, 'SPARE 3'),
-      Spare4: slotValue(parts, 'SPARE 4'),
-      Spare5: slotValue(parts, 'SPARE 5'),
+      // The ratings TPMS gave the line when it came from there; otherwise the
+      // RATING column (Designation 3) of the part that fills that slot.
+      CBRating: text((line as any).cbRating) || partRating(parts, slots[1]),
+      ContactorRating: text((line as any).contactorRating) || partRating(parts, slots[3]),
+      OverloadRelayRating: text((line as any).overloadRating) || partRating(parts, slots[4]),
+      // The equipment columns, by Eplanix's slot numbers (GetEquipmentColumn).
+      // Slot 2, the accessory, has no field in EplanData — as in Eplanix.
+      CBOrder: slotCell(parts, slots[1]),
+      ContactorOrder: slotCell(parts, slots[3]),
+      OverloadRelayOrder: slotCell(parts, slots[4]),
+      EarthFaultOrder: slotCell(parts, slots[5]),
+      CorbalanceCTOrder: slotCell(parts, slots[6]),
+      ProtectionRelayOrder: slotCell(parts, slots[7]),
+      CTRating: slotCell(parts, slots[8]),
+      AmmeterOrder: slotCell(parts, slots[9]),
+      AmmeterSelectorOrder: slotCell(parts, slots[10]),
+      PTRating: slotCell(parts, slots[11]),
+      VoltmeterOrder: slotCell(parts, slots[12]),
+      VoltmeterSelectorOrder: slotCell(parts, slots[13]),
+      MultimeterOrder: slotCell(parts, slots[14]),
+      TestBlockOrder: slotCell(parts, slots[15]),
+      Transducer: slotCell(parts, slots[16]),
+      AlarmAnunciatorOrder: slotCell(parts, slots[17]),
+      VFD_Soft: slotCell(parts, slots[18]),
+      Surge: slotCell(parts, slots[19]),
+      Spare1: slotCell(parts, slots[20]),
+      Spare2: slotCell(parts, slots[21]),
+      Spare3: slotCell(parts, slots[22]),
+      Spare4: slotCell(parts, slots[23]),
+      Spare5: slotCell(parts, slots[24]),
     };
   });
 }

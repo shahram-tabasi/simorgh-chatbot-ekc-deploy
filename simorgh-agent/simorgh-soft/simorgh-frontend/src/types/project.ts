@@ -425,6 +425,12 @@ export interface DeviceTableRow {
   sfdHfd?: string;
   moduleNo?: string;
   size?: string;
+  // Ratings TPMS states on the draft line (cb_rating, contactor_rating,
+  // overLoad_rating) — sent to EPLAN as Eplanix sends them. Absent on a row
+  // made here, where the rating is the part's own.
+  cbRating?: string;
+  contactorRating?: string;
+  overloadRating?: string;
 
   // ── Visual customizations ──
   rowColor?: string;                 // background color for the whole row (tailwind hex like '#fde68a')
