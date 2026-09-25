@@ -314,6 +314,13 @@ interface DeviceColumnDef {
   maxChars?: number;
 }
 
+/** The plain grounds of the table, as theme.css paints them in either theme. */
+const THEMED_GROUND: Record<string, string> = {
+  '#f9fafb': 'var(--s-sunken, #f9fafb)',
+  '#ffffff': 'var(--s-raised, #ffffff)',
+  '#eef2ff': 'var(--s-hover, #eef2ff)',
+};
+
 /** Every other column is made as wide as its widest value, heading included. */
 const NARROW = 4;
 
@@ -697,6 +704,49 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   // How many rows, from the top, stay put while the rest scrolls — the
   // heading row always does once any are frozen.
   const [freezeRows, setFreezeRows] = useState(0);
+  // The heading alone, stuck to the top while the rows scroll under it.
+  const [freezeHeader, setFreezeHeader] = useState(false);
+  // Column widths set by hand, in pixels, remembered on this machine per
+  // group of columns. A column not in here is as wide as its text.
+  const widthKey = `simorgh.deviceSelection.widths.${LAYOUT_OF[selectedEquipment?.type ?? 'MV'] ?? 'MV'}`;
+  const [colWidths, setColWidthsState] = useState<Record<string, number>>({});
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(widthKey) || '{}');
+      setColWidthsState(saved && typeof saved === 'object' ? saved : {});
+    } catch { setColWidthsState({}); }
+  }, [widthKey]);
+  const setColWidths = (next: Record<string, number>) => {
+    setColWidthsState(next);
+    try { localStorage.setItem(widthKey, JSON.stringify(next)); } catch { /* a convenience only */ }
+  };
+  /** Drag the right edge of a heading to make its column wider or narrower. */
+  const startResize = (key: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const th = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
+    const startX = e.clientX;
+    const startW = th.getBoundingClientRect().width;
+    let latest = startW;
+    const move = (ev: MouseEvent) => {
+      latest = Math.max(36, Math.round(startW + ev.clientX - startX));
+      setColWidthsState(prev => ({ ...prev, [key]: latest }));
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      document.body.style.cursor = '';
+      setColWidths({ ...colWidthsRef.current, [key]: latest });
+    };
+    document.body.style.cursor = 'col-resize';
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  };
+  const colWidthsRef = useRef(colWidths);
+  colWidthsRef.current = colWidths;
+  /** The width style a hand-sized column carries, heading and cells alike. */
+  const fixedWidth = (key: string): React.CSSProperties | undefined =>
+    colWidths[key] ? { width: colWidths[key], minWidth: colWidths[key], maxWidth: colWidths[key] } : undefined;
   // Columns taken off the screen. Kept per group of columns (LV's and MV's
   // differ) and remembered on this machine, because the columns somebody does
   // not need are the same ones every time. Export still writes every column —
@@ -952,7 +1002,9 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const stickyStyle = (colIndex: number, bg: string, rowIndex?: number): React.CSSProperties | undefined => {
     const colFrozen = colIndex < freezeCount;
     const isHeader = rowIndex === -1;
-    const rowFrozen = freezeRows > 0 && (isHeader || (rowIndex !== undefined && rowIndex < freezeRows));
+    const rowFrozen = isHeader
+      ? (freezeRows > 0 || freezeHeader)
+      : (freezeRows > 0 && rowIndex !== undefined && rowIndex < freezeRows);
     if (!colFrozen && !rowFrozen) return undefined;
     return {
       position: 'sticky',
@@ -961,7 +1013,10 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       // Frozen rows sit over the frozen columns' other cells (which scroll up
       // beneath them), the heading over both, and each corner over its row.
       zIndex: isHeader ? (colFrozen ? 6 : 5) : rowFrozen ? (colFrozen ? 4 : 3) : 2,
-      background: bg,
+      // An inline colour is out of theme.css's reach, so the two plain
+      // grounds go through its variables: a frozen heading was a white strip
+      // across the dark theme. A colour somebody gave a row stays as given.
+      background: THEMED_GROUND[bg] ?? bg,
       boxShadow: [
         colFrozen && colIndex === freezeCount - 1 ? '2px 0 4px -2px rgba(0,0,0,0.25)' : '',
         rowFrozen && !isHeader && rowIndex === freezeRows - 1 ? '0 2px 4px -2px rgba(0,0,0,0.25)' : '',
@@ -2230,6 +2285,19 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           <span>/ {totalColumnCount} cols</span>
         </div>
 
+        <button
+          onClick={() => setFreezeHeader(v => !v)}
+          className={`px-3 py-1.5 rounded border flex items-center gap-1.5 font-medium ${
+            freezeHeader
+              ? 'bg-amber-500 text-white border-amber-600 hover:bg-amber-600'
+              : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+          }`}
+          title="Keep the heading row on screen while the rows scroll"
+        >
+          <PinIcon className="w-3.5 h-3.5" />
+          Freeze header
+        </button>
+
         <div
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded border font-medium ${
             freezeRows > 0
@@ -2322,7 +2390,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           sticks to the top of this box, so the box has to be what scrolls. */}
       <div
         className="border border-gray-200 rounded overflow-auto"
-        style={freezeRows > 0 ? { maxHeight: isFullscreen ? 'calc(100vh - 220px)' : '70vh' } : undefined}
+        style={freezeRows > 0 || freezeHeader ? { maxHeight: isFullscreen ? 'calc(100vh - 220px)' : '70vh' } : undefined}
         onContextMenu={(e) => handleContextMenu(e, 'row')}
       >
         {/* As wide as its columns need, and never narrower than the box: a
@@ -2344,13 +2412,31 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                   <th
                     key={col.key}
                     ref={el => { colHeaderRefs.current[1 + i] = el; }}
-                    className={`${col.maxChars ? 'px-1 text-[11px] leading-tight whitespace-normal' : 'px-3 whitespace-nowrap'} py-2 text-left font-medium text-gray-600 border-b`}
+                    className={`${col.maxChars ? 'px-1 text-[11px] leading-tight whitespace-normal' : 'px-3 whitespace-nowrap'} py-2 text-left font-medium text-gray-600 border-b relative`}
                     style={{
                       ...(col.maxChars ? { width: `calc(${col.maxChars}ch + 1.5rem)`, maxWidth: `calc(${col.maxChars}ch + 2.5rem)` } : {}),
+                      ...fixedWidth(col.key),
+                      // Sticky wins over `relative` only when it applies;
+                      // otherwise the handle below needs a positioned heading.
+                      position: 'relative',
                       ...stickyStyle(1 + i, '#f9fafb', -1),
                     }}
                     title={col.header}
                   >
+                    {/* Drag to size the column; double-click to give it back
+                        its own width. */}
+                    <span
+                      className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize hover:bg-blue-400/60 z-10"
+                      onMouseDown={e => startResize(col.key, e)}
+                      onDoubleClick={e => {
+                        e.stopPropagation();
+                        const next = { ...colWidths };
+                        delete next[col.key];
+                        setColWidths(next);
+                      }}
+                      onClick={e => e.stopPropagation()}
+                      title="Drag to resize · double-click to reset"
+                    />
                     <div className={`flex items-center gap-1 ${col.maxChars ? 'flex-wrap' : ''}`}>
                       <span>{col.header}</span>
                       {filtersEnabled && (
@@ -2419,8 +2505,8 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                       return (
                         <td
                           key={col.key}
-                          className="px-2 py-2 border-b whitespace-nowrap"
-                          style={cellStyle}
+                          className={`px-2 py-2 border-b whitespace-nowrap ${colWidths[col.key] ? 'overflow-hidden' : ''}`}
+                          style={{ ...cellStyle, ...fixedWidth(col.key) }}
                           onDragOver={handleDragOver}
                           onDrop={e => handleDrop(e, row.id)}
                           onContextMenu={(e) => {
@@ -2442,7 +2528,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                       <td
                         key={col.key}
                         className={`${col.maxChars ? 'px-1' : 'px-2'} py-2 border-b`}
-                        style={cellStyle}
+                        style={{ ...cellStyle, ...fixedWidth(col.key) }}
                         onContextMenu={(e) => {
                           // Right-click on a data cell: open the row context menu
                           // AND mark this cell as the colorize target so the
@@ -2465,7 +2551,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                           className={`w-full border border-gray-300 rounded ${col.maxChars ? 'px-1' : 'px-2'} py-1 text-sm bg-transparent`}
                           // As wide as the column's longest value, so nothing
                           // in it is cut off; the code columns stay narrow.
-                          style={{ minWidth: `calc(${colChars[col.key] ?? 6}ch + ${col.maxChars ? '0.75rem' : '1.25rem'})` }}
+                          style={{ minWidth: colWidths[col.key] ? 0 : `calc(${colChars[col.key] ?? 6}ch + ${col.maxChars ? '0.75rem' : '1.25rem'})` }}
                           value={(row as any)[col.key] ?? ''}
                           title={String((row as any)[col.key] ?? '')}
                           onChange={e => updateRowField(row.id, col.key as any, e.target.value)}
@@ -3494,7 +3580,9 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
       side="left"
       className="w-[220px]"
     >
-      <div className="p-2 max-h-96 overflow-y-auto">
+      {/* As tall as the window allows: a fixed 24rem put a scroll bar on a
+          short list beside an empty column of page. */}
+      <div className="p-2 max-h-[calc(100vh-14rem)] overflow-y-auto">
         {TIERS.map(type => (
           <div key={type} className="mb-3">
             <div className="text-xs font-semibold text-gray-600 mb-1">{type}</div>

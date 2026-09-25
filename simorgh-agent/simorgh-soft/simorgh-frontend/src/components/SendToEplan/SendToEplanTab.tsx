@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx-js-style';
 import {
   SendIcon, PlugZapIcon, CheckCircle2Icon, AlertTriangleIcon, ZapIcon, DatabaseIcon, LayersIcon,
   ClipboardIcon, DownloadIcon, ListChecksIcon, SaveIcon, UploadIcon,
+  Maximize2Icon, Minimize2Icon, ExternalLinkIcon,
 } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
 import { buildEplanData, EplanData, EplanDataOptions, EPLAN_TABLE_COLUMNS } from '../../utils/eplanDataExport';
@@ -122,6 +123,129 @@ const RadioPair: React.FC<{
     ))}
   </div>
 );
+
+// ── The draft table ─────────────────────────────────────────────────────
+// The same table Eplanix hands the add-in: its columns, its headings (the
+// project's own column names underneath), and its cells — "label:code", one
+// part per line. A column whose heading is empty is one Eplanix leaves out, so
+// it is left out here as well.
+//
+// Every cell names its text colour outright. Left to inherit, it took the
+// muted colour of whatever it sat in, which on the dark theme was grey on
+// dark grey and could not be read. It can also be opened full screen, or as a
+// page of its own in another tab, for checking row by row.
+const draftColumns = (records: EplanData[]) => {
+  const first = records[0];
+  return first ? EPLAN_TABLE_COLUMNS.filter(c => String(first[c.header] ?? '').trim() !== '') : [];
+};
+
+const escapeHtml = (v: unknown) => String(v ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function openDraftTableInTab(records: EplanData[], title: string) {
+  const columns = draftColumns(records);
+  const head = columns.map(c => `<th>${escapeHtml(records[0][c.header])}</th>`).join('');
+  const body = records.map(r =>
+    `<tr><td class="n">${r.Id}</td>${columns.map(c => `<td>${escapeHtml(r[c.value])}</td>`).join('')}</tr>`).join('');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)} — EPLAN draft table</title>
+<style>
+  body{font:12px/1.35 system-ui,sans-serif;margin:16px;color:#111827;background:#fff}
+  h1{font-size:15px;margin:0 0 10px}
+  table{border-collapse:collapse}
+  th,td{border:1px solid #9ca3af;padding:4px 6px;white-space:pre;vertical-align:top;text-align:left}
+  th{background:#e5e7eb;position:sticky;top:0;vertical-align:bottom}
+  tr:nth-child(even) td{background:#f9fafb}
+  td.n{color:#6b7280}
+</style></head><body><h1>${escapeHtml(title)} — ${records.length} feeder(s)</h1>
+<table><thead><tr><th>#</th>${head}</tr></thead><tbody>${body}</tbody></table></body></html>`;
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+  window.open(url, '_blank', 'noopener');
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+const DraftTableGrid: React.FC<{ records: EplanData[]; fill?: boolean }> = ({ records, fill }) => {
+  const columns = draftColumns(records);
+  if (records.length === 0) {
+    return <p className="p-4 text-sm text-gray-600">No feeders to send.</p>;
+  }
+  return (
+    <div className={`overflow-auto ${fill ? 'flex-1 min-h-0' : 'max-h-[28rem]'}`}>
+      <table className={`min-w-full border-collapse ${fill ? 'text-[13px]' : 'text-xs'}`}>
+        <thead className="sticky top-0 z-10">
+          <tr>
+            <th className="px-2 py-1.5 border border-gray-300 bg-gray-100 text-gray-700 font-medium">#</th>
+            {columns.map(c => (
+              <th key={c.header}
+                className="px-2 py-1.5 border border-gray-300 bg-gray-100 text-left font-semibold text-gray-900 whitespace-pre align-bottom">
+                {String(records[0][c.header])}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((r, i) => (
+            <tr key={r.Id} className={i % 2 ? 'bg-gray-50' : 'bg-white'}>
+              <td className="px-2 py-1 border border-gray-200 text-gray-600 align-top">{r.Id}</td>
+              {columns.map(c => (
+                <td key={c.value} className="px-2 py-1 border border-gray-200 text-gray-900 whitespace-pre align-top">
+                  {String(r[c.value] ?? '')}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const EplanDraftTable: React.FC<{ records: EplanData[]; title: string }> = ({ records, title }) => {
+  const [full, setFull] = useState(false);
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFull(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [full]);
+
+  const tools = (
+    <div className="flex items-center gap-2">
+      <button
+        className="flex items-center gap-1 px-2 py-1 border border-gray-300 rounded text-xs text-gray-700 hover:bg-gray-100"
+        onClick={() => setFull(v => !v)}
+        title={full ? 'Back (Esc)' : 'Full screen'}
+      >
+        {full ? <Minimize2Icon className="w-3.5 h-3.5" /> : <Maximize2Icon className="w-3.5 h-3.5" />}
+        {full ? 'Exit full screen' : 'Full screen'}
+      </button>
+      <button
+        className="flex items-center gap-1 px-2 py-1 border border-gray-300 rounded text-xs text-gray-700 hover:bg-gray-100"
+        onClick={() => openDraftTableInTab(records, title)}
+        title="Open the table as a page of its own, in a new tab"
+      >
+        <ExternalLinkIcon className="w-3.5 h-3.5" /> Open in new tab
+      </button>
+    </div>
+  );
+
+  if (full) {
+    return (
+      <div className="fixed inset-0 z-[200] bg-white flex flex-col">
+        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200">
+          <p className="text-sm font-semibold text-gray-900">{title} — EPLAN draft table · {records.length} feeder(s)</p>
+          {tools}
+        </div>
+        <DraftTableGrid records={records} fill />
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="flex justify-end px-3 py-1.5 bg-gray-50 border-b border-gray-200">{tools}</div>
+      <DraftTableGrid records={records} />
+    </div>
+  );
+};
 
 export const SendToEplanTab: React.FC = () => {
   const {
@@ -731,44 +855,8 @@ export const SendToEplanTab: React.FC = () => {
                     Source: Simorgh project{currentRevision ? ` · REV ${currentRevision.revisionNumber}` : ''} (same data as the Output tab)
                   </span>
                 </summary>
-                {/* The same table Eplanix hands the add-in: its columns, its
-                    headings (the project's own column names underneath), and
-                    its cells — "label:code", one part per line. A column whose
-                    heading is empty is one Eplanix leaves out, so it is left
-                    out here as well. */}
-                <div className="overflow-auto max-h-[28rem] border-t">
-                  {(() => {
-                    const first = records[0];
-                    const columns = first
-                      ? EPLAN_TABLE_COLUMNS.filter(c => String(first[c.header] ?? '').trim() !== '')
-                      : [];
-                    return (
-                      <table className="min-w-full text-[11px] border-collapse">
-                        <thead className="bg-gray-100 sticky top-0 z-10">
-                          <tr>
-                            <th className="px-2 py-1.5 border border-gray-300 text-gray-500 font-medium">#</th>
-                            {columns.map(c => (
-                              <th key={c.header} className="px-2 py-1.5 border border-gray-300 text-left font-semibold text-gray-700 whitespace-pre align-bottom">
-                                {String(first[c.header])}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {records.map(r => (
-                            <tr key={r.Id} className="odd:bg-white even:bg-gray-50">
-                              <td className="px-2 py-1 border border-gray-200 text-gray-400 align-top">{r.Id}</td>
-                              {columns.map(c => (
-                                <td key={c.value} className="px-2 py-1 border border-gray-200 whitespace-pre align-top">
-                                  {String(r[c.value] ?? '')}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    );
-                  })()}
+                <div className="border-t">
+                  <EplanDraftTable records={records} title={`${projectData.projectName} — ${equipment?.name ?? ''}`} />
                 </div>
               </details>
 
