@@ -46,7 +46,8 @@ async function until(fn, ms, what) {
 const mongoPort = 27077;
 fs.mkdirSync(path.join(tmp, 'db'));
 start(path.join(bundle, 'mongo', 'mongod.exe'),
-  ['--dbpath', path.join(tmp, 'db'), '--port', String(mongoPort), '--bind_ip', '127.0.0.1', '--quiet']);
+  ['--dbpath', path.join(tmp, 'db'), '--port', String(mongoPort), '--bind_ip', '127.0.0.1', '--quiet',
+    '--wiredTigerCacheSizeGB', '0.25', '--setParameter', 'diagnosticDataCollectionEnabled=false']);
 await until(async () => {
   const net = await import('net');
   return new Promise(res => {

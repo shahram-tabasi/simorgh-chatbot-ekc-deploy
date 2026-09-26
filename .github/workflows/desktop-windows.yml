@@ -142,6 +142,20 @@ jobs:
           $p = Start-Process -FilePath installer/out/setup/SimorghSetup.exe `
                  -ArgumentList '--screens', "$PWD/release/screens" -PassThru -Wait
           Get-ChildItem release/screens
+          # Small copies in the log as well, for reading the screens where
+          # the artifact store cannot be reached.
+          Add-Type -AssemblyName System.Drawing
+          foreach ($f in Get-ChildItem release/screens/*.png) {
+            $img = [System.Drawing.Image]::FromFile($f.FullName)
+            $small = New-Object System.Drawing.Bitmap $img, ([int]($img.Width / 2)), ([int]($img.Height / 2))
+            $ms = New-Object System.IO.MemoryStream
+            $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+            $q = New-Object System.Drawing.Imaging.EncoderParameters 1
+            $q.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), 80L
+            $small.Save($ms, $codec, $q)
+            Write-Output ("SCREEN " + $f.BaseName + " " + [Convert]::ToBase64String($ms.ToArray()))
+            $img.Dispose(); $small.Dispose()
+          }
 
       - name: Upload the screens
         uses: actions/upload-artifact@v4

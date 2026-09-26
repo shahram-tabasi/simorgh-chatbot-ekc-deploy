@@ -154,7 +154,10 @@ async function startMongo() {
   fs.mkdirSync(dbPath, { recursive: true });
   const port = await freePort(27027);
   const log = logStream('mongod.log');
-  const child = spawn(mongod, ['--dbpath', dbPath, '--port', String(port), '--bind_ip', '127.0.0.1', '--quiet'],
+  // A desktop's database, not a server's: mongod would otherwise take half
+  // the computer's memory for its cache, and write diagnostics all day.
+  const child = spawn(mongod, ['--dbpath', dbPath, '--port', String(port), '--bind_ip', '127.0.0.1', '--quiet',
+    '--wiredTigerCacheSizeGB', '0.25', '--setParameter', 'diagnosticDataCollectionEnabled=false'],
     { windowsHide: true });
   child.stdout.pipe(log);
   child.stderr.pipe(log);
