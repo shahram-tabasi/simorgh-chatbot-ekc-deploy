@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The Simorgh Design Suite setup program: the office's setup artwork (the
+    five screens in simorgh-frontend/public/1.png … 5.png), one .exe carrying
+    the whole app.
+
+    .NET Framework 4.8 — part of every supported Windows — so it needs nothing
+    installed first. The screens are built in code rather than XAML, which
+    keeps it buildable with the plain .NET SDK anywhere (the workflow builds it
+    on Windows; a Linux checkout can compile it to check it).
+
+    Built by .github/workflows/desktop-windows.yml:
+      PayloadZip   the packed app (electron-builder's win-unpacked, zipped)
+      UninstallExe the uninstaller (../Uninstall), left in the install folder
+      Version      the app's version, shown in Apps & features
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>SimorghSetup</AssemblyName>
+    <RootNamespace>SimorghSetup</RootNamespace>
+    <ApplicationIcon>..\..\build\icon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Product>Simorgh Design Suite</Product>
+    <Company>Simorgh Technology</Company>
+    <Copyright>© Simorgh Technology</Copyright>
+    <Version Condition="'$(Version)' == ''">0.0.0</Version>
+    <PayloadZip Condition="'$(PayloadZip)' == ''">$(MSBuildThisFileDirectory)..\payload.zip</PayloadZip>
+    <UninstallExe Condition="'$(UninstallExe)' == ''">$(MSBuildThisFileDirectory)..\SimorghUninstall.exe</UninstallExe>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\Product.cs" Link="Product.cs" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
+    <Reference Include="System.IO.Compression" />
+    <EmbeddedResource Include="Assets\*.png" LogicalName="%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\..\build\license.txt" LogicalName="license.txt" />
+    <EmbeddedResource Include="$(PayloadZip)" LogicalName="payload.zip" Condition="Exists('$(PayloadZip)')" />
+    <EmbeddedResource Include="$(UninstallExe)" LogicalName="uninstall.exe" Condition="Exists('$(UninstallExe)')" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

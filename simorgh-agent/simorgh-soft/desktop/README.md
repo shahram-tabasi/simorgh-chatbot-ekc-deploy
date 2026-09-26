@@ -103,19 +103,43 @@ The installer lands in `desktop\release\SimorghDesignSuite-Setup-<version>.exe`.
 It installs per-user (no admin rights), lets the user pick the folder, and adds
 Desktop and Start-menu shortcuts.
 
-## How it looks
+## How it runs
 
-- **Installer** (`build/installer.nsh`): welcome and finish pages drawn in the
-  artwork's night blue with the Simorgh over the globe beside them
-  (`build/installerSidebar.bmp`), the logo in the header strip of the pages
-  in between (`build/installerHeader.bmp`), the EULA (`build/license.txt`)
-  accepted with a checkbox, and "Launch Simorgh Design Suite now" at the end.
-  The artwork is cut from the office's setup mock-ups.
-- **Icon** (`build/icon.ico`, `build/icon.png`): the Simorgh in white with a
-  thin navy edge, so it reads on a dark taskbar and a light one alike.
-- **Welcome window** (`welcome.html`, `welcome-art.jpg`): shown every time the
-  app starts, while the suite loads behind it; it closes as the suite appears
-  (after at least 3.2 s, and at most 20 s even if the server never answers).
+Chosen on first start, changeable from **File → Settings…**:
+
+- **On this computer.** The app carries the whole suite in `resources/bundle`:
+  the built frontend, the backend (`simorgh-backend`, with its node_modules)
+  and `mongod.exe`. It starts MongoDB (data in `%APPDATA%\Simorgh Design
+  Suite\database`) and the backend on 127.0.0.1, and opens the suite from them.
+  Settings holds the projects database (built in, or a MongoDB server), the
+  TPMS (MySQL) connection and where the EPLAN parts come from:
+  - an **Access file** (tblPart) — added to by hand in Microsoft Access, read
+    again whenever it changes; **Create the Access file from SQL Server…**
+    makes one from the office's parts database once (Windows' own Jet engine,
+    nothing to install);
+  - or **SQL Server**, read live.
+  Empty fields mean the office defaults. Logs: **File → Open logs folder**.
+- **Company server.** The window onto a suite a server runs, as before.
+
+The bundle is built by the workflow (frontend, backend, MongoDB) and checked by
+`scripts/smoke-local.mjs` before it is packed.
+
+## The installer
+
+`installer/` is the office's own setup program (.NET Framework 4.8, part of
+Windows): the five screens of its artwork — Welcome, License, Components,
+Install, Finish — built in code from `installer/Setup/Assets`, which are cut
+from `simorgh-frontend/public/1.png … 5.png`. It carries the packed app,
+installs per user under `%LOCALAPPDATA%\Programs\Simorgh Design Suite`
+(no administrator), removes an older NSIS installation first, makes the
+shortcuts chosen on the Components screen and registers an uninstaller in
+Apps & features. Uninstalling keeps the projects database and settings unless
+asked to remove them. `SimorghSetup.exe --screens <folder>` draws every screen
+to PNG; the workflow uploads those as `setup-screens`.
+
+- **Icon** (`build/icon.ico`, `build/icon.png`): the Simorgh in white.
+- **Welcome window** (`welcome.html`): shown every time the app starts, while
+  the suite starts and loads behind it.
 
 ## Running it during development
 

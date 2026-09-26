@@ -929,6 +929,11 @@ const MainApp: React.FC = () => {
   // its own wording; all it wants from us is that there is something to lose.
   React.useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      // Nothing can be lost where nothing is saved from here: a project TPMS
+      // owns, or a locked revision. Asking there only trapped people — in the
+      // desktop app the question is not even shown, so Projects… and closing
+      // the window just did nothing.
+      if (!isCurrentRevisionEditable || isTpmsMastered) return;
       const edited = new Date(projectData.changedOn).getTime();
       const written = lastSavedAt ? lastSavedAt.getTime() : 0;
       if (!saving && !saveError && written >= edited) return;
@@ -937,7 +942,7 @@ const MainApp: React.FC = () => {
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [projectData.changedOn, lastSavedAt, saving, saveError]);
+  }, [projectData.changedOn, lastSavedAt, saving, saveError, isCurrentRevisionEditable, isTpmsMastered]);
 
   const desktopInstaller = useDesktopInstaller();
 

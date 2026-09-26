@@ -1,19 +1,19 @@
-# Builds the Windows installer for the Simorgh Design Suite desktop client.
+# Builds the Windows installer for the Simorgh Design Suite desktop app.
 #
-# electron-builder needs a Windows runner for an NSIS installer, so this is the
-# supported way to produce the .exe: run it from the Actions tab, or push a tag
-# that starts with `desktop-v`, and take the installer from the run's artifacts
-# (a tag also attaches it to a release, which gives it a plain download URL).
+# The app carries the whole suite so it can run on a computer by itself: the
+# built frontend, the backend with its node_modules, and a MongoDB (mongod.exe)
+# — started by the app on 127.0.0.1. It can also be pointed at a company
+# server instead, as it always could (Settings → How the app runs).
 #
-# The installer carries no database and no backend — the suite keeps running in
-# the simorgh-soft container, and this is the window onto it. `server_url` bakes
-# the site's own address into the build, so the first run already points at the
-# right server instead of asking for it.
+# The installer is the office's own setup program (desktop/installer: the five
+# screens of its artwork), carrying the packed app. Pictures of every screen,
+# drawn by the built setup program itself, are uploaded beside it.
+#
+# Run it from the Actions tab, or push to desktop/**; take the installer from
+# the run's artifacts or from the desktop-latest release.
 name: Desktop installer (Windows)
 
 on:
-  # Every push that touches the desktop client builds it, so a finished
-  # installer is always waiting in Actions → the newest run → Artifacts.
   push:
     branches: ['**']
     paths:
@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       server_url:
-        description: 'Server address the app opens (blank = ask on first run)'
+        description: 'Company server address the app suggests (blank = none)'
         required: false
         default: ''
       make_release:
@@ -32,13 +32,17 @@ on:
         default: false
 
 permissions:
-  contents: write          # so a tagged build can attach the .exe to a release
+  contents: write          # so a build can attach the .exe to a release
+
+env:
+  MONGODB_VERSION: 7.0.14
 
 jobs:
   build:
     runs-on: windows-latest
     defaults:
       run:
+        shell: bash
         working-directory: simorgh-agent/simorgh-soft/desktop
 
     steps:
@@ -48,39 +52,113 @@ jobs:
         with:
           node-version: '20'
           cache: npm
-          cache-dependency-path: simorgh-agent/simorgh-soft/desktop/package-lock.json
+          cache-dependency-path: |
+            simorgh-agent/simorgh-soft/desktop/package-lock.json
+            simorgh-agent/simorgh-soft/simorgh-frontend/package-lock.json
+            simorgh-agent/simorgh-soft/simorgh-backend/package-lock.json
 
-      # The version in the file name and in Help → About.
       - name: Read the version
         id: version
-        shell: bash
         run: echo "value=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
-      # Shipped inside the app when an address was given; skipped otherwise, and
-      # then the app asks on first run as it always has.
       - name: Bake in the server address
         if: github.event_name == 'workflow_dispatch' && inputs.server_url != ''
-        shell: bash
         run: |
           node -e "require('fs').writeFileSync('server.json', JSON.stringify({ url: process.argv[1] }, null, 2))" "${{ inputs.server_url }}"
           cat server.json
 
-      - name: Install dependencies
+      # ── The suite the app runs locally ──────────────────────────────────
+      # Built for the same base path the office server uses, so the one
+      # frontend works in both places; the backend serves it in local mode.
+      - name: Build the frontend into the app
+        working-directory: simorgh-agent/simorgh-soft/simorgh-frontend
+        env:
+          VITE_BASE_PATH: /simorgh-design-suite/
+          VITE_API_URL: /simorgh-design-suite
+          VITE_BUILD_SHA: ${{ github.sha }}
+          VITE_BUILD_REF: ${{ github.ref_name }}
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          npm ci --no-audit --no-fund
+          npx vite build --outDir ../desktop/bundle/frontend --emptyOutDir
+
+      - name: Bundle the backend
+        run: |
+          mkdir -p bundle/backend
+          (cd ../simorgh-backend && tar --exclude=node_modules --exclude=.env -cf - .) | (cd bundle/backend && tar -xf -)
+          cd bundle/backend && npm ci --omit=dev --no-audit --no-fund
+
+      # mongod.exe alone out of the MongoDB zip, with the Visual C++ runtime
+      # it links against beside it, so no redistributable has to be installed.
+      - name: Bundle MongoDB ${{ env.MONGODB_VERSION }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/mongodb.zip" \
+            "https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-${MONGODB_VERSION}.zip"
+          mkdir -p bundle/mongo
+          unzip -j -o "$RUNNER_TEMP/mongodb.zip" '*/bin/mongod.exe' -d bundle/mongo
+          for dll in vcruntime140.dll vcruntime140_1.dll msvcp140.dll; do
+            cp "/c/Windows/System32/$dll" bundle/mongo/ || echo "no $dll on the runner"
+          done
+          ls -la bundle/mongo
+
+      # The bundled mongod and backend really start, serve the app under its
+      # base path, and read parts from an Access file written the way
+      # Settings writes one.
+      - name: Smoke-test the local suite
+        run: node scripts/smoke-local.mjs
+
+      # ── The app ─────────────────────────────────────────────────────────
+      - name: Install the app's dependencies
         run: npm ci
 
-      - name: Build the installer
-        run: npm run dist:win
+      - name: Pack the app
+        run: npm run pack:win
+
+      - name: Zip it as the installer's payload
+        run: |
+          cd release/win-unpacked
+          7z a -tzip -mx=7 ../../installer/payload.zip . > /dev/null
+          ls -la ../../installer/payload.zip
+
+      # ── The setup program ───────────────────────────────────────────────
+      - name: Build the uninstaller
+        run: dotnet build installer/Uninstall/SimorghUninstall.csproj -c Release -o installer/out/uninstall
+
+      - name: Build the setup program
+        run: |
+          dotnet build installer/Setup/SimorghSetup.csproj -c Release \
+            -p:Version=${{ steps.version.outputs.value }} \
+            -p:PayloadZip="$PWD/installer/payload.zip" \
+            -p:UninstallExe="$PWD/installer/out/uninstall/SimorghUninstall.exe" \
+            -o installer/out/setup
+          mkdir -p release/setup
+          cp installer/out/setup/SimorghSetup.exe \
+            "release/setup/SimorghDesignSuite-Setup-${{ steps.version.outputs.value }}.exe"
+          ls -la release/setup
+
+      - name: Draw every screen of the setup program
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath installer/out/setup/SimorghSetup.exe `
+                 -ArgumentList '--screens', "$PWD/release/screens" -PassThru -Wait
+          Get-ChildItem release/screens
+
+      - name: Upload the screens
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: setup-screens
+          path: simorgh-agent/simorgh-soft/desktop/release/screens/*.png
 
       # The artifact is the convenient copy — and it is the one that goes when
       # the account's artifact storage fills up, which is why the installer is
-      # published as a release below as well. A full quota must not fail a
-      # build whose installer is finished.
+      # published as a release below as well.
       - name: Upload the installer
         uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
           name: SimorghDesignSuite-Setup-${{ steps.version.outputs.value }}
-          path: simorgh-agent/simorgh-soft/desktop/release/*.exe
+          path: simorgh-agent/simorgh-soft/desktop/release/setup/*.exe
           if-no-files-found: error
 
       # desktop-latest holds one installer: the one built now. The action
@@ -88,7 +166,6 @@ jobs:
       # stayed beside the new one — and was the one picked up.
       - name: Clear the previous build from desktop-latest
         if: github.event_name != 'workflow_dispatch' || !inputs.make_release
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -96,14 +173,13 @@ jobs:
             gh release delete-asset desktop-latest "$a" --repo "$GITHUB_REPOSITORY" -y
           done
 
-      # The newest build, always at the same address, whatever the artifact
-      # storage is doing:
+      # The newest build, always at the same address:
       #   .../releases/download/desktop-latest/SimorghDesignSuite-Setup-<version>.exe
       - name: Publish it as the latest build
         if: github.event_name != 'workflow_dispatch' || !inputs.make_release
         uses: softprops/action-gh-release@v2
         with:
-          files: simorgh-agent/simorgh-soft/desktop/release/*.exe
+          files: simorgh-agent/simorgh-soft/desktop/release/setup/*.exe
           tag_name: desktop-latest
           name: Simorgh Design Suite — latest Windows build
           prerelease: true
@@ -112,22 +188,21 @@ jobs:
             replaced by every build — version ${{ steps.version.outputs.value }},
             commit ${{ github.sha }}.
 
-            Install it (no admin rights needed), then give it the address of the
-            server that serves `/simorgh-design-suite/`. It can be changed later
-            from **File → Change server address…**.
+            Install it (no administrator rights needed). On first start choose
+            how it runs: on this computer (its own database; TPMS and parts as
+            set in Settings) or from a company server. Everything can be
+            changed later from **File → Settings…**.
 
-      # Asked for outright, the .exe also becomes a release, which gives it a
-      # plain URL to hand out — or to drop into the server's downloads folder.
       - name: Publish it as a release
         if: github.event_name == 'workflow_dispatch' && inputs.make_release
         uses: softprops/action-gh-release@v2
         with:
-          files: simorgh-agent/simorgh-soft/desktop/release/*.exe
+          files: simorgh-agent/simorgh-soft/desktop/release/setup/*.exe
           tag_name: desktop-v${{ steps.version.outputs.value }}
           name: Simorgh Design Suite ${{ steps.version.outputs.value }} — Windows
           body: |
-            Windows installer for the Simorgh Design Suite desktop client.
+            Windows installer for the Simorgh Design Suite desktop app.
 
-            Install it (no admin rights needed), then give it the address of the
-            server that serves `/simorgh-design-suite/`. It can be changed later
-            from **File → Change server address…**.
+            Install it (no administrator rights needed). On first start choose
+            how it runs: on this computer or from a company server. Everything
+            can be changed later from **File → Settings…**.

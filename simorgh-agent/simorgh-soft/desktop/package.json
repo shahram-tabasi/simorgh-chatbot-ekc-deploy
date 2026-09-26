@@ -1,7 +1,7 @@
 {
   "name": "simorgh-design-suite-desktop",
   "productName": "Simorgh Design Suite",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Windows desktop client for Simorgh Design Suite",
   "author": "شرکت سیمرغ فناوری هوشمند ایرانیان",
   "license": "UNLICENSED",
@@ -9,7 +9,8 @@
   "scripts": {
     "start": "electron .",
     "dist:win": "electron-builder --win --x64",
-    "pack": "electron-builder --dir"
+    "pack": "electron-builder --dir",
+    "pack:win": "electron-builder --win --x64 --dir"
   },
   "devDependencies": {
     "electron": "^31.7.7",
@@ -27,12 +28,12 @@
     "files": [
       "main.js",
       "preload.js",
-      "setup.html",
       "server.json",
       "build/icon.png",
       "build/icon.ico",
       "welcome.html",
-      "welcome-art.jpg"
+      "welcome-art.jpg",
+      "settings.html"
     ],
     "win": {
       "target": [
@@ -61,6 +62,15 @@
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "runAfterFinish": true
-    }
+    },
+    "extraResources": [
+      {
+        "from": "bundle",
+        "to": "bundle",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }

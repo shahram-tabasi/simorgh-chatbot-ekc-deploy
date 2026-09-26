@@ -22,6 +22,8 @@ import { registerPlcAssistRoutes } from './plcAssist.js';
 import { registerDocumentRoutes } from './documents.js';
 import { registerPlotframeFieldRoutes } from './plotframeFields.js';
 import { registerSymbolLibraryRoutes } from './symbolLibrary.js';
+import { registerAccessPartsRoutes } from './partsAccess.js';
+import { registerLocalDesktopRoutes } from './localDesktop.js';
 import { isRename, projectNameKey } from './projectNames.js';
 import {
   ensureHistoryIndexes, keepVersion, registerProjectHistoryRoutes,
@@ -45,6 +47,20 @@ const DATABASE_NAME = process.env.DATABASE_NAME || 'simorgh_db';
 // open, and it can be dumped, restored or handed on by itself, without
 // carrying anybody's commercial drawings with it.
 const LIBRARY_DATABASE_NAME = process.env.LIBRARY_DATABASE_NAME || 'simorgh_library';
+
+// The Windows app's local mode serves the app itself as well, under the same
+// base path the office server uses, so the built frontend runs unchanged:
+// /simorgh-design-suite/api/… is this server's /api/…, and everything else
+// under the base path is the app (see the end of startServer). On the server
+// nginx does both jobs and BASE_PATH is unset, so nothing here changes there.
+const BASE_PATH = process.env.BASE_PATH || '';
+if (BASE_PATH) {
+  const apiPrefix = BASE_PATH.replace(/\/?$/, '/') + 'api/';
+  app.use((req, res, next) => {
+    if (req.url.startsWith(apiPrefix)) req.url = req.url.slice(apiPrefix.length - 5);
+    next();
+  });
+}
 
 app.use(cors());
 // A project's snapshot is the whole project — for a switchgear plant with a
@@ -620,6 +636,13 @@ app.get('/', (req, res) => {
 // there is no user to check, so the gate would be a no-op dressed as a
 // control. If this API is ever reachable from outside the internal network,
 // it needs to come back with a real identity behind it.
+
+// Parts from an Access file, when the Windows app is set to one. Ahead of the
+// SQL Server routes below, which answer whenever these step aside.
+registerAccessPartsRoutes(app, part => transformPartToFrontend(part));
+if (process.env.SIMORGH_LOCAL === '1') {
+  registerLocalDesktopRoutes(app, { sqlDefaults: sqlConfig, mysqlDefaults: mysqlConfig });
+}
 
 // ============================================
 // ADDED: SQL Parts API with Manufacturer Filter
@@ -1845,7 +1868,14 @@ async function startServer() {
     console.warn("⚠️ Initial MySQL connection failed, will retry on first request");
   });
 
-  app.listen(PORT, () => {
+  if (process.env.STATIC_DIR && BASE_PATH) {
+    const base = BASE_PATH.replace(/\/?$/, '/');
+    app.use(base, express.static(process.env.STATIC_DIR, { index: false }));
+    app.get(base + '*', (req, res) => res.sendFile(path.join(process.env.STATIC_DIR, 'index.html')));
+  }
+
+  // HOST=127.0.0.1 in the Windows app: its backend answers this machine only.
+  app.listen(PORT, process.env.HOST || undefined, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`Health: http://localhost:${PORT}/api/health`);
     console.log(`\n📊 EPLAN API (SQL Server):`);
