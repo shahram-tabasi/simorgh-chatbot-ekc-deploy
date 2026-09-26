@@ -850,18 +850,6 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           and paste it into another, whole or tab by tab. Click a device to break out its
           specification, double-click to open it.
         </p>
-        {tpmsLink?.projectMainId ? (
-          <button
-            className="shrink-0 px-3 py-1.5 border border-purple-300 bg-purple-50 text-purple-800 rounded text-xs
-                       hover:bg-purple-100 disabled:opacity-50 flex items-center gap-1.5"
-            onClick={runTpmsUpdate}
-            disabled={tpmsUpdate.busy}
-            title="Bring across any specification TPMS has changed, and leave your own work alone"
-          >
-            <RefreshCwIcon className={`w-3.5 h-3.5 ${tpmsUpdate.busy ? 'animate-spin' : ''}`} />
-            {tpmsUpdate.busy ? 'Reading TPMS…' : 'Update specifications from TPMS'}
-          </button>
-        ) : null}
       </div>
 
       <div className="border border-gray-200 rounded-md overflow-hidden">
@@ -1154,8 +1142,11 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   // ── Main render ───────────────────────────────────────────────
   return (
     <div>
-      {/* Sub-tab Navigation */}
-      <div className="flex border-b mb-6">
+      {/* Sub-tab Navigation — with the TPMS update beside it, above both tabs:
+          it brings across both the project data (master data, technical
+          settings) and every panel's specification in the Device Library. It
+          stays until TPMS is retired and the whole project starts here. */}
+      <div className="flex items-end border-b mb-6">
         {([
           { id: 'project-data'   as SubTab, label: '📋 Project Data' },
           { id: 'device-library' as SubTab, label: '📦 Device Library' },
@@ -1172,6 +1163,18 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
             {tab.label}
           </button>
         ))}
+        {tpmsLink?.projectMainId ? (
+          <button
+            className="ml-auto mb-1.5 shrink-0 px-3 py-1.5 border border-purple-300 bg-purple-50 text-purple-800 rounded text-xs
+                       hover:bg-purple-100 disabled:opacity-50 flex items-center gap-1.5"
+            onClick={runTpmsUpdate}
+            disabled={tpmsUpdate.busy}
+            title="Bring across what TPMS has changed — project data, technical settings and each panel's specification — and leave your own work alone"
+          >
+            <RefreshCwIcon className={`w-3.5 h-3.5 ${tpmsUpdate.busy ? 'animate-spin' : ''}`} />
+            {tpmsUpdate.busy ? 'Reading TPMS…' : 'Update from TPMS'}
+          </button>
+        ) : null}
       </div>
 
       {activeSubTab === 'project-data'   && renderProjectData()}
@@ -1183,7 +1186,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[80vh] flex flex-col">
             <div className="flex items-center gap-2 px-6 py-4 border-b">
               <DatabaseIcon className="w-5 h-5 text-purple-600" />
-              <h3 className="font-semibold">Update specifications from TPMS</h3>
+              <h3 className="font-semibold">Update from TPMS — project data and device specifications</h3>
               <button className="ml-auto text-gray-400 hover:text-gray-600" onClick={closeTpmsUpdate}>
                 <XIcon className="w-5 h-5" />
               </button>

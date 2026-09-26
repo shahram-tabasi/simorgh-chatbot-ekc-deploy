@@ -350,6 +350,7 @@ export async function readSpecUpdateFromTpms(
   const master: [keyof ProjectData, string, string][] = [
     ['projectName', header.project.projectName, 'Project name'],
     ['projectNumber', header.project.oeNumber, 'OE number'],
+    ['projectId', header.project.projectMainId != null ? String(header.project.projectMainId) : '', 'Project ID (PID)'],
     ['planner', header.project.projectExpert, 'Project expert'],
     ['designOffice', header.project.technicalSupervisor, 'Technical supervisor'],
     ['projectDescription', header.project.projectNameFa, 'Description'],
