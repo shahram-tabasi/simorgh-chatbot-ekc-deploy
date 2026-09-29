@@ -10,6 +10,25 @@ and templates, and single lines, wiring diagrams, panel layouts and an EPLAN
 handover come out. **Simorgh Draw** is the drawing side of it — the canvas, the
 page tree, the symbol library, the assistant.
 
+## The owner's standing rules — read first, every time
+
+**Change only what was asked.** Do not remove, change, add or reduce any
+behaviour of the app unless the user asked for that exact thing. A fix that
+seems to need a wider change — another screen, another flow, a new feature, a
+"while I'm here" cleanup, a different default — is *proposed and asked about
+first*, never pushed. When a request is ambiguous, ask. When reporting, list
+separately anything done beyond the literal request so the user can say keep
+or revert — and do not revert it on your own either.
+
+**A TPMS project is read-only until a revision is raised.** While
+`tpmsSync.master === 'tpms'` nothing in the project may be edited or saved:
+`guardEdit()` refuses every mutation and `saveProject()` refuses to write, and
+the user is shown the notice that raises a revision. Raising a revision in
+Design Suite (`master` → `'suite'`) is the one and only way to make it
+editable. Nothing may open a side door around this — not locks, not merges,
+not the assistant, not an import, not a "small" edit path. Every new way to
+change project data goes through `guardEdit()`.
+
 ## Where things are
 
 Everything is under `simorgh-agent/simorgh-soft/`:
