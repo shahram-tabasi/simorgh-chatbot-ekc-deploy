@@ -99,39 +99,35 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   const safeTemplates = withAllTiers<TemplateItem>(projectData?.templates);
   const allTemplates: TemplateItem[] = TIERS.flatMap(t => safeTemplates[t]);
 
-  // A tier's own section lists what was made here; what came from TPMS is in
-  // the BPMS section below.
-  const tierTemplates = (tier: Tier) => safeTemplates[tier].filter(t => t.source !== 'tpms');
+  // A template read from TPMS waits in the BPMS section below until somebody
+  // files it: moved into OFW, FIX or any other section it takes that path, and
+  // from then on it is listed there like any template made here. It is still
+  // TPMS's template — a later read refreshes its parts — it just lives where
+  // the engineer put it.
+  const inBpms = (t: TemplateItem) =>
+    t.source === 'tpms' && (t.hierarchy?.path?.[0] ?? 'TPMS') === 'TPMS';
+  const tierTemplates = (tier: Tier) => safeTemplates[tier].filter(t => !inBpms(t));
 
   // ── BPMS ───────────────────────────────────────────────────────────────
   const [bpmsQuery, setBpmsQuery] = useState('');
   const [bpmsTier, setBpmsTier] = useState<Tier | ''>('');
-  const bpmsTemplates = allTemplates.filter(t => t.source === 'tpms');
-  // Which TPMS switchgear a template was read for: the import files it under
-  // ['TPMS', <switchgear>].
-  const switchgearOf = (t: TemplateItem) =>
-    (t.hierarchy?.path?.[0] === 'TPMS' ? t.hierarchy?.path?.[1] : undefined) || 'Other';
-  // Matched against the name, the switchgear, the group and every part number
-  // and label on it — the engineer often knows the breaker, not the name TPMS
-  // gave the line.
+  const bpmsTemplates = allTemplates.filter(inBpms);
+  // Matched against the name, the group and every part number and label on it
+  // — the engineer often knows the breaker, not the name TPMS gave the line.
   const bpmsHaystack = (t: TemplateItem) => [
-    t.name, switchgearOf(t), t.type,
+    t.name, t.type,
     ...Object.entries(t.properties ?? {}).flatMap(([slot, v]: [string, any]) =>
       slot.startsWith('__') ? [] : [slot, ...((v?.parts ?? []) as any[]).flatMap(p => [p?.partNumber, p?.label])]),
   ].join(' ').toLowerCase();
   const bpmsWords = bpmsQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const bpmsShown = bpmsTemplates.filter(t =>
-    (!bpmsTier || t.type === bpmsTier) &&
-    bpmsWords.every(w => bpmsHaystack(t).includes(w)));
-  const bpmsGroups: [string, TemplateItem[]][] = (() => {
-    const byGear = new Map<string, TemplateItem[]>();
-    for (const t of bpmsShown) {
-      const key = switchgearOf(t);
-      if (!byGear.has(key)) byGear.set(key, []);
-      byGear.get(key)!.push(t);
-    }
-    return [...byGear.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
-  })();
+  // One list of templates by their own names. It used to be grouped under the
+  // switchgear each was read for, which put the device's name where a
+  // template's name belongs — a template is a kind of cell, not a panel.
+  const bpmsShown = bpmsTemplates
+    .filter(t =>
+      (!bpmsTier || t.type === bpmsTier) &&
+      bpmsWords.every(w => bpmsHaystack(t).includes(w)))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
   /** One template in the tree — the same row in every section. */
   const renderTemplateRow = (
@@ -272,6 +268,23 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     });
   };
 
+  /**
+   * File a template that is waiting in BPMS into a section of its own group.
+   *
+   * The wizard opens on it as a move, so the path and the name are settled
+   * where every other template's are, and it keeps its id.
+   */
+  const bpmsMoveTarget = (() => {
+    const t = templateById(contextMenu.templateId);
+    return t && inBpms(t) ? t : undefined;
+  })();
+  const handleMoveFromBpms = (family: string | null) => {
+    const template = bpmsMoveTarget;
+    setContextMenu({ ...contextMenu, visible: false });
+    if (!template) return;
+    setWizard({ tier: template.type, family, startFrom: template, pasteMode: 'move' });
+  };
+
   /** Open the mechanical questions on the template the menu was opened on. */
   const handleEditMechanical = () => {
     const template = templateById(contextMenu.templateId);
@@ -375,8 +388,9 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
         {/* BPMS — the templates that were built from TPMS. They are kept in
             their own section rather than mixed into the voltage groups: there
             are dozens of them on a project of any size, named after TPMS's
-            lines, and the engineer looks for them by switchgear and by name,
-            which is what the filter is for. They are still the tier's
+            lines, and the engineer looks for them by name and by part, which
+            is what the filter is for. Right-click one to move it into a
+            section of its group. They are still the tier's
             templates — Device Selection offers them for that tier as before. */}
         <li>
           <div className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded" onClick={() => toggleNode('BPMS')}>
@@ -403,7 +417,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                         value={bpmsQuery}
                         onChange={e => setBpmsQuery(e.target.value)}
                         onClick={e => e.stopPropagation()}
-                        placeholder="Filter by name, switchgear, part…"
+                        placeholder="Filter by name or part…"
                         className="w-full border border-gray-300 rounded pl-6 pr-6 py-1 text-xs focus:outline-none focus:border-blue-400"
                       />
                       {bpmsQuery && (
@@ -431,25 +445,9 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                   {bpmsShown.length === 0 ? (
                     <p className="text-xs text-gray-400 italic p-1">Nothing matches the filter.</p>
                   ) : (
-                    bpmsGroups.map(([switchgear, list]) => (
-                      <div key={switchgear} className="mb-1">
-                        <div
-                          className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded text-xs font-medium text-gray-600"
-                          onClick={() => toggleNode(`BPMS/${switchgear}`)}
-                        >
-                          {expandedNodes.has(`BPMS/${switchgear}`) || bpmsQuery.trim()
-                            ? <ChevronDownIcon className="w-3.5 h-3.5 mr-1" />
-                            : <ChevronRightIcon className="w-3.5 h-3.5 mr-1" />}
-                          {switchgear}
-                          <span className="ml-1.5 text-[10px] text-gray-400 font-normal">{list.length}</span>
-                        </div>
-                        {(expandedNodes.has(`BPMS/${switchgear}`) || bpmsQuery.trim()) && (
-                          <ul className="pl-4 space-y-1">
-                            {list.map(template => renderTemplateRow(template, template.type, null, true))}
-                          </ul>
-                        )}
-                      </div>
-                    ))
+                    <ul className="space-y-1">
+                      {bpmsShown.map(template => renderTemplateRow(template, template.type, null, true))}
+                    </ul>
                   )}
                 </>
               )}
@@ -522,6 +520,33 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                 they do not share property columns.
               </span>
             </div>
+          )}
+          {/* A template still waiting in BPMS is offered a place in its own
+              group straight away — the same move as Cut and Paste, in one
+              step. */}
+          {bpmsMoveTarget && (
+            (TEMPLATE_FAMILIES[bpmsMoveTarget.type] ?? []).length > 0 ? (
+              (TEMPLATE_FAMILIES[bpmsMoveTarget.type] ?? []).map(family => (
+                <button
+                  key={`move-${family.id}`}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                  onClick={() => handleMoveFromBpms(family.id)}
+                  title="It keeps its id, so the device rows built on it stay attached"
+                >
+                  <ClipboardPasteIcon className="w-4 h-4 mr-2" />
+                  Move to {bpmsMoveTarget.type} / {family.label}
+                </button>
+              ))
+            ) : (
+              <button
+                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                onClick={() => handleMoveFromBpms(null)}
+                title="It keeps its id, so the device rows built on it stay attached"
+              >
+                <ClipboardPasteIcon className="w-4 h-4 mr-2" />
+                Move to {bpmsMoveTarget.type} ({TIER_LABEL[bpmsMoveTarget.type]})
+              </button>
+            )
           )}
           {contextMenu.templateId && (
             <>

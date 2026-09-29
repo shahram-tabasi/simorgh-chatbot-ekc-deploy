@@ -40,7 +40,10 @@ export function templateMeta(template: HasHierarchy | undefined): string {
   const h = template?.hierarchy;
   if (!h) return '';
   const parts: string[] = [];
-  const path = foldedPath(h.path);
+  // A template read from TPMS is filed under ['TPMS', <switchgear>]. That is
+  // where it came from, not what it is, and it put the panel's name under
+  // every template's name — so it is left out.
+  const path = h.path?.[0] === 'TPMS' ? [] : foldedPath(h.path);
   if (path.length > 0) parts.push(path.join(' / '));
   if (h.leafKind) parts.push(String(h.leafKind));
   if (h.params?.kw) parts.push(`${h.params.kw} kW`);

@@ -329,6 +329,8 @@ export interface TemplateItem {
   /** 'tpms' when this template was built from a TPMS draft. */
   source?: 'tpms';
   tpmsScopeId?: number;
+  /** The part set TPMS built it from — how a later read finds it again. */
+  tpmsSignature?: string;
   /** Answered at template creation: should Simorgh Draw be used for this
    *  template's equipment? Either way the equipment draws — this only gates
    *  whether the extra per-equipment questions (a separate, later piece)

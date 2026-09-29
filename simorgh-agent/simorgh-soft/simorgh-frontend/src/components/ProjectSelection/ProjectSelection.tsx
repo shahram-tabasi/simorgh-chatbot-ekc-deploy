@@ -58,9 +58,6 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   // A read that came back with holes in it: shown before opening, so nobody
   // works on a project that is quietly missing a switchgear.
   const [pending, setPending]           = useState<TpmsSyncResult | null>(null);
-  // What TPMS says about the size of a project, for one that will not open.
-  const [stats, setStats]               = useState<any | null>(null);
-  const [statsBusy, setStatsBusy]       = useState(false);
 
   // ── Inline "new revision" form (same dialog, not a nested modal) ─────
   const [newRevOpen, setNewRevOpen]               = useState(false);
@@ -143,7 +140,6 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     setComboOpen(false);
     setSearch('');
     setTpmsHeader(null);
-    setStats(null);
     setPending(null);
     setTpmsBusy(true);
     try {
@@ -152,22 +148,6 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
       setError('Could not read this project from TPMS: ' + (err as Error).message);
     } finally {
       setTpmsBusy(false);
-    }
-  };
-
-  // What TPMS holds for this project and how long each read takes. Used when
-  // a project will not open: it says whether TPMS answers at all, and how big
-  // the thing being read actually is.
-  const handleCheck = async () => {
-    if (!selectedTpms) return;
-    setStatsBusy(true);
-    setStats(null);
-    try {
-      setStats(await tpmsService.getProjectStats(selectedTpms.value));
-    } catch (err) {
-      setStats({ error: (err as Error).message });
-    } finally {
-      setStatsBusy(false);
     }
   };
 
@@ -638,31 +618,12 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
           {/* ── A TPMS project: what is about to be read ── */}
           {selectedTpms && (
             <div className="mt-5 border border-purple-200 bg-purple-50/50 rounded p-3 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-semibold">TPMS</span>
-                <span className="text-sm text-gray-700">
-                  The whole project is read from TPMS — the same data Simorgh Draw shows. Nothing is written back.
-                </span>
-              </div>
-
               {tpmsBusy && !tpmsHeader && (
                 <div className="text-sm text-gray-500">Reading the project…</div>
               )}
 
               {tpmsHeader && (
                 <>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                    <div><span className="text-gray-500">OE number:</span> <span className="text-gray-800">{tpmsHeader.project.oeNumber || '—'}</span></div>
-                    <div><span className="text-gray-500">Project:</span> <span className="text-gray-800">{tpmsHeader.project.projectName || '—'}</span></div>
-                    <div><span className="text-gray-500">Switchgears:</span> <span className="text-gray-800">{tpmsHeader.switchgears.length}</span></div>
-                    <div>
-                      <span className="text-gray-500">Revisions:</span>{' '}
-                      <span className="text-gray-800">
-                        {tpmsHeader.revisions.length > 0 ? tpmsHeader.revisions.map(r => `REV ${r}`).join(', ') : '—'}
-                      </span>
-                    </div>
-                  </div>
-
                   {tpmsHeader.switchgears.length > 0 && (
                     <div className="border border-purple-100 rounded bg-white max-h-32 overflow-y-auto divide-y divide-gray-50">
                       {tpmsHeader.switchgears.map(sw => (
@@ -691,56 +652,8 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                           Newest only (REV {tpmsHeader.revisions[tpmsHeader.revisions.length - 1]}) — quickest for a big project
                         </option>
                       </select>
-                      <p className="text-xs text-gray-500 mt-1" dir="rtl">
-                        A heavy project can be opened with its latest revision only; the other revisions are left untouched.
-                      </p>
                     </div>
                   )}
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      className="px-3 py-1.5 border border-purple-300 text-purple-800 rounded text-xs hover:bg-purple-100 disabled:opacity-50"
-                      onClick={handleCheck}
-                      disabled={statsBusy || opening}
-                    >
-                      {statsBusy ? 'Checking…' : 'Check this project'}
-                    </button>
-                    <span className="text-xs text-gray-500">
-                      How much TPMS holds for it, and how long each read takes.
-                    </span>
-                  </div>
-
-                  {stats && (
-                    <div className={`rounded border px-3 py-2 text-xs ${
-                      stats.error ? 'border-red-300 bg-red-50 text-red-800' : 'border-gray-200 bg-white text-gray-700'
-                    }`}>
-                      {stats.error ? (
-                        <>TPMS answered with an error: {stats.error}</>
-                      ) : (
-                        <>
-                          <div className="font-medium text-gray-800">
-                            {stats.switchgears} switchgear(s) · {stats.revisions.length} revision(s) ·
-                            {' '}{stats.drafts} line(s) · {stats.parts} part row(s)
-                          </div>
-                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-gray-600">
-                            {stats.revisions.map((r: any) => (
-                              <span key={r.revision}>REV {r.revision}: {r.drafts}</span>
-                            ))}
-                          </div>
-                          <div className="mt-1 text-gray-500">
-                            reads: {Object.entries(stats.timings || {}).map(([k, v]) => `${k} ${v}ms`).join(' · ')}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )}
-
-                  <p className="text-xs text-gray-500">
-                    Every switchgear lands in Device Selection with its lines and templates, the panel
-                    specifications in Device Library, and each TPMS revision becomes a revision here.
-                    Until a revision is raised in Design Suite the project stays read-only and is refreshed
-                    from TPMS every time it is opened.
-                  </p>
                 </>
               )}
             </div>
