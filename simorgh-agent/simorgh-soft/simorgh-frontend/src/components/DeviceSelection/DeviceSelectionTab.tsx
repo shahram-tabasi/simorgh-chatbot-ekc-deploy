@@ -913,6 +913,67 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     return () => observer.disconnect();
   }, [freezeRows, rows.length, totalColumnCount]);
 
+  // ── Only the rows on screen are drawn ───────────────────────────────────
+  //
+  // A switchgear of three hundred feeders is three hundred rows of a dozen text
+  // boxes — four thousand of them — and the browser repainted every one on
+  // every frame of a scroll: 80–400 ms a frame, which is the lag and the
+  // sticking people felt, and worse with rows and columns frozen, where every
+  // frozen cell is one more thing to move each frame. So a long table draws
+  // the rows in view and a margin either side; above and below them is one
+  // empty row as tall as the rows it stands in for, so the scroll bar is the
+  // length of the whole table and lands where it should. Frozen rows are
+  // always drawn. Heights are measured as rows are drawn and kept by row id;
+  // a row not yet drawn counts as the typical one. A short table is drawn
+  // whole, as it always was.
+  const VIRTUAL_FROM = 60;
+  const OVERSCAN = 12;
+  // Held as state, not a ref: the box appears only once a switchgear is
+  // picked, and the listener below has to be put on it when it does.
+  const [scrollBox, setScrollBox] = useState<HTMLDivElement | null>(null);
+  const [view, setView] = useState({ top: 0, height: 800 });
+  const rowHeights = useRef(new Map<string, number>());
+  const drawnRows = useRef(new Map<string, HTMLTableRowElement>());
+  const [, bumpHeights] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    const box = scrollBox;
+    if (!box) return;
+    let frame = 0;
+    const read = () => {
+      frame = 0;
+      // In steps of 200 px, not every pixel: the rows drawn reach a dozen
+      // beyond the view on both sides, so the table only has to be drawn again
+      // when the view has moved that far — not on every frame of a scroll.
+      const top = Math.floor(box.scrollTop / 200) * 200;
+      setView(v => (v.top === top && v.height === box.clientHeight
+        ? v : { top, height: box.clientHeight }));
+    };
+    // Read once a frame at most, however many scroll events arrive.
+    const onScroll = () => { if (!frame) frame = requestAnimationFrame(read); };
+    read();
+    box.addEventListener('scroll', onScroll, { passive: true });
+    const observer = new ResizeObserver(onScroll);
+    observer.observe(box);
+    return () => {
+      box.removeEventListener('scroll', onScroll);
+      observer.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [scrollBox]);
+  // The heights of the rows just drawn — written back only when one changed,
+  // so this settles after a render or two instead of feeding itself.
+  useLayoutEffect(() => {
+    let changed = false;
+    drawnRows.current.forEach((el, id) => {
+      const h = el.offsetHeight;
+      if (h > 0 && Math.abs((rowHeights.current.get(id) ?? -1) - h) > 0.5) {
+        rowHeights.current.set(id, h);
+        changed = true;
+      }
+    });
+    if (changed) bumpHeights();
+  });
+
   /**
    * Where a cell sticks: to the left when its column is frozen, to the top
    * when its row is (`rowIndex` -1 is the heading), and to both at once in
@@ -1693,8 +1754,104 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     );
   }
 
+  /** One row of the table. `rowIndex` is its place among the rows shown. */
+  const renderRow = (row: DeviceTableRow, rowIndex: number) => {
+    const rowBg = selectedRows.has(row.id) ? '#dbeafe' : (row.rowColor || '#ffffff');
+    return (
+      <tr
+        key={row.id}
+        ref={el => { bodyRowRefs.current[rowIndex] = el; if (el) drawnRows.current.set(row.id, el); }}
+        className={`cursor-pointer ${selectedRows.has(row.id) ? 'bg-blue-100' : 'hover:bg-gray-50'}`}
+        style={row.rowColor && !selectedRows.has(row.id) ? { backgroundColor: row.rowColor } : undefined}
+        onClick={(e) => handleRowClick(row.id, e)}
+        onContextMenu={(e) => handleContextMenu(e, 'row', row.id)}
+      >
+        <td
+          className="px-2 py-2 border-b text-center font-medium bg-gray-50"
+          style={stickyStyle(0, '#f9fafb', rowIndex)}
+        >
+          {row.rowNumber}
+        </td>
+        {visibleColumns.map((col, i) => {
+          const colIdx = 1 + i;
+          const cellBg = row.cellColors?.[col.key];
+          const cellStyle = { ...(cellBg ? { backgroundColor: cellBg } : undefined), ...stickyStyle(colIdx, cellBg || rowBg, rowIndex) };
+          if (col.isTemplate) {
+            return (
+              <td
+                key={col.key}
+                className={`px-2 py-2 border-b whitespace-nowrap ${colWidths[col.key] ? 'overflow-hidden' : ''}`}
+                style={{ ...cellStyle, ...fixedWidth(col.key) }}
+                onDragOver={handleDragOver}
+                onDrop={e => handleDrop(e, row.id)}
+                onContextMenu={(e) => {
+                  // A row right-clicked outside the selection
+                  // becomes the selection; one inside it leaves the
+                  // selection alone, so the menu can act on all of
+                  // them.
+                  if (!selectedRows.has(row.id)) setSelectedRows(new Set([row.id]));
+                  handleContextMenu(e, 'cell', row.id);
+                }}
+              >
+                <div className={`px-2 py-1 rounded text-sm ${!row.templateName ? 'bg-gray-100 border border-dashed text-gray-400' : 'bg-blue-50 border border-blue-200'}`}>
+                  {row.templateName || 'Drop here or right-click'}
+                </div>
+              </td>
+            );
+          }
+          return (
+            <td
+              key={col.key}
+              className={`${col.maxChars ? 'px-1' : 'px-2'} py-2 border-b`}
+              style={{ ...cellStyle, ...fixedWidth(col.key) }}
+              onContextMenu={(e) => {
+                // Right-click on a data cell: open the row context menu
+                // AND mark this cell as the colorize target so the
+                // "Highlight Cell" palette appears alongside row ops.
+                e.preventDefault();
+                e.stopPropagation();
+                if (!selectedRows.has(row.id)) {
+                  setSelectedRows(new Set([row.id]));
+                }
+                setColorTarget({ rowId: row.id, colKey: col.key });
+                setContextMenu({ visible: true, x: e.clientX, y: e.clientY, type: 'row' });
+              }}
+            >
+              <input
+                type="text"
+                // size 1: an input's own default width is about
+                // twenty characters, and that — not the text — was
+                // what every column was sized to.
+                size={1}
+                className={`w-full border border-gray-300 rounded ${col.maxChars ? 'px-1' : 'px-2'} py-1 text-sm bg-transparent`}
+                // As wide as the column's longest value, so nothing
+                // in it is cut off; the code columns stay narrow.
+                style={{ minWidth: colWidths[col.key] ? 0 : `calc(${colChars[col.key] ?? 6}ch + ${col.maxChars ? '0.75rem' : '1.25rem'})` }}
+                value={(row as any)[col.key] ?? ''}
+                title={String((row as any)[col.key] ?? '')}
+                onChange={e => updateRowField(row.id, col.key as any, e.target.value)}
+              />
+            </td>
+          );
+        })}
+        {showTemplateColumns && visibleTemplateProps.map((propName, i) => {
+          const colIdx = 1 + visibleColumns.length + i;
+          return (
+            <td
+              key={`tmpl-${propName}`}
+              className="px-3 py-2 border-b text-xs text-gray-700 whitespace-pre bg-indigo-50/40"
+              style={stickyStyle(colIdx, '#eef2ff', rowIndex)}
+            >
+              {getTemplatePropertyText(row, propName)}
+            </td>
+          );
+        })}
+      </tr>
+    );
+  };
+
   return (
-    <div>
+    <div className="flex-1 min-h-0 flex flex-col">
       <input
         ref={fileInputRef}
         type="file"
@@ -2278,11 +2435,14 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         )}
       </div>
 
-      {/* Held to the window's height once rows are frozen: a frozen row
-          sticks to the top of this box, so the box has to be what scrolls. */}
+      {/* The one box that scrolls the table, as tall as the panel leaves it —
+          in the tab and in Fullscreen alike. Frozen rows and the heading stick
+          to its top, frozen columns to its left. One scroller rather than a
+          box scrolling inside another that also scrolls: that is what made the
+          wheel stop at the end of one and hang before the other took over. */}
       <div
-        className="border border-gray-200 rounded overflow-auto"
-        style={freezeRows > 0 || freezeHeader ? { maxHeight: isFullscreen ? 'calc(100vh - 220px)' : '70vh' } : undefined}
+        ref={setScrollBox}
+        className="border border-gray-200 rounded overflow-auto flex-1 min-h-[12rem] overscroll-contain"
         onContextMenu={(e) => handleContextMenu(e, 'row')}
         // No undo in this table, not even the browser's own inside a cell:
         // several people work on one project, and a step back here is not
@@ -2378,100 +2538,46 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             </tr>
           </thead>
           <tbody>
-            {getFilteredRows().map((row, rowIndex) => {
-              const rowBg = selectedRows.has(row.id) ? '#dbeafe' : (row.rowColor || '#ffffff');
-              return (
-                <tr
-                  key={row.id}
-                  ref={el => { bodyRowRefs.current[rowIndex] = el; }}
-                  className={`cursor-pointer ${selectedRows.has(row.id) ? 'bg-blue-100' : 'hover:bg-gray-50'}`}
-                  style={row.rowColor && !selectedRows.has(row.id) ? { backgroundColor: row.rowColor } : undefined}
-                  onClick={(e) => handleRowClick(row.id, e)}
-                  onContextMenu={(e) => handleContextMenu(e, 'row', row.id)}
-                >
-                  <td
-                    className="px-2 py-2 border-b text-center font-medium bg-gray-50"
-                    style={stickyStyle(0, '#f9fafb', rowIndex)}
-                  >
-                    {row.rowNumber}
-                  </td>
-                  {visibleColumns.map((col, i) => {
-                    const colIdx = 1 + i;
-                    const cellBg = row.cellColors?.[col.key];
-                    const cellStyle = { ...(cellBg ? { backgroundColor: cellBg } : undefined), ...stickyStyle(colIdx, cellBg || rowBg, rowIndex) };
-                    if (col.isTemplate) {
-                      return (
-                        <td
-                          key={col.key}
-                          className={`px-2 py-2 border-b whitespace-nowrap ${colWidths[col.key] ? 'overflow-hidden' : ''}`}
-                          style={{ ...cellStyle, ...fixedWidth(col.key) }}
-                          onDragOver={handleDragOver}
-                          onDrop={e => handleDrop(e, row.id)}
-                          onContextMenu={(e) => {
-                            // A row right-clicked outside the selection
-                            // becomes the selection; one inside it leaves the
-                            // selection alone, so the menu can act on all of
-                            // them.
-                            if (!selectedRows.has(row.id)) setSelectedRows(new Set([row.id]));
-                            handleContextMenu(e, 'cell', row.id);
-                          }}
-                        >
-                          <div className={`px-2 py-1 rounded text-sm ${!row.templateName ? 'bg-gray-100 border border-dashed text-gray-400' : 'bg-blue-50 border border-blue-200'}`}>
-                            {row.templateName || 'Drop here or right-click'}
-                          </div>
-                        </td>
-                      );
-                    }
-                    return (
-                      <td
-                        key={col.key}
-                        className={`${col.maxChars ? 'px-1' : 'px-2'} py-2 border-b`}
-                        style={{ ...cellStyle, ...fixedWidth(col.key) }}
-                        onContextMenu={(e) => {
-                          // Right-click on a data cell: open the row context menu
-                          // AND mark this cell as the colorize target so the
-                          // "Highlight Cell" palette appears alongside row ops.
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (!selectedRows.has(row.id)) {
-                            setSelectedRows(new Set([row.id]));
-                          }
-                          setColorTarget({ rowId: row.id, colKey: col.key });
-                          setContextMenu({ visible: true, x: e.clientX, y: e.clientY, type: 'row' });
-                        }}
-                      >
-                        <input
-                          type="text"
-                          // size 1: an input's own default width is about
-                          // twenty characters, and that — not the text — was
-                          // what every column was sized to.
-                          size={1}
-                          className={`w-full border border-gray-300 rounded ${col.maxChars ? 'px-1' : 'px-2'} py-1 text-sm bg-transparent`}
-                          // As wide as the column's longest value, so nothing
-                          // in it is cut off; the code columns stay narrow.
-                          style={{ minWidth: colWidths[col.key] ? 0 : `calc(${colChars[col.key] ?? 6}ch + ${col.maxChars ? '0.75rem' : '1.25rem'})` }}
-                          value={(row as any)[col.key] ?? ''}
-                          title={String((row as any)[col.key] ?? '')}
-                          onChange={e => updateRowField(row.id, col.key as any, e.target.value)}
-                        />
-                      </td>
-                    );
-                  })}
-                  {showTemplateColumns && visibleTemplateProps.map((propName, i) => {
-                    const colIdx = 1 + visibleColumns.length + i;
-                    return (
-                      <td
-                        key={`tmpl-${propName}`}
-                        className="px-3 py-2 border-b text-xs text-gray-700 whitespace-pre bg-indigo-50/40"
-                        style={stickyStyle(colIdx, '#eef2ff', rowIndex)}
-                      >
-                        {getTemplatePropertyText(row, propName)}
-                      </td>
-                    );
-                  })}
+            {(() => {
+              const shown = getFilteredRows();
+              const n = shown.length;
+              drawnRows.current = new Map();
+              if (n <= VIRTUAL_FROM) return shown.map((row, rowIndex) => renderRow(row, rowIndex));
+
+              const known = [...rowHeights.current.values()];
+              const typical = known.length ? known.reduce((a, b) => a + b, 0) / known.length : 42;
+              const heightOf = (k: number) => rowHeights.current.get(shown[k].id) ?? typical;
+              const headH = headerRowRef.current?.offsetHeight ?? 40;
+              const pinned = Math.min(freezeRows, n);
+
+              // Down the body to the first row in view.
+              let y = 0;
+              for (let k = 0; k < pinned; k++) y += heightOf(k);
+              const pinnedH = y;
+              const viewTop = Math.max(0, view.top - headH);
+              let k = pinned;
+              while (k < n && y + heightOf(k) <= viewTop) { y += heightOf(k); k++; }
+              const first = Math.max(pinned, k - OVERSCAN);
+              for (let m = first; m < k; m++) y -= heightOf(m);
+              const above = y - pinnedH;
+              let bottom = y, last = first;
+              while (last < n && bottom < viewTop + view.height + 200) { bottom += heightOf(last); last++; }
+              last = Math.min(n, last + OVERSCAN);
+              let below = 0;
+              for (let m = last; m < n; m++) below += heightOf(m);
+
+              const spacer = (h: number, key: string) => (h > 0.5 ? (
+                <tr key={key} aria-hidden="true" style={{ height: h }}>
+                  <td colSpan={totalColumnCount} style={{ padding: 0, border: 0 }} />
                 </tr>
-              );
-            })}
+              ) : null);
+              const out: React.ReactNode[] = [];
+              for (let m = 0; m < pinned; m++) out.push(renderRow(shown[m], m));
+              out.push(spacer(above, 'space-above'));
+              for (let m = first; m < last; m++) out.push(renderRow(shown[m], m));
+              out.push(spacer(below, 'space-below'));
+              return out;
+            })()}
           </tbody>
         </table>
 
@@ -3556,7 +3662,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
         <div className="bg-gray-50 px-4 py-2 border-b shrink-0">
           <h3 className="font-medium">Device Specifications</h3>
         </div>
-        <div className="p-3 flex-1 min-h-0 overflow-auto">
+        <div className="p-3 flex-1 min-h-0 overflow-auto flex flex-col">
           <DeviceTable
             selectedEquipment={currentEquipment}
             updateEquipment={updateEquipment}
@@ -3635,11 +3741,13 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
       // falls back to 0 when the chatbot is not mounted). This way the
       // assistant stays visible and usable while the device table is maximised.
       <div
-        className="fixed top-0 left-0 bottom-0 bg-white z-40 overflow-auto shadow-xl"
+        className="fixed top-0 left-0 bottom-0 bg-white z-40 overflow-hidden shadow-xl flex flex-col"
         style={{ right: 'var(--simorgh-chat-w, 0px)' }}
       >
-        <div className="p-4">
-          <div className="flex justify-between items-center mb-3">
+        {/* Held to the screen like the tab is: the panels scroll, each on its
+            own, and the heading with Exit Fullscreen stays where it is. */}
+        <div className="p-4 flex-1 min-h-0 flex flex-col">
+          <div className="flex justify-between items-center mb-3 shrink-0">
             <h2 className="text-xl font-semibold">
               Device Selection — {projectData.projectName}
             </h2>
