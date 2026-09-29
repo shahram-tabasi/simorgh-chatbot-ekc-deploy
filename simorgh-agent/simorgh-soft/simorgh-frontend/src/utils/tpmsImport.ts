@@ -192,12 +192,29 @@ function templateSignature(line: TpmsLine, slotProperties: Record<string, string
     .join(';');
 }
 
-// A name as an earlier import wrote it — the switchgear used to be added in
-// brackets when another switchgear had the same name — without that bracket.
-function nameWithoutScope(name: string, scopeName: string): string {
-  const suffix = ` (${scopeName})`;
-  return name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
+// A name as an earlier read wrote it, without what that read added: a number
+// — "FEEDER (3)" — or the switchgear's name in brackets. Used only to find the
+// one template a name now has among the copies an earlier read made of it.
+//
+// Only those two: a bracket that is part of the name TPMS gave the line —
+// "INCOMING G11&G22 (FROM BATTERY)" — is the name, and is kept.
+export function legacyBaseName(name: string, scopeNames: ReadonlySet<string>): string {
+  let base = name.replace(/ \(\d+\)$/, '');
+  for (;;) {
+    const m = / \(([^()]*)\)$/.exec(base);
+    if (!m || !scopeNames.has(m[1])) return base;
+    base = base.slice(0, m.index);
+  }
 }
+
+// A template id from its name: stable across reads, one per name. The hash
+// keeps two names that read alike once simplified ("A&B", "A B") apart.
+const nameKey = (name: string) => {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (Math.imul(h, 31) + name.charCodeAt(i)) | 0;
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'template';
+  return `${slug}-${(h >>> 0).toString(36)}`;
+};
 
 // A readable name for a template built from a line: what TPMS calls it, else
 // the wiring type, else a number.
@@ -351,29 +368,23 @@ export function buildTpmsImport(
 
     // A template is "from TPMS" when it carries the marker, or (for imports
     // made before the marker existed) when it sits under the TPMS path.
-    const belongsToScope = (t: TemplateItem) =>
+    const fromTpms = (t: TemplateItem) =>
       t.source === 'tpms' || t.hierarchy?.path?.[0] === 'TPMS';
-    const isThisScope = (t: TemplateItem) =>
-      belongsToScope(t) && (
-        (payload.scope.scopeId != null && t.tpmsScopeId === payload.scope.scopeId) ||
-        t.hierarchy?.path?.[1] === payload.scope.scopeName
-      );
 
-    const bySignature = new Map<string, TemplateItem>();
+    // One name, one template. TPMS names a line after the kind of cell it is,
+    // and the same kind of cell in two switchgears is the same template: it is
+    // listed once, and the rows of every switchgear that uses it point at it.
+    // Nothing is numbered and nothing carries a switchgear's name.
+    const byName = new Map<string, TemplateItem>();
     const rows: DeviceTableRow[] = [];
-    // Two lines can carry the same TPMS name with different parts; each part
-    // set is its own template, so the second one onwards gets a suffix rather
-    // than a second template with the same name.
-    const namesUsed = new Map<string, number>();
-    // A previous import's template is reused once, by the template that now
-    // carries its name — never claimed twice.
-    const claimed = new Set<string>();
+    const scopeId = payload.scope.scopeId;
 
     payload.lines.forEach((line, index) => {
-      const signature = templateSignature(line, payload.slotProperties);
-      let template = bySignature.get(signature);
+      const name = templateNameFor(line, byName.size);
+      let template = byName.get(name);
 
       if (!template) {
+        const signature = templateSignature(line, payload.slotProperties);
         const properties: Record<string, any> = {};
         for (const [slot, parts] of Object.entries(line.parts)) {
           const property = payload.slotProperties[slot] || `SLOT ${slot}`;
@@ -386,54 +397,44 @@ export function buildTpmsImport(
         if (Object.keys(displayNames).length > 0) properties.__displayNames = displayNames;
         if (Object.keys(columnNames).length > 0) properties.__columnNames = columnNames;
 
-        // Re-importing the same switchgear replaces the templates it made
-        // before instead of piling up duplicates — and never claims another
-        // switchgear's template. Matched on the part set first: that is what
-        // a template *is*, and it survives the engineer renaming it or TPMS
-        // renaming the line. The name is the fallback for imports made
-        // before the part set was kept.
+        // The template this name already has, from this switchgear or any
+        // other: by the TPMS name it carries (it survives the engineer
+        // renaming it), then by its own name, then — for a project read before
+        // names were kept — by its name without the number or switchgear an
+        // earlier read added to it.
         const previous =
-          tierTemplates.find(t => !claimed.has(t.id) && isThisScope(t) &&
-            (t.tpmsSignature ?? t.hierarchy?.params?.notes) === (t.tpmsSignature ? signature : signature.slice(0, 200)))
-          ?? tierTemplates.find(t => !claimed.has(t.id) && isThisScope(t) &&
-            nameWithoutScope(t.name, payload.scope.scopeName) === templateNameFor(line, bySignature.size));
-        if (previous) claimed.add(previous.id);
+          tierTemplates.find(t => fromTpms(t) && t.tpmsName === name)
+          ?? tierTemplates.find(t => fromTpms(t) && t.name === name)
+          ?? tierTemplates.find(t => fromTpms(t) && !t.tpmsName
+            && legacyBaseName(t.name, new Set([payload.scope.scopeName])) === name);
 
         // A template the engineer has filed somewhere — moved out of BPMS
         // into OFW, FIX or an MV section — keeps its place and its name. Only
         // its parts are TPMS's to refresh.
-        const filed = previous && previous.hierarchy?.path?.[0] !== undefined
+        const filed = !!previous && previous.hierarchy?.path?.[0] !== undefined
           && previous.hierarchy.path[0] !== 'TPMS';
 
-        // Another switchgear of the same project can use the same draft name
-        // for a different part set. The two are told apart by a number, not
-        // by the switchgear's name: a template is named for the cell it is,
-        // and the panel's name in it read as if the template were the panel.
-        const name = filed ? previous!.name : (() => {
-          const baseName = templateNameFor(line, bySignature.size);
-          const taken = (n: string) => namesUsed.has(n) || tierTemplates.some(
-            t => t.name === n && belongsToScope(t) && t.id !== previous?.id && !isThisScope(t));
-          let candidate = baseName;
-          for (let n = 2; taken(candidate); n++) candidate = `${baseName} (${n})`;
-          return candidate;
-        })();
-        namesUsed.set(name, 1);
+        // Every switchgear that uses it, so it goes only when all of them have.
+        const usedBy = new Set<number>([
+          ...(previous?.tpmsScopeIds ?? (previous?.tpmsScopeId != null ? [previous.tpmsScopeId] : [])),
+          ...(scopeId != null ? [scopeId] : []),
+        ]);
 
+        const { tpmsScopeId: _single, ...kept } = (previous ?? {}) as TemplateItem;
         template = {
-          ...(previous ?? {}),
-          id: previous?.id ?? `${tier}-tpms-${key}-${bySignature.size}`,
-          name,
+          ...kept,
+          id: previous?.id ?? `${tier}-tpms-${nameKey(name)}`,
+          name: filed ? previous!.name : name,
           type: tier,
           properties,
-          hierarchy: filed
-            ? previous!.hierarchy
-            : { path: ['TPMS', payload.scope.scopeName], params: { notes: signature.slice(0, 200) } },
+          hierarchy: filed ? previous!.hierarchy : { path: ['TPMS'] },
           source: 'tpms',
+          tpmsName: name,
           tpmsSignature: signature,
-          ...(payload.scope.scopeId != null ? { tpmsScopeId: payload.scope.scopeId } : {}),
+          tpmsScopeIds: [...usedBy],
         } as TemplateItem;
         if (previous) summary.replacedTemplates += 1;
-        bySignature.set(signature, template);
+        byName.set(name, template);
       }
 
       rows.push({
@@ -459,7 +460,7 @@ export function buildTpmsImport(
       });
     });
 
-    const built = [...bySignature.values()];
+    const built = [...byName.values()];
     summary.templates = built.length;
     summary.rows = rows.length;
 

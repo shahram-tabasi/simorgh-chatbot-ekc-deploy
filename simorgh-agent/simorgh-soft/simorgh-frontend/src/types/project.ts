@@ -331,6 +331,10 @@ export interface TemplateItem {
   tpmsScopeId?: number;
   /** The part set TPMS built it from — how a later read finds it again. */
   tpmsSignature?: string;
+  /** The name TPMS gives it. One name is one template, whatever it is called here. */
+  tpmsName?: string;
+  /** Every TPMS switchgear that uses it — it goes only when all of them have. */
+  tpmsScopeIds?: number[];
   /** Answered at template creation: should Simorgh Draw be used for this
    *  template's equipment? Either way the equipment draws — this only gates
    *  whether the extra per-equipment questions (a separate, later piece)

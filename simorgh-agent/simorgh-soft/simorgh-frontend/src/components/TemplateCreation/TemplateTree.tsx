@@ -79,6 +79,8 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     /** Set when the wizard was opened by a paste, or to edit what is there. */
     startFrom?: TemplateItem | null;
     pasteMode?: 'copy' | 'move' | 'edit';
+    /** Several templates moved together — the path is given to all of them. */
+    many?: string[];
   } | null>(null);
 
   // What was copied or cut, kept until it is pasted or replaced.
@@ -107,37 +109,79 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   // the engineer put it.
   const inBpms = (t: TemplateItem) =>
     t.source === 'tpms' && (t.hierarchy?.path?.[0] ?? 'TPMS') === 'TPMS';
-  const tierTemplates = (tier: Tier) => safeTemplates[tier].filter(t => !inBpms(t));
-
-  // ── BPMS ───────────────────────────────────────────────────────────────
-  const [bpmsQuery, setBpmsQuery] = useState('');
-  const [bpmsTier, setBpmsTier] = useState<Tier | ''>('');
-  const bpmsTemplates = allTemplates.filter(inBpms);
+  // ── The filter — over every template, in every group and in BPMS ───────
+  const [query, setQuery] = useState('');
+  const [tierFilter, setTierFilter] = useState<Tier | ''>('');
+  const filtering = query.trim() !== '' || tierFilter !== '';
   // Matched against the name, the group and every part number and label on it
   // — the engineer often knows the breaker, not the name TPMS gave the line.
-  const bpmsHaystack = (t: TemplateItem) => [
+  const haystack = (t: TemplateItem) => [
     t.name, t.type,
     ...Object.entries(t.properties ?? {}).flatMap(([slot, v]: [string, any]) =>
       slot.startsWith('__') ? [] : [slot, ...((v?.parts ?? []) as any[]).flatMap(p => [p?.partNumber, p?.label])]),
   ].join(' ').toLowerCase();
-  const bpmsWords = bpmsQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const matches = (t: TemplateItem) =>
+    (!tierFilter || t.type === tierFilter) && words.every(w => haystack(t).includes(w));
+  // While filtering, every section is open: a match behind a closed node is a
+  // match nobody sees.
+  const isOpen = (node: string) => filtering || expandedNodes.has(node);
+
+  const tierAll = (tier: Tier) => safeTemplates[tier].filter(t => !inBpms(t));
+  const tierTemplates = (tier: Tier) => tierAll(tier).filter(matches);
+
+  // ── BPMS ───────────────────────────────────────────────────────────────
+  const bpmsTemplates = allTemplates.filter(inBpms);
   // One list of templates by their own names. It used to be grouped under the
   // switchgear each was read for, which put the device's name where a
   // template's name belongs — a template is a kind of cell, not a panel.
   const bpmsShown = bpmsTemplates
-    .filter(t =>
-      (!bpmsTier || t.type === bpmsTier) &&
-      bpmsWords.every(w => bpmsHaystack(t).includes(w)))
+    .filter(matches)
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+  // ── Picking several ────────────────────────────────────────────────────
+  // Ctrl+click adds a template to the pick or takes it out, Shift+click picks
+  // everything between the last one clicked and this one, as it is listed.
+  // Right-click on the pick moves them all at once.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
+  // Every template row in the order it is drawn — filled while rendering.
+  const order: string[] = [];
+  const clickRow = (event: React.MouseEvent, id: string) => {
+    if (event.ctrlKey || event.metaKey) {
+      setPicked(prev => {
+        const next = new Set(prev);
+        if (next.size === 0 && selectedTemplateId && selectedTemplateId !== id) next.add(selectedTemplateId);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+      setAnchor(id);
+      return;
+    }
+    if (event.shiftKey) {
+      const from = order.indexOf(anchor ?? selectedTemplateId ?? id);
+      const to = order.indexOf(id);
+      if (from >= 0 && to >= 0) {
+        const [a, b] = from < to ? [from, to] : [to, from];
+        setPicked(new Set(order.slice(a, b + 1)));
+        return;
+      }
+    }
+    setPicked(new Set());
+    setAnchor(id);
+    onTemplateSelect(id);
+  };
 
   /** One template in the tree — the same row in every section. */
   const renderTemplateRow = (
     template: TemplateItem, tier: Tier, family: string | null, showTier = false,
-  ) => (
+  ) => (order.push(template.id),
     <li key={template.id}>
       <div
-        className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded ${selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
-        onClick={() => onTemplateSelect(template.id)}
+        className={`flex flex-col p-1 cursor-pointer hover:bg-gray-100 rounded select-none ${
+          picked.has(template.id) ? 'bg-blue-50 ring-1 ring-blue-400'
+            : selectedTemplateId === template.id ? 'bg-blue-100' : ''}`}
+        onClick={event => clickRow(event, template.id)}
         onContextMenu={event => handleContextMenu(event, tier, template.id, family)}
       >
         <span className="text-sm">
@@ -294,6 +338,27 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     setWizard({ tier: template.type, family, startFrom: template, pasteMode: 'move' });
   };
 
+  /**
+   * The pick the menu was opened on, when it was opened on one of several
+   * picked templates. Moved together only within one group: a LV template's
+   * columns are not a MV template's.
+   */
+  const manyTarget = (() => {
+    if (!contextMenu.templateId || picked.size < 2 || !picked.has(contextMenu.templateId)) return null;
+    const list = [...picked].map(id => templateById(id)).filter((t): t is TemplateItem => !!t);
+    const tiers = new Set(list.map(t => t.type));
+    return { list, tier: tiers.size === 1 ? list[0].type : null };
+  })();
+  const handleMoveMany = (family: string | null) => {
+    const target = manyTarget;
+    setContextMenu({ ...contextMenu, visible: false });
+    if (!target?.tier) return;
+    setWizard({
+      tier: target.tier, family, startFrom: target.list[0], pasteMode: 'move',
+      many: target.list.map(t => t.id),
+    });
+  };
+
   /** Open the mechanical questions on the template the menu was opened on. */
   const handleEditMechanical = () => {
     const template = templateById(contextMenu.templateId);
@@ -317,6 +382,43 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   return (
     <div className="h-full p-2" onClick={handleClickOutside}>
       {!bare && <div className="text-sm font-medium mb-2">Project Templates</div>}
+      {/* One filter for every template — the groups and BPMS alike. */}
+      <div className="flex items-center gap-1 mb-2 pr-1">
+        <div className="relative flex-1">
+          <SearchIcon className="w-3.5 h-3.5 absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onClick={e => e.stopPropagation()}
+            placeholder="Filter by name or part…"
+            className="w-full border border-gray-300 rounded pl-6 pr-6 py-1 text-xs focus:outline-none focus:border-blue-400"
+          />
+          {query && (
+            <button
+              onClick={() => setQuery('')}
+              className="absolute right-1 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              title="Clear the filter"
+            >
+              <XIcon className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+        <select
+          value={tierFilter}
+          onChange={e => setTierFilter(e.target.value as Tier | '')}
+          className="border border-gray-300 rounded px-1 py-1 text-xs"
+          title="Only one group"
+        >
+          <option value="">All</option>
+          {TIERS.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </div>
+      {picked.size > 1 && (
+        <div className="flex items-center justify-between mb-2 px-2 py-1 rounded bg-blue-50 text-[11px] text-blue-800">
+          <span>{picked.size} templates picked — right-click one of them to move them together</span>
+          <button onClick={() => setPicked(new Set())} className="ml-2 underline">Clear</button>
+        </div>
+      )}
       <ul className="space-y-1">
         {TIERS.map(tier => {
           const list = tierTemplates(tier);
@@ -327,16 +429,18 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                   event.stopPropagation();
                   toggleNode(tier);
                 }} className="mr-1">
-                  {expandedNodes.has(tier) ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
+                  {isOpen(tier) ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
                 </button>
                 <span className="text-sm font-medium">{tier} ({TIER_LABEL[tier]})</span>
-                <span className="ml-1.5 text-[10px] text-gray-400">{list.length}</span>
+                <span className="ml-1.5 text-[10px] text-gray-400">
+                  {filtering ? `${list.length} / ${tierAll(tier).length}` : list.length}
+                </span>
               </div>
-              {expandedNodes.has(tier) && (
+              {isOpen(tier) && (
                 <ul className="pl-6 space-y-1 mt-1">
-                  {list.length === 0 && !hasFamilies(tier) ? (
+                  {list.length === 0 && (filtering || !hasFamilies(tier)) ? (
                     <li className="text-xs text-gray-400 italic p-1">
-                      No templates — right-click {tier} to create one
+                      {filtering ? 'Nothing matches the filter.' : `No templates — right-click ${tier} to create one`}
                     </li>
                   ) : (
                     // The office reads an LV path as two different things — OFW
@@ -357,7 +461,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                             onClick={() => toggleNode(node)}
                             onContextMenu={event => handleContextMenu(event, tier, null, group.family!.id)}
                           >
-                            {expandedNodes.has(node)
+                            {isOpen(node)
                               ? <ChevronDownIcon className="w-4 h-4 mr-1" />
                               : <ChevronRightIcon className="w-4 h-4 mr-1" />}
                             <span className="text-sm font-medium">{group.family.label}</span>
@@ -377,7 +481,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                               <PlusIcon className="w-3.5 h-3.5" />
                             </button>
                           </div>
-                          {expandedNodes.has(node) && (
+                          {isOpen(node) && (
                             <ul className="pl-5 space-y-1 mt-1">
                               {rows.length > 0 ? rows : (
                                 <li className="text-xs text-gray-400 italic p-1">No templates</li>
@@ -404,61 +508,25 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
         <li>
           <div className="flex items-center p-1 cursor-pointer hover:bg-gray-100 rounded" onClick={() => toggleNode('BPMS')}>
             <span className="mr-1">
-              {expandedNodes.has('BPMS') ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
+              {isOpen('BPMS') ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
             </span>
             <span className="text-sm font-medium">BPMS (from TPMS)</span>
             <span className="ml-1.5 text-[10px] text-gray-400">
-              {bpmsQuery.trim() ? `${bpmsShown.length} / ${bpmsTemplates.length}` : bpmsTemplates.length}
+              {filtering ? `${bpmsShown.length} / ${bpmsTemplates.length}` : bpmsTemplates.length}
             </span>
           </div>
-          {expandedNodes.has('BPMS') && (
+          {isOpen('BPMS') && (
             <div className="pl-6 mt-1">
               {bpmsTemplates.length === 0 ? (
                 <p className="text-xs text-gray-400 italic p-1">
                   No templates read from TPMS in this project.
                 </p>
+              ) : bpmsShown.length === 0 ? (
+                <p className="text-xs text-gray-400 italic p-1">Nothing matches the filter.</p>
               ) : (
-                <>
-                  <div className="flex items-center gap-1 mb-1.5 pr-1">
-                    <div className="relative flex-1">
-                      <SearchIcon className="w-3.5 h-3.5 absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                      <input
-                        value={bpmsQuery}
-                        onChange={e => setBpmsQuery(e.target.value)}
-                        onClick={e => e.stopPropagation()}
-                        placeholder="Filter by name or part…"
-                        className="w-full border border-gray-300 rounded pl-6 pr-6 py-1 text-xs focus:outline-none focus:border-blue-400"
-                      />
-                      {bpmsQuery && (
-                        <button
-                          onClick={() => setBpmsQuery('')}
-                          className="absolute right-1 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                          title="Clear the filter"
-                        >
-                          <XIcon className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                    <select
-                      value={bpmsTier}
-                      onChange={e => setBpmsTier(e.target.value as Tier | '')}
-                      className="border border-gray-300 rounded px-1 py-1 text-xs"
-                      title="Only one group"
-                    >
-                      <option value="">All</option>
-                      {TIERS.filter(t => bpmsTemplates.some(x => x.type === t)).map(t => (
-                        <option key={t} value={t}>{t}</option>
-                      ))}
-                    </select>
-                  </div>
-                  {bpmsShown.length === 0 ? (
-                    <p className="text-xs text-gray-400 italic p-1">Nothing matches the filter.</p>
-                  ) : (
-                    <ul className="space-y-1">
-                      {bpmsShown.map(template => renderTemplateRow(template, template.type, null, true))}
-                    </ul>
-                  )}
-                </>
+                <ul className="space-y-1">
+                  {bpmsShown.map(template => renderTemplateRow(template, template.type, null, true))}
+                </ul>
               )}
             </div>
           )}
@@ -530,6 +598,37 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
               </span>
             </div>
           )}
+          {/* Several picked: they are moved together, into one section of
+              their group. */}
+          {manyTarget && (manyTarget.tier ? (
+            (TEMPLATE_FAMILIES[manyTarget.tier] ?? []).length > 0 ? (
+              (TEMPLATE_FAMILIES[manyTarget.tier] ?? []).map(family => (
+                <button
+                  key={`move-many-${family.id}`}
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                  onClick={() => handleMoveMany(family.id)}
+                  title="Each keeps its id and its name, so the device rows built on them stay attached"
+                >
+                  <ClipboardPasteIcon className="w-4 h-4 mr-2" />
+                  Move {manyTarget.list.length} templates to {manyTarget.tier} / {family.label}
+                </button>
+              ))
+            ) : (
+              <button
+                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                onClick={() => handleMoveMany(null)}
+                title="Each keeps its id and its name, so the device rows built on them stay attached"
+              >
+                <ClipboardPasteIcon className="w-4 h-4 mr-2" />
+                Move {manyTarget.list.length} templates to {manyTarget.tier} ({TIER_LABEL[manyTarget.tier]})
+              </button>
+            )
+          ) : (
+            <div className="px-4 py-2 text-xs text-gray-400 flex items-start gap-2 cursor-not-allowed">
+              <BanIcon className="w-4 h-4 shrink-0 mt-px" />
+              <span>The picked templates are in different groups — pick templates of one group to move them together.</span>
+            </div>
+          ))}
           {/* A template still waiting in BPMS is offered a place in its own
               group straight away — the same move as Cut and Paste, in one
               step. */}
@@ -622,9 +721,14 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           existing={safeTemplates[wizard.tier]}
           startFrom={wizard.startFrom ?? null}
           pasteMode={wizard.pasteMode ?? 'copy'}
+          moveCount={wizard.many?.length ?? 1}
           onCancel={() => setWizard(null)}
           onSubmit={({ name, hierarchy, useSimorghDraw, mechanical, copyFromId }) => {
-            if ((wizard.pasteMode === 'move' || wizard.pasteMode === 'edit') && wizard.startFrom) {
+            if (wizard.many && wizard.many.length > 1) {
+              // The path is theirs now; the name and the answers stay each one's own.
+              for (const id of wizard.many) moveTemplate(id, hierarchy);
+              setPicked(new Set());
+            } else if ((wizard.pasteMode === 'move' || wizard.pasteMode === 'edit') && wizard.startFrom) {
               // A move is the same template filed elsewhere, and an edit is the
               // same template with its path and parameters changed. Neither
               // makes a new one, so both keep the id the device rows point at.

@@ -222,6 +222,12 @@ interface Props {
    * place in the tree with it.
    */
   pasteMode?: 'copy' | 'move' | 'edit';
+  /**
+   * How many templates are being moved together. Above one, only the path is
+   * asked: it is given to all of them, and each keeps its own name, its
+   * mechanical answers and its Simorgh Draw answer.
+   */
+  moveCount?: number;
   onCancel: () => void;
   /** `copyFromId` populated when the user picked an existing template
    *  as the starting point. */
@@ -237,8 +243,9 @@ interface Props {
 
 export const HierarchicalTemplateWizard: React.FC<Props> = ({
   tier, family: givenFamily = null, existing, startFrom = null,
-  pasteMode = 'copy', onCancel, onSubmit,
+  pasteMode = 'copy', moveCount = 1, onCancel, onSubmit,
 }) => {
+  const many = pasteMode === 'move' && moveCount > 1;
   // Where a pasted template's path can be reused: only when it is being
   // filed back into the section it already belongs to. A OFW path pasted
   // into FIX names nodes FIX has not got, so it is not carried over.
@@ -525,7 +532,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             <SparklesIcon className="w-5 h-5" />
             <h2 className="text-base font-semibold">
               {startFrom
-                ? `${pasteMode === 'edit' ? 'Edit' : pasteMode === 'move' ? 'Move' : 'Paste'} ${tier} Template${section ? ` — ${section.label}` : ''}`
+                ? `${pasteMode === 'edit' ? 'Edit' : pasteMode === 'move' ? 'Move' : 'Paste'} ${many ? `${moveCount} ` : ''}${tier} Template${many ? 's' : ''}${section ? ` — ${section.label}` : ''}`
                 : `New ${tier} Template${section ? ` — ${section.label}` : ''}`}
             </h2>
           </div>
@@ -544,9 +551,16 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             and are the one thing the steps below never show. */}
         {startFrom && (
           <div className="px-5 py-2 border-b bg-indigo-50/70 text-[11px] text-indigo-900">
+            {many ? (
+              <>
+                Moving <span className="font-semibold">{moveCount} templates</span> — the path picked
+                below is given to all of them; each keeps its own name, parts and mechanical answers.
+              </>
+            ) : <>
             {pasteMode === 'edit' ? 'Editing' : pasteMode === 'move' ? 'Moving' : 'Copying'}{' '}
             <span className="font-semibold">{startFrom.name}</span>
-            {pasteMode === 'edit'
+            </>}
+            {many ? null : pasteMode === 'edit'
               ? ' — its parts stay as they are; the path, the leaf and the parameters below are what is being changed.'
               : ' — its parts, parameters and mechanical answers come with it.'}
             {tier === 'LV' && !seed.root && (
@@ -745,7 +759,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
               decides which basket the cell falls in and these answers only
               adjust it; above the name, because it is part of what the
               template is rather than what it is called. */}
-          {structuralPathComplete && (
+          {structuralPathComplete && !many && (
             <div>
               <StepHeader
                 n={stepNumber('mechanical')}
@@ -775,7 +789,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           {/* Simorgh Draw — either way the equipment draws; this only gates
               whether the extra per-equipment questions (separate, later)
               get asked for whatever gets built on this template. */}
-          <div>
+          {!many && <div>
             <StepHeader
               n={stepNumber('simorghDraw')}
               label="Use Simorgh Draw?"
@@ -792,10 +806,10 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
               Answered Yes already — change it if this template's equipment is not drawn here.
               Nothing waits on it.
             </p>
-          </div>
+          </div>}
 
           {/* Step — Name + create */}
-          <div>
+          {!many && <div>
             <StepHeader n={stepNumber('name')} label="Name" active={activeStep === 'name'} done={!!name.trim()} />
             <input
               type="text"
@@ -804,7 +818,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
               placeholder="Template name…"
               className="mt-2 w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
             />
-          </div>
+          </div>}
         </div>
 
         {/* Footer */}

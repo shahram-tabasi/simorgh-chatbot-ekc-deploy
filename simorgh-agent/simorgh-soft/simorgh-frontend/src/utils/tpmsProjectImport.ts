@@ -10,7 +10,7 @@
 //
 // Pure: no network, no persistence. `services/tpmsSync.ts` does both.
 import { ProjectData, TpmsSyncState } from '../types/project';
-import { buildTpmsImport, TpmsLine, TpmsPayload } from './tpmsImport';
+import { buildTpmsImport, legacyBaseName, TpmsLine, TpmsPayload } from './tpmsImport';
 import { type Tier, TIERS, emptyTiers } from './tiers';
 
 export interface TpmsSwitchgear {
@@ -88,7 +88,14 @@ export function stripTpmsContent(data: ProjectData, header?: TpmsProjectHeader):
   const templates = { ...(data.templates ?? emptyTiers()) };
   for (const tier of TIERS) {
     templates[tier] = (templates[tier] ?? []).filter(
-      (t: any) => !templateFromTpms(t) || !gone(t?.tpmsScopeId, t?.hierarchy?.path?.[1]));
+      (t: any) => {
+        if (!templateFromTpms(t)) return true;
+        // Shared by several switchgears: it goes when the last of them has.
+        if (Array.isArray(t?.tpmsScopeIds) && t.tpmsScopeIds.length > 0) {
+          return !header || t.tpmsScopeIds.some((id: number) => scopeIds.has(Number(id)));
+        }
+        return !gone(t?.tpmsScopeId, t?.hierarchy?.path?.[1]);
+      });
   }
 
   const library = { ...(data.deviceLibrary ?? emptyTiers()) };
@@ -182,7 +189,51 @@ export function buildTpmsRevisionSnapshot(
     summary.templates += one.templates;
   }
 
+  data = foldTpmsCopies(data, header);
   return { data, summary };
+}
+
+/**
+ * The copies an earlier read made of one template, folded back into it.
+ *
+ * Reads before "one name, one template" gave the same TPMS name a template per
+ * switchgear and told them apart with a number — "COUPLING (2)" … "(7)" — or
+ * the switchgear's name. This read has made the one template each name should
+ * have (it carries `tpmsName`); every older copy of it still waiting in BPMS
+ * is removed, and any row that pointed at a copy points at the one. A copy the
+ * engineer has filed somewhere is theirs and is left alone.
+ */
+function foldTpmsCopies(data: ProjectData, header: TpmsProjectHeader): ProjectData {
+  const scopeNames = new Set((header.switchgears ?? []).map(s => s.scopeName));
+  const templates = { ...(data.templates ?? emptyTiers()) };
+  const moved = new Map<string, { id: string; name: string }>();
+
+  for (const tier of TIERS) {
+    const list = templates[tier] ?? [];
+    const canonical = new Map<string, { id: string; name: string }>();
+    for (const t of list) if (t.tpmsName) canonical.set(t.tpmsName, { id: t.id, name: t.name });
+    if (canonical.size === 0) continue;
+    templates[tier] = list.filter(t => {
+      const waiting = templateFromTpms(t) && !t.tpmsName && (t.hierarchy?.path?.[0] ?? 'TPMS') === 'TPMS';
+      if (!waiting) return true;
+      const one = canonical.get(legacyBaseName(t.name, scopeNames)) ?? canonical.get(t.name);
+      if (!one || one.id === t.id) return true;
+      moved.set(t.id, one);
+      return false;
+    });
+  }
+  if (moved.size === 0) return data;
+
+  const repoint = <R extends { templateId?: string; templateName?: string }>(row: R): R => {
+    const to = row.templateId ? moved.get(row.templateId) : undefined;
+    return to ? { ...row, templateId: to.id, templateName: to.name } : row;
+  };
+  return {
+    ...data,
+    templates,
+    equipments: (data.equipments ?? []).map(eq => ({ ...eq, devices: (eq.devices ?? []).map(repoint) })),
+    devices: (data.devices ?? []).map(repoint),
+  };
 }
 
 /** The link back to TPMS that the project carries from here on. */
