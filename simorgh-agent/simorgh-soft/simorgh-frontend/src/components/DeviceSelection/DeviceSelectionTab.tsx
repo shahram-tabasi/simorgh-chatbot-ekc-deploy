@@ -1,7 +1,7 @@
 import React, { useReducer, useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx-js-style';
-import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ScissorsIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon, RefreshCwIcon, Undo2Icon, Redo2Icon, EyeOffIcon } from 'lucide-react';
+import { PlusIcon, UploadIcon, DownloadIcon, TrashIcon, CopyIcon, ScissorsIcon, ArrowUpIcon, ArrowDownIcon, MaximizeIcon, MinimizeIcon, ChevronDownIcon, ChevronRightIcon, XIcon, InfoIcon, EditIcon, CheckIcon, ClipboardIcon, FilterIcon, PaletteIcon, LayersIcon, PinIcon, RefreshCwIcon, EyeOffIcon } from 'lucide-react';
 import { PanelFrame } from '../shared/PanelFrame';
 import { MenuBox } from '../shared/MenuBox';
 import { usePanel } from '../../context/PanelsContext';
@@ -11,7 +11,6 @@ import { useProject } from '../../context/ProjectContext';
 import { withCodeCaseAll } from '../../utils/deviceCodes';
 import { parseSimarisRows, matchSimarisToRows, SimarisMatch } from '../../utils/simarisImport';
 import { HIGHLIGHT_FIELD, ImportPlan, applyPlan, planImport, readFills } from '../../utils/deviceImport';
-import { History, emptyHistory, record, undo, redo } from '../../utils/tableHistory';
 import { templateMeta } from '../../utils/templateMeta';
 import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, LAYOUT_OF, emptyTiers } from '../../utils/tiers';
 import { saveExcelHandle, loadExcelHandle, mayRead } from '../../utils/fileHandleStore';
@@ -41,23 +40,6 @@ const NO_EXCEL: ExcelMemory = { file: null, readAt: null, note: null };
 const canKeepFiles = () =>
   typeof window !== 'undefined'
   && typeof (window as unknown as { showOpenFilePicker?: unknown }).showOpenFilePicker === 'function';
-
-/** How many steps back Ctrl+Z goes. */
-const UNDO_DEPTH = 5;
-
-/**
- * Undo history per switchgear.
- *
- * Module-level for the same reason as the file above: the tab is unmounted
- * when another one is opened, so history held in component state would not
- * survive a look at Create Template. Five steps, and only of this table —
- * it is the one place in the app where a single action can change or remove
- * a hundred rows at once.
- */
-const undoMemory = new Map<string, History<DeviceTableRow>>();
-
-const historyFor = (key: string): History<DeviceTableRow> =>
-  undoMemory.get(key) ?? emptyHistory<DeviceTableRow>();
 
 /**
  * The file each switchgear was filled from, by equipment id.
@@ -605,29 +587,10 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   onCopyRows
 }) => {
   const [rows, setRowsRaw] = useState<DeviceTableRow[]>([]);
-  // The rows as they are right now, for the undo step below: it runs from a
-  // keyboard handler that may hold an older render's closure.
-  const rowsRef = useRef<DeviceTableRow[]>([]);
-  rowsRef.current = rows;
   // Every table edit goes through setRows, so gating it here makes the whole
   // grid read-only on a locked (non-latest) revision — with the warning
   // dialog instead of a silently dropped change.
   const { isCurrentRevisionEditable, notifyRevisionLocked } = useProject();
-  // Which switchgear's history this is. Read here rather than below because
-  // setRows needs it, and setRows is declared before the equipment effects.
-  const undoKey = selectedEquipment?.id ?? '';
-  const [, bumpHistory] = useReducer((n: number) => n + 1, 0);
-
-  /** Remember what the table looked like before a change — see tableHistory.ts. */
-  const rememberRows = (before: DeviceTableRow[], after: DeviceTableRow[]) => {
-    if (!undoKey) return;
-    const was = historyFor(undoKey);
-    const now = record(was, before, after, UNDO_DEPTH, Date.now());
-    if (now === was) return;
-    undoMemory.set(undoKey, now);
-    bumpHistory();
-  };
-
   const setRows: React.Dispatch<React.SetStateAction<DeviceTableRow[]>> = value => {
     if (!isCurrentRevisionEditable) { notifyRevisionLocked(); return; }
     // FEEDER NO. and SFD/HFD are codes, and every write to the table comes
@@ -640,31 +603,10 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           ? (value as (p: DeviceTableRow[]) => DeviceTableRow[])(prev)
           : value,
       );
-      rememberRows(prev, next);
       return next;
     });
   };
 
-  const history = historyFor(undoKey);
-
-  /**
-   * Step back, or forward again.
-   *
-   * The move is worked out from the rows as they are now — read from the ref
-   * rather than from this render — so a step taken from the keyboard, where
-   * the handler may hold an older closure, goes back to the right place.
-   */
-  const step = (move: typeof undo) => {
-    if (!isCurrentRevisionEditable) { notifyRevisionLocked(); return; }
-    const moved = move(historyFor(undoKey), rowsRef.current, UNDO_DEPTH);
-    if (!moved) return;
-    undoMemory.set(undoKey, moved.history);
-    setRowsRaw(moved.value);
-    bumpHistory();
-  };
-
-  const undoRows = () => step(undo);
-  const redoRows = () => step(redo);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [lastSelectedIdx, setLastSelectedIdx] = useState<number>(-1);
   // Per-column Excel-style filters. A column has an active filter iff its
@@ -805,29 +747,6 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   const loadSeq = useRef(0);
   const savedSeq = useRef(-1);
 
-  /**
-   * Ctrl+Z and Ctrl+Y, on the table.
-   *
-   * Not while the cursor is in a cell: there Ctrl+Z is the browser's own undo
-   * of what is being typed, which is what somebody in a cell means by it.
-   * Taking that over would answer "undo this word" by throwing away the last
-   * hundred rows.
-   */
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      const key = e.key.toLowerCase();
-      if (key !== 'z' && key !== 'y') return;
-      const el = e.target as HTMLElement | null;
-      const tag = el?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
-      e.preventDefault();
-      if (key === 'y' || e.shiftKey) redoRows(); else undoRows();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
-
   useEffect(() => {
     // Only reload rows when the selected equipment ID changes (different equipment selected)
     // NOT when the same equipment's data is updated (would cause infinite loop)
@@ -862,7 +781,6 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       // which is about a table that is no longer on screen.
       const live = new Set((projectData.equipments ?? []).map((e: Equipment) => e.id));
       for (const id of [...excelMemory.keys()]) if (!live.has(id)) excelMemory.delete(id);
-      for (const id of [...undoMemory.keys()]) if (!live.has(id)) undoMemory.delete(id);
       setImportPlan(null);
       setSimarisReport(null);
     }
@@ -2217,33 +2135,6 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           are surfaced. When OFF, all filters are bypassed (kept in memory
           so flipping ON restores them). */}
       <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-        {/* Five steps back, on the table only. The keys do the same thing,
-            except inside a cell, where they are the browser's own. */}
-        <div className="flex items-center rounded border border-gray-300 overflow-hidden">
-          <button
-            onClick={undoRows}
-            disabled={history.past.length === 0}
-            title={history.past.length > 0
-              ? `Undo the last change to this table — ${history.past.length} step(s) back (Ctrl+Z)`
-              : 'Nothing to undo on this table'}
-            className="px-2.5 py-1.5 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
-          >
-            <Undo2Icon className="w-3.5 h-3.5" />
-            Undo{history.past.length > 0 ? ` (${history.past.length})` : ''}
-          </button>
-          <button
-            onClick={redoRows}
-            disabled={history.future.length === 0}
-            title={history.future.length > 0
-              ? `Put back what was just undone (Ctrl+Y)`
-              : 'Nothing to redo on this table'}
-            className="px-2.5 py-1.5 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed border-l border-gray-300 flex items-center gap-1"
-          >
-            <Redo2Icon className="w-3.5 h-3.5" />
-            Redo
-          </button>
-        </div>
-
         <button
           onClick={() => {
             // Turning OFF also clears any active filters per the user spec
@@ -2393,6 +2284,12 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         className="border border-gray-200 rounded overflow-auto"
         style={freezeRows > 0 || freezeHeader ? { maxHeight: isFullscreen ? 'calc(100vh - 220px)' : '70vh' } : undefined}
         onContextMenu={(e) => handleContextMenu(e, 'row')}
+        // No undo in this table, not even the browser's own inside a cell:
+        // several people work on one project, and a step back here is not
+        // one anybody can promise stays inside this person's own typing.
+        onKeyDownCapture={e => {
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') e.preventDefault();
+        }}
       >
         {/* As wide as its columns need, and never narrower than the box: a
             table held to the box's width squeezed every column until its

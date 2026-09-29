@@ -3,12 +3,13 @@
 Four layers, from the one that catches a slip to the one that catches a fire.
 They are independent on purpose: each covers what the one before it cannot.
 
-## 1 — Undo, in the table
+## 1 — No undo in the table
 
-`Ctrl+Z` in Device Selection, five steps, `Ctrl+Y` forward. Catches the
-import that replaced too much and the delete that was one row too many,
-in the second after it happened. Lives in the browser and goes when the
-page is reloaded — it is for the last minute, not the last day.
+Device Selection has no Undo: no button, and `Ctrl+Z` does nothing there,
+not even inside a cell. Several people work on one project at once, and a
+step back in a shared table is not one anybody can promise stays inside
+one person's own work. A slip there is put right from layer 2 — restoring
+the one switchgear from a version a few minutes old.
 
 ## 2 — Version history, on the server
 
@@ -138,7 +139,6 @@ Worth doing once, before the first real project, and once a month after.
 
 | | What to do | What should happen |
 |---|---|---|
-| Undo | Delete a few rows, `Ctrl+Z` | They come back |
 | History | File → History & restore… | Versions listed, oldest a couple of hours back |
 | Per-switchgear | Restore one switchgear from a version | Only that one changes |
 | Save failure | `docker stop simorgh-soft` backend, edit something | Red "Not saved", then the dialog |
