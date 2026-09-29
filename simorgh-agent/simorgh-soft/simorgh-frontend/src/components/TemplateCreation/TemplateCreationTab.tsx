@@ -283,11 +283,11 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex justify-between items-center mb-4 shrink-0">
         <h2 className="text-xl font-semibold">Create Template</h2>
       </div>
 
-      <div className="flex flex-grow border border-gray-200 rounded-md overflow-hidden">
+      <div className="flex flex-grow min-h-0 border border-gray-200 rounded-md overflow-hidden">
         {/* Closed, the tree leaves no column behind it: the properties take
             the whole width rather than three quarters of it. */}
         <PanelFrame
@@ -297,7 +297,7 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
           note="LV, MV, HV, GIS and Other, the sections under them, and BPMS — the templates read from TPMS"
           side="left"
           className="w-1/4 border-0 border-r border-gray-200 rounded-none"
-          bodyClassName="overflow-y-auto"
+          bodyClassName="flex-1 overflow-y-auto"
         >
           <TemplateTree
             bare
@@ -306,7 +306,7 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
             selectedTemplateId={selectedTemplate}
           />
         </PanelFrame>
-        <div className="flex-1 min-w-0 p-4 overflow-y-auto">
+        <div className="flex-1 min-w-0 min-h-0 p-4 overflow-hidden">
           {selectedTemplateData ? (
             <TemplateProperties template={selectedTemplateData} />
           ) : (
@@ -317,7 +317,7 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
         </div>
       </div>
 
-      <div className="flex justify-end mt-4">
+      <div className="flex justify-end mt-4 shrink-0">
         <button
           className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
           onClick={onComplete}

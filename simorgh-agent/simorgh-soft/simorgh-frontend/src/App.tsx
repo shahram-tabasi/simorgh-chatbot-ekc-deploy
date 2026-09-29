@@ -1139,11 +1139,14 @@ const MainApp: React.FC = () => {
     {
       id: 1,
       title: `Create Template`,
+      // Held to the window, so each of its panels scrolls on its own.
+      fill: true,
       component: <TemplateCreationTab onComplete={() => setActiveTab(2)} initialSelectedTemplate={navigatingToTemplateId} />
     },
     {
       id: 2,
       title: `Device Selection`,
+      fill: true,
       component: (
         <DeviceSelectionTab
           projectData={projectData}
@@ -1450,6 +1453,19 @@ const MainApp: React.FC = () => {
             want the width, and when a panel beside them is closed they should
             get the room it gave up — a capped container would have left it as
             grey margin instead. */}
+        {/* A tab marked `fill` is held to the window instead of growing with
+            what is in it: the page does not scroll, each panel inside it does,
+            so the tree, the table and the drawing beside it each keep their
+            own place. The rest scroll as a page, as they always have. */}
+        {(tabs[activeTab] as { fill?: boolean }).fill ? (
+          <div className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
+            <div className="w-full px-4 py-4 flex-1 min-h-0 flex flex-col">
+              <div className="bg-white rounded-lg shadow-md p-6 flex-1 min-h-0 flex flex-col">
+                <div className="flex-1 min-h-0">{tabs[activeTab].component}</div>
+              </div>
+            </div>
+          </div>
+        ) : (
         <div className="flex-1 min-w-0 overflow-auto">
           <div className="w-full px-4 py-4">
             <div className="bg-white rounded-lg shadow-md p-6">
@@ -1457,6 +1473,7 @@ const MainApp: React.FC = () => {
             </div>
           </div>
         </div>
+        )}
 
         {/* AI chatbot — embedded sibling column (not a floating overlay).
             We hand it the active-tab state so it can both surface the

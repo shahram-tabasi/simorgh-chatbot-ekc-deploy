@@ -3503,10 +3503,10 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
       note="The templates a device row can be dropped onto"
       side="left"
       className="w-[220px]"
+      bodyClassName="flex-1 overflow-y-auto"
     >
-      {/* As tall as the window allows: a fixed 24rem put a scroll bar on a
-          short list beside an empty column of page. */}
-      <div className="p-2 max-h-[calc(100vh-14rem)] overflow-y-auto">
+      {/* Scrolls inside its own panel, which is as tall as the tab. */}
+      <div className="p-2">
         {TIERS.map(type => (
           <div key={type} className="mb-3">
             <div className="text-xs font-semibold text-gray-600 mb-1">{type}</div>
@@ -3547,16 +3547,16 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
   // in both by construction — which is the only way the two stay the same.
   const workspace = (
     <div
-      className="grid grid-cols-1 gap-3 items-start"
+      className="grid grid-cols-1 gap-3 items-stretch flex-1 min-h-0"
       style={{ gridTemplateColumns: columns }}
     >
       {renderTemplateLeftPanel()}
 
-      <div className="border rounded min-w-0">
-        <div className="bg-gray-50 px-4 py-2 border-b">
+      <div className="border rounded min-w-0 min-h-0 flex flex-col">
+        <div className="bg-gray-50 px-4 py-2 border-b shrink-0">
           <h3 className="font-medium">Device Specifications</h3>
         </div>
-        <div className="p-3">
+        <div className="p-3 flex-1 min-h-0 overflow-auto">
           <DeviceTable
             selectedEquipment={currentEquipment}
             updateEquipment={updateEquipment}
@@ -3577,6 +3577,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
         note="The switchgears of this project, by voltage level"
         side="right"
         className="w-[260px]"
+        bodyClassName="flex-1 overflow-y-auto"
       >
         <EquipmentTree
           projectData={projectData}
@@ -3660,8 +3661,8 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
   }
 
   return (
-    <div>
-      <h2 className="text-xl font-semibold mb-4">Device Selection - {projectData.projectName}</h2>
+    <div className="h-full min-h-0 flex flex-col">
+      <h2 className="text-xl font-semibold mb-4 shrink-0">Device Selection - {projectData.projectName}</h2>
 
       {/* Templates and Equipment Tree get just enough fixed width for their
           content (names/tree labels); Device Specifications takes all the
@@ -3673,7 +3674,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
 
       {overlays}
 
-      <div className="flex justify-end mt-6">
+      <div className="flex justify-end mt-6 shrink-0">
         <button
           className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
           onClick={onNext}

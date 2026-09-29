@@ -931,8 +931,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   };
 
   return (
-    <div className="h-full">
-      <div className="mb-4">
+    <div className="h-full min-h-0 flex flex-col">
+      <div className="mb-4 shrink-0">
         <h3 className="text-lg font-semibold">{template.name}</h3>
         <p className="text-sm text-gray-500">
           Type: {template.type}
@@ -954,7 +954,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
 
       {/* The table is untouched; the schematic sits beside it — and gives its
           room back when it is closed. */}
-      <div className="flex gap-4 items-start">
+      {/* Each side scrolls on its own: the parts table, and the drawing. */}
+      <div className="flex gap-4 items-stretch flex-1 min-h-0">
       {/* `overflow-x-auto` rather than `overflow-hidden`, and a min-width the
           columns actually need.
           Nine columns of fixed width plus the part name come to about 1180px.
@@ -963,7 +964,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           reading "Mc" — and with `overflow-hidden` the far columns could not
           be reached at all. Now it keeps its columns and scrolls under its own
           headings, which is what a wide table is supposed to do. */}
-      <div className="flex-1 min-w-0 border border-gray-200 rounded-md overflow-x-auto overflow-y-hidden">
+      <div className="flex-1 min-w-0 min-h-0 border border-gray-200 rounded-md overflow-auto">
         <table className="w-full min-w-[1180px]">
           <thead>
             <tr className="bg-gray-50">
@@ -1292,7 +1293,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
         note="The whole cell, drawn the way a feeder built on it will be."
         side="right"
         className="w-80 shrink-0 border-0 bg-transparent"
-        bodyClassName="pt-2"
+        bodyClassName="pt-2 flex-1 overflow-y-auto"
       >
         <PartSchematicPanel
           bare
