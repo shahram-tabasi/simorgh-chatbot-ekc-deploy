@@ -130,20 +130,19 @@ export function buildTpmsRevisionSnapshot(
   const linesByScope = new Map<number, TpmsRevisionData['switchgears'][number]>();
   for (const entry of revisionData.switchgears ?? []) linesByScope.set(entry.scopeId, entry);
 
-  // A project TPMS has not drafted yet has panels and no feeder lines. That is
-  // a real project — it is the thing an engineer opens in order to draft it —
-  // and skipping every switchgear for want of lines left the snapshot with no
-  // master data at all: no project name, so the save came back
-  // "A project needs a name" and the project could not be opened.
-  const hasRevisions = (header.revisions ?? []).length > 0;
-
+  // Every switchgear TPMS lists is a panel of the project, drafted or not.
+  //
+  // A switchgear with no lines at this revision used to be left out of it, on
+  // the idea that it "did not exist yet". But TPMS numbers revisions per
+  // switchgear: a panel drafted at REV 1 and never revised has no lines at
+  // REV 5, and a panel nobody has drafted has none at all — and both are
+  // still panels of the project, with a specification that belongs in the
+  // Device Library. On a project of 84 panels that rule kept 14. The lines
+  // now arrive as each switchgear stood at this revision (the read asks for
+  // its newest revision up to this one), so a switchgear without any simply
+  // has not been drafted, and comes in with its specification and no rows.
   for (const sw of header.switchgears ?? []) {
     const entry = linesByScope.get(sw.scopeId);
-    // A switchgear with no lines at a revision the project *does* have did not
-    // exist yet (or was emptied); it simply isn't in that snapshot. Where
-    // there are no revisions at all there are no lines to be missing, so every
-    // switchgear comes in with its specification and nothing on it.
-    if (hasRevisions && (!entry || entry.lines.length === 0)) continue;
     const lines = entry?.lines ?? [];
 
     const payload: TpmsPayload = {

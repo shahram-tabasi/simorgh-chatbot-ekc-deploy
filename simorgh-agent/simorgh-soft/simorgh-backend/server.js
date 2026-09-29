@@ -13,6 +13,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { registerDesktopRoutes } from './desktopDownload.js';
 import { registerTpmsImportRoutes } from './tpmsImport.js';
+import { registerProjectLockRoutes } from './projectLocks.js';
 import { deadline, MYSQL_PING_TIMEOUT_MS } from './dbTimeout.js';
 import { registerEplanSymbolRoutes } from './eplanSymbols.js';
 import { registerEplanRoutes } from './eplanSend.js';
@@ -543,6 +544,8 @@ registerPlotframeFieldRoutes(app, () => db);
 // Every version of every project, so a bad save has a yesterday to go
 // back to. See projectHistory.js.
 registerProjectHistoryRoutes(app, () => db);
+// Who is working on which switchgear or template — see projectLocks.js.
+registerProjectLockRoutes(app, () => db);
 
 // The office's own symbols, in the library database. The projects database is
 // handed over too, only so that symbols saved before the library had one of its

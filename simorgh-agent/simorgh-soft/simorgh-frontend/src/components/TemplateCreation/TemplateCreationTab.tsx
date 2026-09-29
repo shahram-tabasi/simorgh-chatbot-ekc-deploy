@@ -226,14 +226,32 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
   onComplete,
   initialSelectedTemplate
 }) => {
-  const { projectData } = useProject();
+  const { projectData, holdLock, releaseLock } = useProject();
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(initialSelectedTemplate ?? null);
+
+  // The template open here is this person's while it is open: a colleague who
+  // clicks it is told who has it, and is not let in until it is let go —
+  // opening another one, or leaving this tab.
+  const openRef = React.useRef<string | null>(null);
+  const openTemplate = React.useCallback(async (templateId: string) => {
+    if (openRef.current === templateId) { setSelectedTemplate(templateId); return; }
+    if (!(await holdLock('template', templateId))) return;
+    if (openRef.current) releaseLock('template', openRef.current);
+    openRef.current = templateId;
+    setSelectedTemplate(templateId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  React.useEffect(() => () => {
+    if (openRef.current) releaseLock('template', openRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   React.useEffect(() => {
     if (initialSelectedTemplate) {
-      setSelectedTemplate(initialSelectedTemplate);
+      setSelectedTemplate(null);
+      void openTemplate(initialSelectedTemplate);
     }
-  }, [initialSelectedTemplate]);
+  }, [initialSelectedTemplate, openTemplate]);
 
   if (!projectData) {
     return (
@@ -247,7 +265,7 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
   }
 
   const handleTemplateSelect = (templateId: string) => {
-    setSelectedTemplate(templateId);
+    void openTemplate(templateId);
   };
 
   const getSelectedTemplateData = () => {

@@ -1699,7 +1699,16 @@ export function App() {
   const handleProjectSelect = (project: any, revision?: any) => {
     // If a revision is selected, load the project snapshot from that revision
     if (revision && revision.projectSnapshot) {
-      setCurrentProject(revision.projectSnapshot);
+      // The content is the revision's; the version is the project's. A
+      // snapshot keeps whatever version the project had when it was taken,
+      // and saving against that old number was refused as "changed on
+      // another computer" — with both sides identical — on the first
+      // autosave after opening.
+      setCurrentProject({
+        ...revision.projectSnapshot,
+        _id: project?._id ?? revision.projectSnapshot._id,
+        ...(project?.rev != null ? { rev: project.rev } : {}),
+      });
     } else {
       setCurrentProject(project);
     }

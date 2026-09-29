@@ -484,6 +484,34 @@ export const SQL = {
     WHERE d.Project_ID = ? AND d.Tablo_ID = ? AND d.revision = ?
     ORDER BY d.ordering, d.ID, e.equipment, e.priority`,
 
+  // One switchgear as it stood at a project revision: its lines at the
+  // newest revision *it* has up to that one. TPMS numbers revisions per
+  // switchgear — a panel drafted at REV 1 and never touched again has no
+  // lines "at REV 5", yet at REV 5 it is still there, exactly as REV 1 left
+  // it. Read at the exact number, every such panel dropped out of the
+  // project: 84 panels in TPMS came across as the 14 revised last.
+  linesUpTo: `
+    SELECT d.ID AS draftId, d.scopeName, d.bus_section, d.feeder_no, d.wiring_type,
+           d.rating_power, d.flc, d.tag, d.Designation, d.Module, d.Size, d.sfd_hfd,
+           d.cable_size, d.cb_rating, d.contactor_rating, d.overLoad_rating,
+           d.module_type, d.templateName, d.ordering,
+           e.equipment, e.label, e.SCODE, e.SEC_DES, e.ENG_DES, e.SHR_DES,
+           e.priority, e.QTY, e.Ecode, e.BRAND_DES,
+           t.lable AS tlabel
+    FROM View_draft d
+    LEFT JOIN View_draft_Equipment e ON e.draftId = d.ID
+    LEFT JOIN (
+      SELECT l.ECODE, l.lable
+      FROM Technical_draft_lable_eplan_TB l
+      JOIN (SELECT ECODE, MAX(id) AS id FROM Technical_draft_lable_eplan_TB GROUP BY ECODE) m
+        ON m.ECODE = l.ECODE AND m.id = l.id
+    ) t ON t.ECODE = e.Ecode
+    WHERE d.Project_ID = ? AND d.Tablo_ID = ? AND d.revision = (
+      SELECT MAX(x.revision) FROM View_draft x
+      WHERE x.Project_ID = ? AND x.Tablo_ID = ? AND x.revision <= ?
+    )
+    ORDER BY d.ordering, d.ID, e.equipment, e.priority`,
+
   columns: `
     SELECT level, name FROM View_draft_column
     WHERE Project_ID = ?`,
@@ -852,6 +880,9 @@ export function registerTpmsImportRoutes(app, getPool) {
     // read — it is the request that times out on the way through nginx — so
     // the client walks it switchgear by switchgear and each read stays small.
     const scopeId = req.query.scopeId != null ? Number(req.query.scopeId) : null;
+    // `upTo=1`: each switchgear at its own newest revision up to this one,
+    // rather than only the switchgears that have lines at exactly this one.
+    const upTo = req.query.upTo === '1' || req.query.upTo === 'true';
     if (!Number.isFinite(projectId) || !Number.isFinite(revision)) {
       return res.status(400).json({ success: false, error: 'projectId and revision are required' });
     }
@@ -862,7 +893,9 @@ export function registerTpmsImportRoutes(app, getPool) {
       const pool = withQueryTimeout(await getPool());
       const started = Date.now();
       const [joinedRows] = scopeId != null
-        ? await pool.query(SQL.lines, [projectId, scopeId, revision])
+        ? (upTo
+            ? await pool.query(SQL.linesUpTo, [projectId, scopeId, projectId, scopeId, revision])
+            : await pool.query(SQL.lines, [projectId, scopeId, revision]))
         : await pool.query(SQL.linesForRevision, [projectId, revision]);
       if (scopeId != null) {
         for (const row of joinedRows) if (row.tabloId == null) row.tabloId = scopeId;

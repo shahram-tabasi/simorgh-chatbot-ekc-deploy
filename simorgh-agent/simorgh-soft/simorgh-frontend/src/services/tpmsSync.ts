@@ -243,8 +243,15 @@ export async function syncProjectFromTpms(
   const current = out.length > 0 ? out[out.length - 1] : null;
   say('Done.', total, total);
 
+  // The version the project is at *now*, after the save above moved it. The
+  // snapshot was built on the project as it was read, and carries the version
+  // it had then: opened with that, the first autosave was refused as "changed
+  // on another computer" with both sides identical.
+  const savedRev = (saved as { rev?: number }).rev;
   return {
-    project: current?.projectSnapshot ? { ...current.projectSnapshot, _id: projectId } : saved,
+    project: current?.projectSnapshot
+      ? { ...current.projectSnapshot, _id: projectId, ...(savedRev != null ? { rev: savedRev } : {}) }
+      : saved,
     revisions: [...out].reverse(),   // newest first, as the rest of the app expects
     current,
     header,

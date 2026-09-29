@@ -52,6 +52,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     deleteTemplate,
     setTemplateMechanical,
     moveTemplate,
+    lockedBy,
   } = useProject();
 
   // Pending template deletion — confirmed through the cascade dialog, which
@@ -144,6 +145,14 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
             <span className={`mr-1 text-[9px] px-1 py-px rounded font-semibold ${TIER_PILL[template.type] ?? ''}`}>{template.type}</span>
           )}
           {template.name}
+          {lockedBy('template', template.id) && (
+            <span
+              className="ml-1.5 text-[10px] px-1 py-px rounded bg-amber-100 text-amber-800"
+              title={`${lockedBy('template', template.id)!.userName} is working on this template`}
+            >
+              🔒 {lockedBy('template', template.id)!.userName}
+            </span>
+          )}
         </span>
         {templateMeta(template) && (
           <span className="text-[10px] text-gray-500 truncate">

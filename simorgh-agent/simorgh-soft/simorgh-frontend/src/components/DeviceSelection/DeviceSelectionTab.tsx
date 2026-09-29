@@ -2943,6 +2943,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
   setSelectedEquipment,
   onNavigateToDeviceLibrary
 }) => {
+  const { lockedBy } = useProject();
   const [showAddModal,       setShowAddModal]       = useState(false);
   const [selectedLibItemId,  setSelectedLibItemId]  = useState('');
   // Equipment properties modal (read-only view with Edit→navigate)
@@ -3085,6 +3086,14 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
                       </button>
                     )}
                     <div className="text-sm font-medium">{eq.name}</div>
+                    {lockedBy('equipment', eq.id) && (
+                      <span
+                        className="ml-1.5 text-[10px] px-1 py-px rounded bg-amber-100 text-amber-800 whitespace-nowrap"
+                        title={`${lockedBy('equipment', eq.id)!.userName} is working on this device`}
+                      >
+                        🔒 {lockedBy('equipment', eq.id)!.userName}
+                      </span>
+                    )}
                   </div>
                   <span className={`text-xs px-2 py-0.5 rounded font-semibold ${getTypeColor(eq.type)}`}>
                     {eq.type}
@@ -3480,6 +3489,23 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
   onNavigateToDeviceLibrary
 }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // The switchgear open here is this person's while this tab is on screen.
+  // Leaving the tab lets it go so a colleague can have it; coming back takes
+  // it again — or, if somebody has it by then, says so and closes it here.
+  const { holdLock, releaseLock } = useProject();
+  const openEquipmentRef = useRef<string | null>(null);
+  openEquipmentRef.current = selectedEquipment?.id ?? null;
+  useEffect(() => {
+    const id = openEquipmentRef.current;
+    if (id) {
+      void holdLock('equipment', id).then(ok => { if (!ok) setSelectedEquipment(null); });
+    }
+    return () => {
+      if (openEquipmentRef.current) releaseLock('equipment', openEquipmentRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [clipboardRows, setClipboardRows] = useState<DeviceTableRow[]>([]);
 
   // Template right-click context menu state (left panel)

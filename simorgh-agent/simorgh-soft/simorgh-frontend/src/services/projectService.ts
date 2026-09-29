@@ -68,7 +68,10 @@ export const tpmsService = {
   // it, or — with a scopeId — of that one switchgear. Heavy projects are read
   // switchgear by switchgear so no single request has to carry the lot.
   async getProjectRevision(projectMainId: number, revision: number, scopeId?: number): Promise<any> {
-    const query = scopeId != null ? `?scopeId=${scopeId}` : '';
+    // Per switchgear, each one is read at its own newest revision up to this
+    // one — TPMS numbers revisions per switchgear, and a panel last drafted
+    // at an earlier revision is still part of the project at this one.
+    const query = scopeId != null ? `?scopeId=${scopeId}&upTo=1` : '';
     const r = await fetch(`${API_BASE_URL}/tpms/project/${projectMainId}/revision/${revision}${query}`);
     const body = await r.json().catch(() => ({}));
     if (!r.ok || body.success === false) {

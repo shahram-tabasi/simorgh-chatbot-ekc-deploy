@@ -284,7 +284,14 @@ export function buildTpmsImport(
   let libraryItemId: string | undefined;
 
   if (options.deviceLibrary && payload.device?.name) {
-    const existing = (library[tier] ?? []).find(d => d.name === payload.device.name);
+    // The panel is found by its TPMS id first. By name alone, two panels TPMS
+    // keeps apart but calls the same folded into one entry, and every panel
+    // after the first overwrote it.
+    const scopeId = payload.scope.scopeId;
+    const existing =
+      (scopeId != null ? (library[tier] ?? []).find(d => d.tpmsScopeId === scopeId) : undefined)
+      ?? (library[tier] ?? []).find(d =>
+        d.name === payload.device.name && (scopeId == null || d.tpmsScopeId == null));
     libraryItemId = existing?.id ?? `lib-tpms-${key}`;
     const item: DeviceLibraryItem = {
       id: libraryItemId,
@@ -463,9 +470,16 @@ export function buildTpmsImport(
     // The switchgear itself: refresh the one already imported under this
     // name, otherwise add it.
     const equipments = projectData.equipments ?? [];
-    const existingEquipment = equipments.find(
-      eq => eq.type === tier && eq.name === payload.scope.scopeName,
-    );
+    // By TPMS id first, for the same reason as the library entry above; by
+    // name for a switchgear imported before the id was kept.
+    const tpmsIdOf = (eq: Equipment) => (eq.properties as any)?.tpms?.scopeId;
+    const existingEquipment =
+      (payload.scope.scopeId != null
+        ? equipments.find(eq => tpmsIdOf(eq) === payload.scope.scopeId)
+        : undefined)
+      ?? equipments.find(eq =>
+        eq.type === tier && eq.name === payload.scope.scopeName
+        && (payload.scope.scopeId == null || tpmsIdOf(eq) == null));
     const equipmentId = existingEquipment?.id ?? `eq-tpms-${key}`;
     summary.replacedEquipment = !!existingEquipment;
 

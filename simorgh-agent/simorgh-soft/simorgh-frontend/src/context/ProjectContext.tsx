@@ -4,6 +4,8 @@ import { ProjectConflict, SaveNeedsYou, projectService } from '../services/proje
 import { removeTemplateEverywhere } from '../utils/cascadeDelete';
 import { downloadText, fileSafe } from '../utils/download';
 import { type Tier, TIERS, emptyTiers, withAllTiers } from '../utils/tiers';
+import { mergeProjects, contentKey } from '../utils/projectMerge';
+import { lockService, lockKey, holderId, userName, setUserName, type LockKind, type LockInfo } from '../services/lockService';
 
 interface ProjectContextType {
   projectData: ProjectData;
@@ -97,6 +99,15 @@ interface ProjectContextType {
   // True while TPMS owns this project: it is re-read from TPMS every time it
   // opens, so nothing here may be edited. Raising a revision takes it over.
   isTpmsMastered: boolean;
+  /**
+   * Take the switchgear or template somebody is about to work on, so nobody
+   * else edits it meanwhile. Resolves false — and the "somebody else is on
+   * this" notice is up — when a colleague already has it.
+   */
+  holdLock: (kind: LockKind, id: string, name?: string) => Promise<boolean>;
+  releaseLock: (kind: LockKind, id: string) => void;
+  /** The colleague working on this one right now, if anybody is. */
+  lockedBy: (kind: LockKind, id: string) => LockInfo | null;
 }
 
 // Details shown by the "this revision is locked" dialog. `kind` says why:
@@ -208,9 +219,75 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   );
   // Every way a project comes in — opened, switched to, restored, merged —
   // passes through here, so every screen can take a list per tier for granted.
-  const setProjectData = React.useCallback(
+  const loadProjectData = React.useCallback(
     (next: ProjectData | ((prev: ProjectData) => ProjectData)) =>
       setProjectDataRaw(prev => wholeProject(typeof next === 'function' ? next(prev) : next)),
+    []);
+
+  // ── Who is working on what ──────────────────────────────────────────────
+  // The locks colleagues hold in this project, as the last heartbeat said.
+  const [othersLocks, setOthersLocks] = useState<LockInfo[]>([]);
+  const othersLocksRef = React.useRef<Map<string, LockInfo>>(new Map());
+  othersLocksRef.current = new Map(othersLocks.map(l => [l.key, l]));
+  // What this tab holds, so the heartbeat and the way out know what to free.
+  const myLocksRef = React.useRef<Set<string>>(new Set());
+  const [lockNotice, setLockNotice] = useState<{
+    kind: LockKind; name: string; holder: LockInfo | null;
+  } | null>(null);
+  const [askName, setAskName] = useState(false);
+
+  // An edit that reaches a switchgear or template a colleague is working on is
+  // turned back for that one thing — the rest of the edit stands — and the
+  // notice says who has it. This is the backstop behind the lock taken when
+  // something is opened: whatever path an edit comes by (a menu, the
+  // assistant, a paste from another tab), it cannot land on somebody else's
+  // work.
+  const enforceLocks = (prev: ProjectData, next: ProjectData): ProjectData => {
+    const held = othersLocksRef.current;
+    if (held.size === 0) return next;
+    let refused: { kind: LockKind; name: string; holder: LockInfo } | null = null;
+
+    const guardList = <T extends { id: string; name?: string }>(
+      kind: LockKind, before: T[] = [], after: T[] = [],
+    ): T[] => {
+      if (before === after) return after;
+      const was = new Map(before.map(x => [x.id, x]));
+      const out = after.map(x => {
+        const holder = held.get(lockKey(kind, x.id));
+        const old = was.get(x.id);
+        if (!holder || !old || old === x) return x;
+        refused ??= { kind, name: old.name ?? x.id, holder };
+        return old;
+      });
+      // Something of theirs deleted from here comes back.
+      const here = new Set(after.map(x => x.id));
+      for (const old of before) {
+        const holder = held.get(lockKey(kind, old.id));
+        if (holder && !here.has(old.id)) {
+          refused ??= { kind, name: old.name ?? old.id, holder };
+          out.push(old);
+        }
+      }
+      return out;
+    };
+
+    const equipments = guardList('equipment', prev.equipments, next.equipments);
+    const templates = { ...next.templates };
+    for (const tier of TIERS) {
+      templates[tier] = guardList('template', prev.templates?.[tier], next.templates?.[tier]);
+    }
+    if (!refused) return next;
+    const notice = refused as { kind: LockKind; name: string; holder: LockInfo };
+    queueMicrotask(() => setLockNotice(notice));
+    return { ...next, equipments, templates };
+  };
+
+  // Every edit comes through here; loads use loadProjectData.
+  const setProjectData = React.useCallback(
+    (next: ProjectData | ((prev: ProjectData) => ProjectData)) =>
+      setProjectDataRaw(prev => wholeProject(
+        enforceLocks(prev, typeof next === 'function' ? next(prev) : next))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     []);
   const [projectId, setProjectId] = useState<string | null>(initialProject?._id || null);
   const [selectedEquipment, setSelectedEquipment] = useState<Equipment | null>(null);
@@ -256,6 +333,13 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
    */
   const revRef = React.useRef<number | undefined>(
     (initialProject as { rev?: number } | null | undefined)?.rev);
+  /**
+   * The project as it is in the database at `revRef` — what this copy
+   * started from. A save that finds the database moved on merges against it
+   * (see utils/projectMerge), and a save with nothing different from it is
+   * not sent at all.
+   */
+  const baseRef = React.useRef<ProjectData>(projectData);
 
   /**
    * Somebody else's version of this project, and the choice between them.
@@ -344,7 +428,9 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         try {
           const p = await projectService.getProjectById(pid);
           if (p) {
-            setProjectData({ ...defaultProjectData, ...p });
+            loadProjectData({ ...defaultProjectData, ...p });
+            baseRef.current = { ...defaultProjectData, ...p };
+            revRef.current = (p as { rev?: number }).rev;
             setProjectId(pid);
           }
         } catch (e) {
@@ -383,7 +469,8 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   const resolveConflictTakeTheirs = () => {
     if (!conflict) return;
     keepACopy(conflict.mine, 'my-version');
-    setProjectData({ ...defaultProjectData, ...conflict.theirs });
+    loadProjectData({ ...defaultProjectData, ...conflict.theirs });
+    baseRef.current = { ...defaultProjectData, ...conflict.theirs };
     revRef.current = conflict.theirRev;
     conflictRef.current = false;
     setConflict(null);
@@ -396,6 +483,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     // Their version is on disk, so writing over it loses nothing. Catching up
     // to their rev is what makes the next save land.
     revRef.current = conflict.theirRev;
+    baseRef.current = { ...defaultProjectData, ...conflict.theirs };
     conflictRef.current = false;
     setConflict(null);
     setSaveError(null);
@@ -493,16 +581,49 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         data as ProjectData & { rev?: number };
       const projectToSave = { ...withoutId, changedOn: new Date().toISOString() };
 
+      // Nothing different from what the database holds: nothing to send.
+      // Every change of state schedules an autosave — a colleague's work
+      // merged in, a project just opened — and saving it back unchanged only
+      // moved the version and made everybody else read the project again.
+      if (id && revRef.current !== undefined && contentKey(projectToSave as ProjectData) === contentKey(baseRef.current)) {
+        return;
+      }
+
       setSaving(true);
       try {
         if (id) {
-          const saved = await projectService.updateProject(id, projectToSave, revRef.current);
-          revRef.current = (saved as { rev?: number })?.rev ?? revRef.current;
+          let body = projectToSave as ProjectData;
+          // The database moved on under this copy — usually a colleague who
+          // saved their own switchgear or template. Their work and this work
+          // are put together and saved; only a real clash, the same thing
+          // changed differently on both sides, goes to the person to decide.
+          for (let attempt = 0; ; attempt++) {
+            try {
+              const saved = await projectService.updateProject(id, body, revRef.current);
+              revRef.current = (saved as { rev?: number })?.rev ?? revRef.current;
+              baseRef.current = body;
+              break;
+            } catch (err) {
+              if (!(err instanceof ProjectConflict) || attempt >= 3) throw err;
+              const theirs = { ...defaultProjectData, ...err.theirs } as ProjectData;
+              const { merged, clashes } = mergeProjects(baseRef.current, body, theirs);
+              if (clashes.length > 0) throw err;
+              const oldBase = baseRef.current;
+              baseRef.current = theirs;
+              revRef.current = err.theirRev;
+              // What is on screen takes their work too — including anything
+              // typed while this save was on its way.
+              loadProjectData(prev => ({ ...mergeProjects(oldBase, prev, theirs).merged, _id: prev._id }));
+              const { _id: _m, rev: _r, ...rest } = merged as ProjectData & { rev?: number };
+              body = rest as ProjectData;
+            }
+          }
         } else {
           const created = await projectService.createProject(projectToSave);
           setProjectId(created._id!);
           projectIdRef.current = created._id!;
           revRef.current = (created as { rev?: number })?.rev ?? 1;
+          baseRef.current = projectToSave as ProjectData;
           // Only the id is taken from the reply, and only when the project has
           // not got one yet.
           //
@@ -512,7 +633,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
           // its own answer — the edit stayed on screen, where the table keeps
           // its own copy of the rows, and never reached the database. Coming
           // back to that switchgear later is when it appeared to vanish.
-          setProjectData(prev => (prev._id ? prev : { ...prev, _id: created._id }));
+          loadProjectData(prev => (prev._id ? prev : { ...prev, _id: created._id }));
         }
 
         // Revisions are otherwise frozen at creation time. Keep the active
@@ -521,7 +642,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         // snapshot is what was sent, not what came back.
         if (revision) {
           const updatedRevision = await projectService.updateRevision(revision._id!, {
-            projectSnapshot: { ...projectToSave, _id: id ?? projectIdRef.current ?? undefined },
+            projectSnapshot: { ...baseRef.current, _id: id ?? projectIdRef.current ?? undefined },
           });
           // Only take the response when it really is a revision. A malformed
           // reply used to replace the active revision with something that had
@@ -864,9 +985,14 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     });
 
     if (takingOver) {
-      setProjectData(snapshot);
+      loadProjectData(snapshot);
       try {
-        await projectService.updateProject(pid, { tpmsSync });
+        // The write moves the project's version. Held on to, or the next
+        // autosave is refused as "changed on another computer" — by this
+        // very write.
+        const marked = await projectService.updateProject(pid, { tpmsSync });
+        if ((marked as { rev?: number })?.rev != null) revRef.current = (marked as { rev?: number }).rev;
+        baseRef.current = snapshot;
       } catch (err) {
         console.error('Revision created, but the project could not be marked as taken over:', err);
       }
@@ -902,7 +1028,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     // Load the project snapshot from the selected revision
     if (revision.projectSnapshot) {
       console.log('Loading project snapshot from revision:', revision.revisionNumber);
-      setProjectData({ ...defaultProjectData, ...revision.projectSnapshot });
+      loadProjectData({ ...defaultProjectData, ...revision.projectSnapshot });
       setCurrentRevision(revision);
       // Update project ID to ensure consistency
       setProjectId(revision.projectId);
@@ -928,11 +1054,133 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       const newCurrent = updatedRevisions.length > 0 ? updatedRevisions[0] : null;
       setCurrentRevision(newCurrent);
       if (newCurrent && newCurrent.projectSnapshot) {
-        setProjectData({ ...defaultProjectData, ...newCurrent.projectSnapshot });
+        loadProjectData({ ...defaultProjectData, ...newCurrent.projectSnapshot });
         setProjectId(newCurrent.projectId);
       }
     }
   };
+
+  // ── Locks ───────────────────────────────────────────────────────────────
+  // Only a project somebody can edit is locked at all: looking at an old
+  // revision, or at a project TPMS still owns, holds nothing up for anyone.
+  const canLock = !!projectId && isCurrentRevisionEditable && !isTpmsMastered;
+
+  const lockedBy = (kind: LockKind, id: string): LockInfo | null =>
+    othersLocksRef.current.get(lockKey(kind, id)) ?? null;
+
+  const nameOf = (kind: LockKind, id: string): string => {
+    if (kind === 'equipment') return projectDataRef.current.equipments.find(e => e.id === id)?.name ?? id;
+    for (const tier of TIERS) {
+      const t = projectDataRef.current.templates?.[tier]?.find(x => x.id === id);
+      if (t) return t.name;
+    }
+    return id;
+  };
+
+  const holdLock = async (kind: LockKind, id: string, name?: string): Promise<boolean> => {
+    if (!canLock || !projectId) return true;
+    const key = lockKey(kind, id);
+    if (myLocksRef.current.has(key)) return true;
+    const known = othersLocksRef.current.get(key);
+    if (known) {
+      setLockNotice({ kind, name: name ?? nameOf(kind, id), holder: known });
+      return false;
+    }
+    if (!userName()) setAskName(true);
+    const result = await lockService.acquire(projectId, key);
+    if (result.ok === false) {
+      if (result.holder) setOthersLocks(prev => [...prev.filter(l => l.key !== key), result.holder!]);
+      setLockNotice({ kind, name: name ?? nameOf(kind, id), holder: result.holder });
+      return false;
+    }
+    // Held — or the lock service could not be reached, in which case nobody
+    // is stopped from working: a server without it behaves as it always did.
+    if (result.ok === true) myLocksRef.current.add(key);
+    return true;
+  };
+
+  const releaseLock = (kind: LockKind, id: string) => {
+    const key = lockKey(kind, id);
+    if (!myLocksRef.current.delete(key) || !projectId) return;
+    lockService.release(projectId, key);
+  };
+
+  // Opening a switchgear is taking it. One somebody else has is not opened;
+  // the notice says who has it, and the one open before stays open.
+  const selectEquipment = (equipment: Equipment | null) => {
+    const previous = selectedEquipment;
+    if (!equipment) {
+      if (previous) releaseLock('equipment', previous.id);
+      setSelectedEquipment(null);
+      return;
+    }
+    if (previous?.id === equipment.id) { setSelectedEquipment(equipment); return; }
+    const holder = canLock ? lockedBy('equipment', equipment.id) : null;
+    if (holder) {
+      setLockNotice({ kind: 'equipment', name: equipment.name, holder });
+      return;
+    }
+    if (previous) releaseLock('equipment', previous.id);
+    setSelectedEquipment(equipment);
+    void holdLock('equipment', equipment.id, equipment.name).then(ok => {
+      // Somebody took it in the moment between the two: step back out.
+      if (!ok) setSelectedEquipment(cur => (cur?.id === equipment.id ? null : cur));
+    });
+  };
+
+  // The heartbeat: every ten seconds this tab says it is still here, which
+  // keeps its locks, and learns everybody else's — and whether anybody has
+  // saved. A colleague's save is read and merged in straight away, so their
+  // switchgear is up to date on this screen before anyone here needs it.
+  React.useEffect(() => {
+    if (!canLock || !projectId) {
+      setOthersLocks([]);
+      return;
+    }
+    const pid = projectId;
+    let stopped = false;
+
+    const pull = async (serverRev: number) => {
+      if (conflictRef.current || revRef.current === undefined || serverRev <= revRef.current) return;
+      const theirs = { ...defaultProjectData, ...(await projectService.getProjectById(pid)) } as ProjectData;
+      const theirRev = (theirs as { rev?: number }).rev;
+      if (stopped || theirRev == null || theirRev <= (revRef.current ?? 0)) return;
+      const oldBase = baseRef.current;
+      // A clash is left for the next save to ask about; nothing is decided
+      // for the person in the background.
+      if (mergeProjects(oldBase, projectDataRef.current, theirs).clashes.length > 0) return;
+      baseRef.current = theirs;
+      revRef.current = theirRev;
+      loadProjectData(prev => ({ ...mergeProjects(oldBase, prev, theirs).merged, _id: prev._id }));
+    };
+
+    const beat = async () => {
+      const answer = await lockService.heartbeat(pid);
+      if (stopped || !answer) return;
+      const mine = holderId();
+      setOthersLocks(answer.locks.filter(l => l.holderId !== mine));
+      if (answer.rev != null) {
+        // In the save chain, so a pull never lands in the middle of a save.
+        const next = saveChain.current.then(() => pull(answer.rev!)).catch(err =>
+          console.warn('Could not read a colleague\'s changes:', err));
+        saveChain.current = next.catch(() => { /* reported above */ });
+      }
+    };
+
+    void beat();
+    const timer = setInterval(beat, 10_000);
+    const onUnload = () => lockService.releaseAllOnUnload(pid);
+    window.addEventListener('pagehide', onUnload);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      window.removeEventListener('pagehide', onUnload);
+      // Leaving the project, or it becoming read-only, lets go of everything.
+      if (myLocksRef.current.size > 0) lockService.release(pid);
+      myLocksRef.current.clear();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canLock, projectId]);
 
   // Load revisions when project ID changes
   React.useEffect(() => {
@@ -973,7 +1221,10 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         deleteEquipment,
         copyEquipment,
         selectedEquipment,
-        setSelectedEquipment,
+        setSelectedEquipment: selectEquipment,
+        holdLock,
+        releaseLock,
+        lockedBy,
         // Revision management
         currentRevision,
         revisions,
@@ -991,6 +1242,15 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       }}
     >
       {children}
+      {lockNotice && (
+        <LockNoticeDialog
+          kind={lockNotice.kind}
+          name={lockNotice.name}
+          holder={lockNotice.holder}
+          onClose={() => setLockNotice(null)}
+        />
+      )}
+      {askName && <UserNameDialog onDone={() => setAskName(false)} />}
     </ProjectContext.Provider>
   );
 };
@@ -1001,4 +1261,87 @@ export const useProject = () => {
     throw new Error('useProject must be used within a ProjectProvider');
   }
   return context;
+};
+/**
+ * "Somebody else is working on this."
+ *
+ * Shown when a switchgear or a template a colleague has open is opened here,
+ * or when an edit reaches it by some other way. Nothing is lost by it: the
+ * one somebody else has is simply not opened, and everything else is free.
+ */
+const LockNoticeDialog: React.FC<{
+  kind: LockKind; name: string; holder: LockInfo | null; onClose: () => void;
+}> = ({ kind, name, holder, onClose }) => {
+  const who = holder?.userName || 'Another user';
+  const since = holder?.since ? new Date(holder.since) : null;
+  const what = kind === 'equipment' ? 'device' : 'template';
+  const whatFa = kind === 'equipment' ? 'این دستگاه' : 'این تمپلیت';
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[300]" onClick={onClose}>
+      <div
+        className="bg-white rounded-lg shadow-2xl w-[440px] max-w-[calc(100vw-32px)] overflow-hidden"
+        onClick={e => e.stopPropagation()}
+        role="alertdialog"
+        aria-labelledby="lock-notice-title"
+      >
+        <div className="px-5 py-4 border-l-4 border-amber-500">
+          <p id="lock-notice-title" className="text-sm font-semibold text-gray-800">
+            {who} is working on this {what}
+          </p>
+          <p className="text-sm text-gray-700 mt-1 break-words">
+            <span className="font-medium">{name}</span> is open for editing by {who}
+            {since && !Number.isNaN(since.getTime()) && <> since {since.toLocaleTimeString()}</>}.
+            You can open it once they move on to something else — every other {what} is free.
+          </p>
+          <p className="text-sm text-gray-700 mt-2" dir="rtl">
+            کاربر دیگری ({who}) در حال کار روی {whatFa} است. تا زمانی که او روی آن است، امکان ورود و تغییر وجود ندارد.
+          </p>
+        </div>
+        <div className="px-5 py-3 border-t bg-gray-50 flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700" autoFocus>
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * The name colleagues see beside what this person has open. Asked once, the
+ * first time something is opened for editing, and kept in this browser.
+ */
+const UserNameDialog: React.FC<{ onDone: () => void }> = ({ onDone }) => {
+  const [name, setName] = useState('');
+  const save = () => {
+    if (name.trim()) setUserName(name);
+    onDone();
+  };
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[300]">
+      <div className="bg-white rounded-lg shadow-2xl w-[420px] max-w-[calc(100vw-32px)] overflow-hidden">
+        <div className="px-5 py-4">
+          <p className="text-sm font-semibold text-gray-800">Your name</p>
+          <p className="text-xs text-gray-500 mt-1">
+            Shown to colleagues on the device or template you are working on, so they know who has it.
+          </p>
+          <p className="text-xs text-gray-500 mt-1" dir="rtl">
+            این نام به همکاران نشان داده می‌شود تا بدانند چه کسی روی دستگاه یا تمپلیت کار می‌کند.
+          </p>
+          <input
+            autoFocus
+            value={name}
+            onChange={e => setName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') save(); }}
+            className="mt-3 w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+            placeholder="e.g. S. Tabasi"
+          />
+        </div>
+        <div className="px-5 py-3 border-t bg-gray-50 flex justify-end gap-2">
+          <button onClick={onDone} className="px-4 py-2 text-sm border border-gray-300 rounded hover:bg-white">Later</button>
+          <button onClick={save} className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
+        </div>
+      </div>
+    </div>
+  );
 };
