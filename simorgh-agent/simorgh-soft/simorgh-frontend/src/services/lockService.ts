@@ -5,7 +5,7 @@
 //
 // A lock belongs to this browser tab (its holder id lives in sessionStorage,
 // so a second tab is a second holder) and is shown to colleagues under the
-// name this person gave. Nothing here is security: it is manners, so that two
+// signed-in user's name. Nothing here is security: it is manners, so that two
 // people do not type into the same switchgear and save over each other.
 
 const API = `${(import.meta as { env?: Record<string, string> }).env?.VITE_API_URL || ''}/api`;
@@ -21,7 +21,6 @@ export interface LockInfo {
 
 export const lockKey = (kind: LockKind, id: string) => `${kind}:${id}`;
 
-const NAME_KEY = 'simorgh-user-name';
 const HOLDER_KEY = 'simorgh-lock-holder';
 
 const random = () => Math.random().toString(36).slice(2, 10);
@@ -37,13 +36,16 @@ export function holderId(): string {
   }
 }
 
-/** The name colleagues see, or '' when this person has not given one. */
+/**
+ * The name colleagues see beside what this person has open.
+ *
+ * It is never asked for: it is the signed-in user's, and sign-in (JWT) is
+ * being built separately. Until it lands this is empty and colleagues see
+ * "Another user". When it lands, this is the one place to read the user's
+ * name from the token — nothing else needs to change.
+ */
 export function userName(): string {
-  try { return (localStorage.getItem(NAME_KEY) || '').trim(); } catch { return ''; }
-}
-
-export function setUserName(name: string): void {
-  try { localStorage.setItem(NAME_KEY, name.trim()); } catch { /* private window */ }
+  return '';
 }
 
 const post = (path: string, body: unknown) => fetch(`${API}${path}`, {

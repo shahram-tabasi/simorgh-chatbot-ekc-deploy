@@ -5,7 +5,7 @@ import { removeTemplateEverywhere } from '../utils/cascadeDelete';
 import { downloadText, fileSafe } from '../utils/download';
 import { type Tier, TIERS, emptyTiers, withAllTiers } from '../utils/tiers';
 import { mergeProjects, contentKey } from '../utils/projectMerge';
-import { lockService, lockKey, holderId, userName, setUserName, type LockKind, type LockInfo } from '../services/lockService';
+import { lockService, lockKey, holderId, type LockKind, type LockInfo } from '../services/lockService';
 
 interface ProjectContextType {
   projectData: ProjectData;
@@ -234,7 +234,6 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   const [lockNotice, setLockNotice] = useState<{
     kind: LockKind; name: string; holder: LockInfo | null;
   } | null>(null);
-  const [askName, setAskName] = useState(false);
 
   // An edit that reaches a switchgear or template a colleague is working on is
   // turned back for that one thing — the rest of the edit stands — and the
@@ -1086,7 +1085,6 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       setLockNotice({ kind, name: name ?? nameOf(kind, id), holder: known });
       return false;
     }
-    if (!userName()) setAskName(true);
     const result = await lockService.acquire(projectId, key);
     if (result.ok === false) {
       if (result.holder) setOthersLocks(prev => [...prev.filter(l => l.key !== key), result.holder!]);
@@ -1250,7 +1248,6 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
           onClose={() => setLockNotice(null)}
         />
       )}
-      {askName && <UserNameDialog onDone={() => setAskName(false)} />}
     </ProjectContext.Provider>
   );
 };
@@ -1307,41 +1304,3 @@ const LockNoticeDialog: React.FC<{
   );
 };
 
-/**
- * The name colleagues see beside what this person has open. Asked once, the
- * first time something is opened for editing, and kept in this browser.
- */
-const UserNameDialog: React.FC<{ onDone: () => void }> = ({ onDone }) => {
-  const [name, setName] = useState('');
-  const save = () => {
-    if (name.trim()) setUserName(name);
-    onDone();
-  };
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[300]">
-      <div className="bg-white rounded-lg shadow-2xl w-[420px] max-w-[calc(100vw-32px)] overflow-hidden">
-        <div className="px-5 py-4">
-          <p className="text-sm font-semibold text-gray-800">Your name</p>
-          <p className="text-xs text-gray-500 mt-1">
-            Shown to colleagues on the device or template you are working on, so they know who has it.
-          </p>
-          <p className="text-xs text-gray-500 mt-1" dir="rtl">
-            این نام به همکاران نشان داده می‌شود تا بدانند چه کسی روی دستگاه یا تمپلیت کار می‌کند.
-          </p>
-          <input
-            autoFocus
-            value={name}
-            onChange={e => setName(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') save(); }}
-            className="mt-3 w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
-            placeholder="e.g. S. Tabasi"
-          />
-        </div>
-        <div className="px-5 py-3 border-t bg-gray-50 flex justify-end gap-2">
-          <button onClick={onDone} className="px-4 py-2 text-sm border border-gray-300 rounded hover:bg-white">Later</button>
-          <button onClick={save} className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
-        </div>
-      </div>
-    </div>
-  );
-};
