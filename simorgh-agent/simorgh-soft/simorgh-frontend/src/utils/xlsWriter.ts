@@ -130,6 +130,18 @@ function xfRecord(font: number, fmt: number, style: boolean, s: XlsStyle = {}): 
  * that does not fit in what is left of a record is carried on in the next one,
  * behind the one-byte header BIFF8 asks for there.
  */
+// Text is written 8-bit whenever every character of it fits in a byte, and
+// 16-bit only when it does not — which is what Excel does. The format allows
+// 16-bit throughout, but BPMS reads the file as Excel writes it: given the
+// sheet name and the cell texts in 16-bit, it turned the file down until
+// Excel had opened and saved it again (compared on the same export, before
+// and after Ctrl+S — the text encoding was the difference).
+const isNarrow = (s: string) => { for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) > 0xff) return false; return true; };
+function textBytes(out: Bytes, s: string, narrow: boolean) {
+  if (narrow) for (let i = 0; i < s.length; i++) out.u8(s.charCodeAt(i));
+  else out.utf16(s);
+}
+
 function sstRecords(out: Bytes, strings: string[], total: number) {
   const chunks: Bytes[] = [new Bytes().u32(total).u32(strings.length)];
   let current = chunks[0];
@@ -141,15 +153,19 @@ function sstRecords(out: Bytes, strings: string[], total: number) {
     // The 3-byte header and at least one character stay together.
     if (room() < 5) { current = new Bytes(); chunks.push(current); }
     if (index % bucket === 0) marks.push([chunks.length - 1, current.length]);
-    current.u16(s.length).u8(0x01);
+    // 8-bit when every character fits, as Excel writes it (see textBytes).
+    const narrow = isNarrow(s);
+    const flag = narrow ? 0x00 : 0x01;
+    const size = narrow ? 1 : 2;
+    current.u16(s.length).u8(flag);
     let i = 0;
     while (i < s.length) {
-      const fit = Math.floor(room() / 2);
-      if (fit === 0) { current = new Bytes().u8(0x01); chunks.push(current); continue; }
+      const fit = Math.floor(room() / size);
+      if (fit === 0) { current = new Bytes().u8(flag); chunks.push(current); continue; }
       const n = Math.min(fit, s.length - i);
-      current.utf16(s.slice(i, i + n));
+      textBytes(current, s.slice(i, i + n), narrow);
       i += n;
-      if (i < s.length) { current = new Bytes().u8(0x01); chunks.push(current); }
+      if (i < s.length) { current = new Bytes().u8(flag); chunks.push(current); }
     }
   });
   const starts: number[] = [];
@@ -214,8 +230,10 @@ function globals(styles: XlsStyle[], sheets: XlsSheet[], strings: string[], tota
 
   sheets.forEach((sheet, i) => {
     const name = sheet.name.slice(0, 31);
-    record(out, 0x0085, new Bytes().u32(sheetOffsets[i]).u16(0)
-      .u8(name.length).u8(0x01).utf16(name));                   // BOUNDSHEET
+    const narrow = isNarrow(name);
+    const sheetRecord = new Bytes().u32(sheetOffsets[i]).u16(0).u8(name.length).u8(narrow ? 0x00 : 0x01);
+    textBytes(sheetRecord, name, narrow);
+    record(out, 0x0085, sheetRecord);                           // BOUNDSHEET
   });
   record(out, 0x008c, new Bytes().u16(1).u16(1));                // COUNTRY
   sstRecords(out, strings, total);
