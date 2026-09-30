@@ -680,6 +680,9 @@ function transformPartToFrontend(part) {
     Designation1: cleanText(part.description1),
     Designation2: cleanText(part.description2),
     Designation3: cleanText(part.description3),
+    // The part's description is tblPart's `note` column. It was never passed
+    // on, so every part picked from the database showed an empty Description.
+    Description: cleanText(part.note ?? part.Note),
     ProductGroup: cleanText(part.productgroup),
     ProductSubgroup: cleanText(part.productsubgroup),
     Width: part.width,
@@ -693,6 +696,43 @@ function transformPartToFrontend(part) {
     CertificateATEX: part.certificate_ATEX,
   };
 }
+
+/**
+ * POST /api/eplan-parts/notes — the description (tblPart.note) of parts by
+ * number. Body: { numbers: string[] } — order numbers or part numbers, as a
+ * template stores them. Answers { notes: { [number]: note } }, keyed by both
+ * the order number and the part number of every part found.
+ *
+ * For parts a template holds without a description of its own: the ones read
+ * from TPMS, and any picked before the description was passed on.
+ * READ-ONLY: one SELECT.
+ */
+app.post('/api/eplan-parts/notes', async (req, res) => {
+  const numbers = [...new Set((req.body?.numbers ?? [])
+    .map(n => String(n ?? '').trim()).filter(Boolean))].slice(0, 300);
+  if (numbers.length === 0) return res.json({ success: true, notes: {} });
+  try {
+    const sqlDb = await connectToSqlServer();
+    const request = sqlDb.request();
+    const names = numbers.map((n, i) => { request.input(`n${i}`, sql.NVarChar, n); return `@n${i}`; });
+    // SELECT *: an older schema without a `note` column answers with no
+    // notes rather than an "Invalid column name" error.
+    const result = await request.query(
+      `SELECT * FROM tblPart WITH (NOLOCK) WHERE ordernr IN (${names.join(',')}) OR partnr IN (${names.join(',')})`);
+    const notes = {};
+    for (const row of result.recordset) {
+      const note = cleanText(row.note ?? row.Note);
+      if (!note) continue;
+      for (const key of [cleanText(row.ordernr), cleanText(row.partnr)]) {
+        if (key && !(key in notes)) notes[key] = note;
+      }
+    }
+    res.json({ success: true, notes });
+  } catch (err) {
+    console.error('❌ /api/eplan-parts/notes:', err.message);
+    res.status(500).json({ success: false, error: err.message, notes: {} });
+  }
+});
 
 /**
  * POST /api/eplan-parts - Fetch parts from EPLAN SQL (Frontend compatible endpoint)

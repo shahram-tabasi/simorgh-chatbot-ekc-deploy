@@ -32,6 +32,7 @@ const PART_FIELDS = [
   'width', 'height', 'depth', 'weight',
   'mountinglocation', 'mountingspace',
   'certificate_CE', 'certificate_UL', 'certificate_ATEX',
+  'note',
 ];
 
 let cache = { file: '', mtime: 0, rows: [], manufacturers: [] };
@@ -112,6 +113,21 @@ export function registerAccessPartsRoutes(app, transformPartToFrontend) {
       pageSize: size,
       totalPages: Math.ceil(hits.length / size) || 1,
     });
+  }));
+
+  // The description (note) of parts by number — see the SQL Server route.
+  app.post('/api/eplan-parts/notes', onlyInAccessMode((req, res) => {
+    const { rows } = loadAccessParts();
+    const wanted = new Set((req.body?.numbers ?? []).map(n => text(n).trim()).filter(Boolean));
+    const notes = {};
+    for (const row of rows) {
+      const note = text(row.note).trim();
+      if (!note) continue;
+      for (const key of [text(row.ordernr).trim(), text(row.partnr).trim()]) {
+        if (key && wanted.has(key) && !(key in notes)) notes[key] = note;
+      }
+    }
+    res.json({ success: true, notes });
   }));
 
   app.get('/api/parts', onlyInAccessMode((req, res) => {

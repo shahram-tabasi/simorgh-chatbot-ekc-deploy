@@ -10,10 +10,15 @@
 //   Location       ".BA001", ".FA001" …
 //
 // MODULE NO. is the cubicle name with the word CELL removed, then the
-// location appended:
+// location appended straight after it:
 //
-//   CELL 1A-L01/A + .BA001  ->  "1A-L01/A .BA001"
-//   CELL 2A       + .BA001  ->  "2A .BA001"
+//   CELL 1A-L01/A     + .BA001  ->  "1A-L01/A.BA001"
+//   CELL 2A           + .BA001  ->  "2A.BA001"
+//   CELL 16A (L52.1)  + .BA001  ->  "16A.BA001"
+//
+// Some cell types — PFC, FCB1-3, FCC (W400) and others — carry the line's name
+// in brackets after the cell's own. That is not part of the module number, so
+// anything in brackets comes off both columns before they are joined.
 //
 // Rows with no feeder name are not feeders — SIMARIS uses them for empty
 // compartments (SPACE 3M) and for the device entries it appends after the
@@ -40,14 +45,19 @@ export interface SimarisParseResult {
 
 const HEADER_KEYS = ['feeder name', 'cubicle name', 'location'] as const;
 
-/** The word CELL removed, the location appended. Exported so the rule can be
- *  checked on its own, since it is the whole point of the import. */
+/** Whatever is in brackets, brackets and all. */
+const withoutBrackets = (text: string) =>
+  String(text || '').replace(/\s*\([^()]*\)/g, '').replace(/\s+/g, ' ').trim();
+
+/** The bracketed line name and the word CELL removed, the location appended.
+ *  Exported so the rule can be checked on its own, since it is the whole
+ *  point of the import. */
 export function buildModuleNo(cubicleName: string, location: string): string {
-  const base = String(cubicleName || '').replace(/^\s*CELL\s*/i, '').trim();
-  const loc = String(location || '').trim();
+  const base = withoutBrackets(cubicleName).replace(/^\s*CELL\s*/i, '').trim();
+  const loc = withoutBrackets(location);
   if (!base) return loc;
   if (!loc) return base;
-  return `${base} ${loc}`;
+  return `${base}${loc}`;
 }
 
 /**

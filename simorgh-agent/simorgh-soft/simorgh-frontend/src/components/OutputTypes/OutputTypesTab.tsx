@@ -57,7 +57,10 @@ function exportBpmsExcel(
   }
   const rev = revisionNumber ? `_REV${revisionNumber}` : '';
   const who = (sheets[0].name || tier).replace(/[^\w.-]+/g, '_');
-  XLSX.writeFile(wb, `${data.projectName || 'project'}_${who}_BPMS${rev}.xlsx`);
+  // Excel 97-2003 (.xls), the format BPMS takes. That writer keeps the values,
+  // the merged cells and the column widths; the colours, bold and borders are
+  // an .xlsx thing and do not come across — chosen knowingly.
+  XLSX.writeFile(wb, `${data.projectName || 'project'}_${who}_BPMS${rev}.xls`, { bookType: 'biff8' });
 }
 
 /**
@@ -980,6 +983,14 @@ export const OutputTypesTab: React.FC = () => {
         </div>
       </div>
 
+      {/* ── BPMS export — one switchgear at a time, LV and MV — at the top ── */}
+      <BpmsSection
+        projectData={projectData}
+        revisionNumber={currentRevision?.revisionNumber}
+        downloading={downloading}
+        trigger={trigger}
+      />
+
       {/* Summary Strip */}
       <div className="grid grid-cols-4 gap-3 mb-6">
         {[
@@ -1101,14 +1112,6 @@ export const OutputTypesTab: React.FC = () => {
           )
         }
       </Section>
-
-      {/* ── BPMS export — one switchgear at a time, LV and MV ───────────── */}
-      <BpmsSection
-        projectData={projectData}
-        revisionNumber={currentRevision?.revisionNumber}
-        downloading={downloading}
-        trigger={trigger}
-      />
 
       {/* The single line, the layout and the mechanical items live in their
           own tab now — Simorgh Draw — where each one is previewed before it is

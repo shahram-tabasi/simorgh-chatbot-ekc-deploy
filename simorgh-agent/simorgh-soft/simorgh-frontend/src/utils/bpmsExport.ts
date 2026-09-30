@@ -8,8 +8,11 @@
 //
 //   NO. | BUS | Line | Lable | Type | Power | Nominal Current (A) | Position |
 //   Size | Tag | Feeder description | Cable size |
-//   Order number | Designation 2 | Designation 1 | Description | Manufacturer |
-//   Qty | Type number
+//   Order number | Designation | Specification | Part description |
+//   Manufacturer | Qty | Part Placement | EKC CODE
+//
+// The four part headings are the names BPMS uses (renamed from Designation 2,
+// Designation 1, Description and Type number); what fills them is unchanged.
 //
 // The left-hand block comes from Device Selection (one device row = one line),
 // the right-hand block from the parts on that line's template in Create
@@ -44,13 +47,13 @@ export const BPMS_HEADERS = [
   'Feeder description',
   'Cable size',
   'Order number',
-  'Designation 2',
-  'Designation 1',
-  'Description',
+  'Designation',
+  'Specification',
+  'Part description',
   'Manufacturer',
   'Qty',
   'Part Placement',
-  'Type number',
+  'EKC CODE',
 ];
 
 // Column widths, in characters, matching the header list above.
@@ -65,8 +68,8 @@ export const BPMS_FIRST_PART_COL = 12;
 export const BPMS_MV_HEADERS = [
   'NO.', 'BUS', 'Line', 'Lable', 'Type', 'Power', 'Nominal Current (A)',
   'Tag', 'Feeder description', 'Cable size',
-  'Order number', 'Designation 2', 'Designation 1', 'Description',
-  'Manufacturer', 'Qty', 'Part Placement', 'Type number',
+  'Order number', 'Designation', 'Specification', 'Part description',
+  'Manufacturer', 'Qty', 'Part Placement', 'EKC CODE',
 ];
 
 export const BPMS_MV_COL_WIDTHS = [

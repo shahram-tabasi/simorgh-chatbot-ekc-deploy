@@ -9,6 +9,8 @@ import { ProjectData, Equipment, DeviceTableRow, TemplateItem } from '../../type
 import { LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, HV_TEMPLATE_PROPERTIES, templateParts, partsCellText } from '../../utils/tierEquipmentMatrix';
 import { useProject } from '../../context/ProjectContext';
 import { withCodeCaseAll } from '../../utils/deviceCodes';
+import { prepareLockedHeader, unlockAllButHeader } from '../../utils/lockHeaderRow';
+import { downloadBlob } from '../../utils/download';
 import { parseSimarisRows, matchSimarisToRows, SimarisMatch } from '../../utils/simarisImport';
 import { HIGHLIGHT_FIELD, ImportPlan, applyPlan, planImport, readFills } from '../../utils/deviceImport';
 import { templateMeta } from '../../utils/templateMeta';
@@ -1698,9 +1700,14 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         };
       });
     });
+    // The headings are how Update finds each column again, so they cannot be
+    // renamed in Excel; everything else — values, rows, widths — stays free.
+    prepareLockedHeader(ws, fillableColumns.length);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Devices');
     const fileName = `${selectedEquipment.name}_Devices.xlsx`;
+    const workbookBytes = () =>
+      unlockAllButHeader(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer);
 
     // Saved through a handle where the browser gives one, and that handle is
     // kept as this switchgear's file: export, fill it in in Excel, save, press
@@ -1718,7 +1725,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] },
           }],
         });
-        const bytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+        const bytes = workbookBytes();
         const writable = await (handle as any).createWritable();
         await writable.write(bytes);
         await writable.close();
@@ -1731,7 +1738,9 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         // Anything else: fall through to a plain download.
       }
     }
-    XLSX.writeFile(wb, fileName);
+    downloadBlob(fileName, new Blob([workbookBytes() as BlobPart], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }));
   };
 
   // From the rows as they are, not as this render saw them: two keystrokes
@@ -2697,41 +2706,9 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             {selectedRows.size} row{selectedRows.size !== 1 ? 's' : ''} selected
           </div>
 
-          {/* Assign template to all selected rows */}
-          {projectData.templates[selectedEquipment.type]?.length > 0 && (
-            <>
-              <div className="px-4 py-2 border-b bg-blue-50">
-                <p className="text-xs font-semibold text-blue-700">Assign Template to All Selected</p>
-              </div>
-              {projectData.templates[selectedEquipment.type].map(tmpl => (
-                <button
-                  key={tmpl.id}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-blue-50 flex items-center gap-2"
-                  onClick={() => {
-                    setRows(prev => prev.map(r =>
-                      selectedRows.has(r.id) ? { ...r, templateId: tmpl.id, templateName: tmpl.name } : r
-                    ));
-                    handleCloseContextMenu();
-                  }}
-                >
-                  <CheckIcon className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
-                  {/* The name alone does not tell two templates apart — what
-                      does is the path they were filed at and what they were
-                      sized for. */}
-                  <span className="min-w-0">
-                    <span className="block truncate">{tmpl.name}</span>
-                    {templateMeta(tmpl) && (
-                      <span className="block text-[10px] text-gray-500 truncate">
-                        {templateMeta(tmpl)}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              ))}
-              <div className="border-t my-1" />
-            </>
-          )}
-
+          {/* No templates here: a template is set from the Template cell's own
+              menu, which sets it on every selected row when the cell is one
+              of them. This menu is for the rows themselves. */}
           {/* Row color palette */}
           <div className="px-4 py-2 border-b bg-pink-50">
             <p className="text-xs font-semibold text-pink-700 mb-1.5">Row Color</p>

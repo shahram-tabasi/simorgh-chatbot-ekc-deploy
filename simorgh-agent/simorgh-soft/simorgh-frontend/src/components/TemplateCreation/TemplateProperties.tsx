@@ -631,6 +631,37 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   const partRefs: PartRef[] = propertiesToShow.flatMap(property =>
     (properties[property]?.parts ?? []).map((part, index) => ({ slot: property, index, part })));
 
+  // The description of every part that arrived without one — the parts read
+  // from TPMS, and any picked before the description came across — looked up
+  // in the parts database's `note` column by order or part number. Shown in
+  // the Description column; nothing is written to the template.
+  const numbersOf = (part: any): string[] =>
+    [part?.fullData?.OrderNumber, part?.fullData?.PartNumber, part?.partNumber]
+      .map(n => String(n ?? '').trim()).filter(Boolean);
+  const missing = [...new Set(partRefs
+    .filter(ref => !String((ref.part as any)?.fullData?.Description ?? '').trim())
+    .flatMap(ref => numbersOf(ref.part)))].sort();
+  const missingKey = missing.join('|');
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (missing.length === 0) return;
+    let cancelled = false;
+    fetch(`${(import.meta as { env?: Record<string, string> }).env?.VITE_API_URL || ''}/api/eplan-parts/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ numbers: missing }),
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then(body => { if (!cancelled && body?.notes) setNotes(prev => ({ ...prev, ...body.notes })); })
+      .catch(() => { /* the column stays as it was */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingKey]);
+  const descriptionOf = (part: any): string =>
+    String(part?.fullData?.Description ?? '').trim()
+      || numbersOf(part).map(n => notes[n]).find(Boolean)
+      || '';
+
   const sameRef = (a: PartRef | null, b: PartRef | null) =>
     Boolean(a && b && a.slot === b.slot && a.index === b.index);
 
@@ -1249,8 +1280,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                           <PartCell
                             label="Description"
                             multiline
-                            source="From the EPLAN parts database"
-                            value={part.fullData?.Description || ''}
+                            source="From the EPLAN parts database (note)"
+                            value={descriptionOf(part)}
                             className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-gray-50"
                           />
                         </td>
