@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Keyboard, X, RotateCcw } from 'lucide-react';
+import { Keyboard, X, RotateCcw, Table2Icon } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
 import { TemplateTree } from './TemplateTree';
 import { PanelFrame } from '../shared/PanelFrame';
@@ -298,6 +298,21 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
           side="left"
           className="w-1/4 border-0 border-r border-gray-200 rounded-none"
           bodyClassName="flex-1 overflow-y-auto"
+          actions={
+            // Every template in one table, in a tab of its own that follows
+            // the changes made here (TemplatesOverview).
+            <button
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.search = `?view=templates&projectId=${encodeURIComponent(projectData._id || 'unsaved')}`;
+                window.open(url.toString(), '_blank');
+              }}
+              title="All templates in one table — opens in a new tab and follows every change"
+              className="p-1 rounded text-gray-500 hover:text-gray-900 hover:bg-gray-200"
+            >
+              <Table2Icon className="w-3.5 h-3.5" />
+            </button>
+          }
         >
           <TemplateTree
             bare

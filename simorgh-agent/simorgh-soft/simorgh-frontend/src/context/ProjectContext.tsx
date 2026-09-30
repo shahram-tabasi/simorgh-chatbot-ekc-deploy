@@ -5,6 +5,7 @@ import { removeTemplateEverywhere } from '../utils/cascadeDelete';
 import { downloadText, fileSafe } from '../utils/download';
 import { type Tier, TIERS, emptyTiers, withAllTiers } from '../utils/tiers';
 import { mergeProjects, contentKey } from '../utils/projectMerge';
+import { TEMPLATES_CHANNEL } from '../components/TemplateCreation/TemplatesOverview';
 import { lockService, lockKey, holderId, type LockKind, type LockInfo } from '../services/lockService';
 
 interface ProjectContextType {
@@ -381,6 +382,29 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   projectDataRef.current = projectData;
   projectIdRef.current = projectId;
   currentRevisionRef.current = currentRevision;
+
+  // The all-templates table (TemplatesOverview), open in another tab, follows
+  // this project's templates: every change is announced, and a table that has
+  // just opened asks for them. It only listens; nothing comes back this way.
+  const templatesChannel = React.useRef<BroadcastChannel | null>(null);
+  const announceTemplates = React.useCallback(() => {
+    const p = projectDataRef.current;
+    templatesChannel.current?.postMessage({
+      type: 'templates', projectId: projectIdRef.current ?? 'unsaved',
+      projectName: p.projectName, templates: p.templates,
+    });
+  }, []);
+  React.useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return;
+    const channel = new BroadcastChannel(TEMPLATES_CHANNEL);
+    templatesChannel.current = channel;
+    channel.onmessage = e => {
+      if (e.data?.type === 'hello' && e.data.projectId === (projectIdRef.current ?? 'unsaved')) announceTemplates();
+    };
+    return () => { channel.close(); templatesChannel.current = null; };
+  }, [announceTemplates]);
+  React.useEffect(() => { announceTemplates(); },
+    [projectData.templates, projectData.projectName, projectId, announceTemplates]);
 
   const notifyRevisionLocked = () => {
     setRevisionLockNotice(
