@@ -12,7 +12,9 @@ import {
   LV_DEVICE_COLS, MV_DEVICE_COLS,
   buildTierMatrix,
 } from '../../utils/tierEquipmentMatrix';
-import { BpmsTier, buildBpmsSheets, sheetName, styleBpmsSheet } from '../../utils/bpmsExport';
+import { BpmsTier, BPMS_XLS_STYLES, bpmsXlsSheet, buildBpmsSheets } from '../../utils/bpmsExport';
+import { writeXls } from '../../utils/xlsWriter';
+import { downloadBlob } from '../../utils/download';
 import { RevisionDiff, diffProjectSnapshots, buildDiffRows } from '../../utils/revisionDiff';
 // The specification's field labels live with the specification itself, so the
 // Device Library breakdown and these sheets always read the same names.
@@ -48,19 +50,13 @@ function exportBpmsExcel(
     void appAlert(`No ${tier} switchgear to report on — pick one first.`);
     return;
   }
-  const wb = XLSX.utils.book_new();
-  const taken = new Set<string>();
-  for (const sheet of sheets) {
-    const ws = XLSX.utils.aoa_to_sheet(sheet.rows);
-    styleBpmsSheet(ws, sheet);
-    XLSX.utils.book_append_sheet(wb, ws, sheetName(sheet.name, taken));
-  }
+  // The .xls EPLAN used to give BPMS, laid out and formatted as it was —
+  // see bpmsExport.ts and xlsWriter.ts.
+  const bytes = writeXls(BPMS_XLS_STYLES, sheets.map(bpmsXlsSheet));
   const rev = revisionNumber ? `_REV${revisionNumber}` : '';
   const who = (sheets[0].name || tier).replace(/[^\w.-]+/g, '_');
-  // Excel 97-2003 (.xls), the format BPMS takes. That writer keeps the values,
-  // the merged cells and the column widths; the colours, bold and borders are
-  // an .xlsx thing and do not come across — chosen knowingly.
-  XLSX.writeFile(wb, `${data.projectName || 'project'}_${who}_BPMS${rev}.xls`, { bookType: 'biff8' });
+  downloadBlob(`${data.projectName || 'project'}_${who}_BPMS${rev}.xls`,
+    new Blob([bytes as BlobPart], { type: 'application/vnd.ms-excel' }));
 }
 
 /**

@@ -1,34 +1,34 @@
 // src/utils/bpmsExport.ts
 //
-// BPMS export — the workbook that used to be typed up by hand for every LV
-// switchgear (see the "D.L" sample sheet). One sheet per LV equipment:
+// BPMS export — the sheet BPMS takes in, laid out exactly as the .xls EPLAN
+// used to produce for it (the "D.L" sheet for LV, "D.M" for MV):
 //
-//   a title bar, then a block naming the project and the switchgear,
-//   then the table:
+//   row 1   "Switchgear name:    <name>                         Date:    <m/d/yyyy>"
+//           merged across A–T
+//   row 2   empty
+//   row 3   the headings
+//   row 4…  one row per part
 //
-//   NO. | BUS | Line | Lable | Type | Power | Nominal Current (A) | Position |
-//   Size | Tag | Feeder description | Cable size |
-//   Order number | Designation | Specification | Part description |
-//   Manufacturer | Qty | Part Placement | EKC CODE
+//   NO. | BUS | Line |  Lable | Type | Power | Nominal Current (A) | Position |
+//   Size | Tag | Feeder description | Cable size | Order number | Designation |
+//   Specification | Part description |  Manufacturer | Qty | Part Placement |
+//   EKC CODE
 //
-// The four part headings are the names BPMS uses (renamed from Designation 2,
-// Designation 1, Description and Type number); what fills them is unchanged.
+// The headings are spelled as EPLAN spells them, leading spaces and line
+// break included, because BPMS reads them. LV and MV have the same twenty
+// columns; a MV cell simply has nothing under Position and Size. Every value
+// is text. The left-hand block comes from Device Selection (one device row =
+// one line), the right-hand block from the parts on that line's template; a
+// line with several parts repeats across that many rows.
 //
-// The left-hand block comes from Device Selection (one device row = one line),
-// the right-hand block from the parts on that line's template in Create
-// Template. A line with several parts repeats across that many rows — one row
-// per part, the line columns repeated — exactly like the hand-made sheet.
-//
-// MV switchgears get the same sheet without the two columns that mean nothing
-// to them: a MV cell has no module position and no module size, those being
-// the LV modular frame's own. Everything else is the same report, so it is the
-// same code with two layouts rather than a second one that drifts.
+// The workbook itself — fonts, borders, fills, widths — is written by
+// utils/xlsWriter.ts; `bpmsXlsSheet` below says what goes where.
 import { ProjectData, DeviceTableRow, TemplateItem } from '../types/project';
-import { COPYRIGHT_SHORT, PRODUCT_NAME } from '../branding';
 import {
   LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES, getEplanixValue, stripLocaleTags,
 } from './tierEquipmentMatrix';
 import { LAYOUT_OF, TIERS } from './tiers';
+import { LINE, type XlsSheet, type XlsStyle, type XlsCell } from './xlsWriter';
 
 /** The voltage levels this report is drawn for. */
 export type BpmsTier = 'LV' | 'MV';
@@ -37,10 +37,10 @@ export const BPMS_HEADERS = [
   'NO.',
   'BUS',
   'Line',
-  'Lable',
+  ' Lable',
   'Type',
   'Power',
-  'Nominal Current (A)',
+  'Nominal Current\n(A)',
   'Position',
   'Size',
   'Tag',
@@ -50,33 +50,14 @@ export const BPMS_HEADERS = [
   'Designation',
   'Specification',
   'Part description',
-  'Manufacturer',
+  ' Manufacturer',
   'Qty',
   'Part Placement',
   'EKC CODE',
 ];
 
-// Column widths, in characters, matching the header list above.
-export const BPMS_COL_WIDTHS = [
-  5, 8, 9, 9, 9, 10, 13, 10, 8, 14, 26, 12, 20, 30, 22, 26, 16, 6, 12, 24,
-];
-
 /** Index of the first part column — everything left of it describes the line. */
 export const BPMS_FIRST_PART_COL = 12;
-
-/** MV: the LV sheet without Position and Size, which are the LV frame's own. */
-export const BPMS_MV_HEADERS = [
-  'NO.', 'BUS', 'Line', 'Lable', 'Type', 'Power', 'Nominal Current (A)',
-  'Tag', 'Feeder description', 'Cable size',
-  'Order number', 'Designation', 'Specification', 'Part description',
-  'Manufacturer', 'Qty', 'Part Placement', 'EKC CODE',
-];
-
-export const BPMS_MV_COL_WIDTHS = [
-  5, 8, 9, 9, 9, 10, 13, 14, 26, 12, 20, 30, 22, 26, 16, 6, 12, 24,
-];
-
-export const BPMS_MV_FIRST_PART_COL = 10;
 
 /**
  * Where a part sits in the drawing, when nothing says otherwise.
@@ -114,25 +95,8 @@ const START_STOP_PART = {
 const isSfd = (row: DeviceTableRow): boolean =>
   /^\s*SFD\b/i.test(String(row.sfdHfd ?? ''));
 
-interface BpmsLayout {
-  headers: string[];
-  widths: number[];
-  firstPartCol: number;
-  /** The template property order this tier's parts are read in. */
-  properties: string[];
-  /** Columns whose text is long enough to want wrapping. */
-  wrapCols: number[];
-  /** The line columns, left of the part block. */
-  line: (row: DeviceTableRow) => string[];
-}
-
-// Rows in the block above the table, and where the table starts.
-const TITLE_ROW = 0;
-const INFO_FIRST_ROW = 1;
-const INFO_ROWS = 6;
-/** Column the right-hand label of the project block sits in. */
-const INFO_RIGHT_LABEL = 7;
-export const BPMS_HEADER_ROW = INFO_FIRST_ROW + INFO_ROWS + 1; // one blank row between
+/** Rows above the table, and the row the headings are on. */
+export const BPMS_HEADER_ROW = 2;
 
 const text = (v: any): string => (v == null ? '' : String(v));
 
@@ -183,8 +147,13 @@ function partColumns(part: any): string[] {
 const PART_COLS = 8;
 
 // The eleven line columns for one device row (the NO. column is added by the
-// caller, which numbers rows sequentially down the sheet).
+// caller, which numbers rows sequentially down the sheet). Tag and Feeder
+// description are written the way EPLAN writes them — the tag and an empty
+// second line, the description over three lines — since that is what BPMS
+// has always been given.
 function lineColumns(row: DeviceTableRow): string[] {
+  const description = text(row.description).split(/\r?\n/);
+  while (description.length < 3) description.push('');
   return [
     text(row.busSection),
     text(row.feederNo),
@@ -194,38 +163,17 @@ function lineColumns(row: DeviceTableRow): string[] {
     text(row.flc),
     text(row.moduleNo),
     text(row.size),
-    text(row.tag),
-    text(row.description),
+    `${text(row.tag)}\n`,
+    description.join('\n'),
     text(row.cableSize),
   ];
 }
 
-/** The same line, without the two columns a MV cell has no use for. */
-function mvLineColumns(row: DeviceTableRow): string[] {
-  const lv = lineColumns(row);
-  return [...lv.slice(0, 6), ...lv.slice(8)];
-}
-
-const LAYOUTS: Record<BpmsTier, BpmsLayout> = {
-  LV: {
-    headers: BPMS_HEADERS,
-    widths: BPMS_COL_WIDTHS,
-    firstPartCol: BPMS_FIRST_PART_COL,
-    properties: LV_TEMPLATE_PROPERTIES,
-    wrapCols: [10, 13, 15],
-    line: lineColumns,
-  },
-  MV: {
-    headers: BPMS_MV_HEADERS,
-    widths: BPMS_MV_COL_WIDTHS,
-    firstPartCol: BPMS_MV_FIRST_PART_COL,
-    properties: MV_TEMPLATE_PROPERTIES,
-    wrapCols: [8, 11, 13],
-    line: mvLineColumns,
-  },
+/** The template property order each tier's parts are read in. */
+const PROPERTIES: Record<BpmsTier, string[]> = {
+  LV: LV_TEMPLATE_PROPERTIES,
+  MV: MV_TEMPLATE_PROPERTIES,
 };
-
-export const bpmsLayout = (tier: BpmsTier): BpmsLayout => LAYOUTS[tier] ?? LAYOUTS.LV;
 
 export interface BpmsMeta {
   /** Revision the report was taken from, e.g. "2". */
@@ -267,7 +215,6 @@ export interface BpmsSheet {
 // sheet, so nothing silently disappears from the report.
 export function buildBpmsSheets(data: ProjectData, meta: BpmsMeta = {}): BpmsSheet[] {
   const tier: BpmsTier = meta.tier ?? 'LV';
-  const layout = bpmsLayout(tier);
   // GIS switchgears are reported with MV and OTHER with LV — they carry those
   // tiers' columns (LAYOUT_OF) — each with its own group's templates.
   const templates = new Map(TIERS.filter(t => LAYOUT_OF[t] === tier)
@@ -275,68 +222,36 @@ export function buildBpmsSheets(data: ProjectData, meta: BpmsMeta = {}): BpmsShe
   const equipments = (data.equipments ?? [])
     .filter(e => LAYOUT_OF[e.type] === tier)
     .filter(e => !meta.equipmentId || e.id === meta.equipmentId);
-  const generated = (meta.generatedAt ?? new Date()).toLocaleString();
+  const when = meta.generatedAt ?? new Date();
+  const date = `${when.getMonth() + 1}/${when.getDate()}/${when.getFullYear()}`;
 
   return equipments.map(eq => {
     const body: (string | number)[][] = [];
     let no = 1;
     for (const row of eq.devices ?? []) {
-      const line = layout.line(row);
+      const line = lineColumns(row);
       const parts = [
         ...templatePartsInOrder(
-          row.templateId ? templates.get(row.templateId) : undefined, layout.properties),
+          row.templateId ? templates.get(row.templateId) : undefined, PROPERTIES[tier]),
         // The door's pushbutton, on every SFD line and on no template.
         ...(tier === 'LV' && isSfd(row) ? [START_STOP_PART] : []),
       ];
       if (parts.length === 0) {
         // A line without parts is still a line — keep it, with the part
         // columns empty, rather than dropping it from the report.
-        body.push([no++, ...line, ...new Array(PART_COLS).fill('')]);
+        body.push([String(no++), ...line, ...new Array(PART_COLS).fill('')]);
         continue;
       }
       for (const part of parts) {
-        body.push([no++, ...line, ...partColumns(part)]);
+        body.push([String(no++), ...line, ...partColumns(part)]);
       }
     }
 
     const lineCount = (eq.devices ?? []).length;
-    const info: [string, string, string, string][] = [
-      ['Project',          text(data.projectName),   'Switchgear',    eq.name],
-      ['Project ID (PID)', text(data.projectId),     'Voltage level', tier],
-      ['Project No. (OE)', text(data.projectNumber), 'Lines',         String(lineCount)],
-      ['Client',           text(data.client),        'Rows',          String(body.length)],
-      ['Location',         text(data.location),      'Standard',      text(data.standard)],
-      ['Revision',         meta.revisionNumber ? `REV ${meta.revisionNumber}` : '', 'Generated', generated],
-    ];
-
-    // A sheet that leaves the building says whose it is.
-    const signature: (string | number)[] = new Array(layout.headers.length).fill('');
-    signature[0] = COPYRIGHT_SHORT;
-
-    const rows: (string | number)[][] = [
-      [`${PRODUCT_NAME.toUpperCase()} — BPMS REPORT`],
-      ...info.map(([l1, v1, l2, v2]) => {
-        const r: (string | number)[] = new Array(layout.headers.length).fill('');
-        r[0] = l1; r[1] = v1; r[INFO_RIGHT_LABEL] = l2; r[INFO_RIGHT_LABEL + 1] = v2;
-        return r;
-      }),
-      [],
-      [...layout.headers],
-      ...body,
-      [],
-      signature,
-    ];
-
-    // Title across the sheet, and each info value across the columns after
-    // its label, so long project names aren't clipped by the next cell.
-    const merges: CellSpan[] = [
-      { s: { r: TITLE_ROW, c: 0 }, e: { r: TITLE_ROW, c: layout.headers.length - 1 } },
-    ];
-    for (let i = 0; i < INFO_ROWS; i++) {
-      const r = INFO_FIRST_ROW + i;
-      merges.push({ s: { r, c: 1 }, e: { r, c: INFO_RIGHT_LABEL - 1 } });
-      merges.push({ s: { r, c: INFO_RIGHT_LABEL + 1 }, e: { r, c: layout.headers.length - 1 } });
-    }
+    // The title EPLAN writes, spaces and all.
+    const title = `Switchgear name:    ${eq.name}${' '.repeat(25)}Date:    ${date}${' '.repeat(12)}`;
+    const rows: (string | number)[][] = [[title], [], [...BPMS_HEADERS], ...body];
+    const merges: CellSpan[] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: BPMS_HEADERS.length - 1 } }];
 
     return {
       tier,
@@ -362,105 +277,75 @@ export function sheetName(name: string, taken: Set<string>): string {
   return base;
 }
 
-// ─── Styling ─────────────────────────────────────────────────────────────────
-// Applied to the worksheet object after it is built, so the sheet reads like a
-// report rather than a data dump: a title bar, a labelled header block, a
-// coloured table head, banded rows, and the line block tinted apart from the
-// part block.
-const TEAL = 'FF0F766E';
-const TEAL_DARK = 'FF115E59';
-const LINE_TINT = 'FFEFF6FF';
-const BAND = 'FFF8FAFC';
-const BORDER = 'FFCBD5E1';
+// ─── The .xls, as EPLAN laid it out ──────────────────────────────────────────
+// Every number below is read off the .xls files BPMS was given (widths in
+// 1/256 of a character, heights in twips, colours from Excel's palette):
+// Arial 10; a bold title with a double rule under it; bold headings on
+// lavender (46), the one past the table on gold (51); centred, wrapped,
+// thin-bordered cells, the part block on white; the top three rows frozen.
 
-const thin = { style: 'thin', color: { rgb: BORDER } };
-const boxed = { top: thin, bottom: thin, left: thin, right: thin };
+/** Sheet names EPLAN used. */
+export const BPMS_SHEET_NAME: Record<BpmsTier, string> = { LV: 'D.L', MV: 'D.M' };
 
-const colName = (c: number): string => {
-  let s = '';
-  for (let n = c; n >= 0; n = Math.floor(n / 26) - 1) s = String.fromCharCode(65 + (n % 26)) + s;
-  return s;
-};
-export const cellRef = (r: number, c: number): string => `${colName(c)}${r + 1}`;
+const WIDTHS = [
+  1316, 1462, 1462, 1865, 1792, 2486, 2669, 2157, 1901, 4864, 7131, 3584,
+  7387, 7241, 7241, 7241, 4022, 1609, 4608, 5229,
+];
+/** The column after the table: narrow on the LV sheet, wider on the MV one. */
+const LAST_COL_WIDTH: Record<BpmsTier, number> = { LV: 512, MV: 2377 };
 
-// Applies the look to a worksheet built from one BpmsSheet. `ws` is a SheetJS
-// worksheet; styles ride along on each cell's `s` property (xlsx-js-style).
-export function styleBpmsSheet(ws: any, sheet: BpmsSheet): void {
-  const layout = bpmsLayout(sheet.tier ?? 'LV');
-  const cols = layout.headers.length;
-  const at = (r: number, c: number) => {
-    const ref = cellRef(r, c);
-    if (!ws[ref]) ws[ref] = { t: 's', v: '' };
-    return ws[ref];
-  };
+const ALL: [number, number, number, number] = [LINE.thin, LINE.thin, LINE.thin, LINE.thin];
+const NO_RIGHT: [number, number, number, number] = [LINE.thin, LINE.none, LINE.thin, LINE.thin];
 
-  // Title bar
-  for (let c = 0; c < cols; c++) {
-    at(TITLE_ROW, c).s = {
-      font: { bold: true, sz: 14, color: { rgb: 'FFFFFFFF' } },
-      fill: { patternType: 'solid', fgColor: { rgb: TEAL_DARK } },
-      alignment: { horizontal: 'center', vertical: 'center' },
-    };
-  }
+export const BPMS_XLS_STYLES: XlsStyle[] = [
+  /* 0 title, A1 */ { bold: true, h: 1, v: 1, border: [LINE.thin, 0, 0, LINE.double], fill: 9, text: true },
+  /* 1 title    */ { bold: true, h: 1, v: 1, border: [0, 0, 0, LINE.double], fill: 9, text: true },
+  /* 2 gap row  */ { bold: true, fontColor: 10, h: 1, v: 1, fill: 9, text: true },
+  /* 3 outside  */ { v: 1 },
+  /* 4 heading, wrapped */ { bold: true, fontColor: 8, h: 2, v: 1, wrap: true, border: NO_RIGHT, fill: 46, text: true },
+  /* 5 heading  */ { bold: true, fontColor: 8, h: 2, v: 1, border: ALL, fill: 46, text: true },
+  /* 6 heading past the table */ { bold: true, fontColor: 8, h: 1, v: 1, wrap: true, border: NO_RIGHT, fill: 51, text: true },
+  /* 7 cell, boxed */ { h: 2, v: 1, wrap: true, border: ALL, text: true },
+  /* 8 line cell */ { h: 2, v: 1, wrap: true, border: NO_RIGHT },
+  /* 9 part cell */ { h: 2, v: 1, wrap: true, border: ALL, fill: 9, text: true },
+];
 
-  // Project / switchgear block
-  for (let i = 0; i < INFO_ROWS; i++) {
-    const r = INFO_FIRST_ROW + i;
-    for (const labelCol of [0, INFO_RIGHT_LABEL]) {
-      at(r, labelCol).s = {
-        font: { bold: true, sz: 10, color: { rgb: 'FF334155' } },
-        fill: { patternType: 'solid', fgColor: { rgb: 'FFF1F5F9' } },
-        alignment: { horizontal: 'left', vertical: 'center' },
-        border: boxed,
-      };
-    }
-    for (const valueCol of [1, INFO_RIGHT_LABEL + 1]) {
-      const span = valueCol === 1
-        ? [1, INFO_RIGHT_LABEL - 1]
-        : [INFO_RIGHT_LABEL + 1, cols - 1];
-      for (let c = span[0]; c <= span[1]; c++) {
-        at(r, c).s = {
-          font: { sz: 10, color: { rgb: 'FF0F172A' } },
-          alignment: { horizontal: 'left', vertical: 'center' },
-          border: boxed,
-        };
-      }
-    }
-  }
+/** The BPMS sheet as the .xls writer takes it. */
+export function bpmsXlsSheet(sheet: BpmsSheet): XlsSheet {
+  const cols = BPMS_HEADERS.length;      // 20; column U (index 20) closes the table
+  const cells: XlsCell[] = [];
+  const put = (r: number, c: number, v: string | number | undefined, s: number) =>
+    cells.push({ r, c, v: v === undefined || v === '' ? undefined : String(v), s });
 
-  // Table head
-  for (let c = 0; c < cols; c++) {
-    at(sheet.headerRow, c).s = {
-      font: { bold: true, sz: 10, color: { rgb: 'FFFFFFFF' } },
-      fill: { patternType: 'solid', fgColor: { rgb: TEAL } },
-      alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
-      border: boxed,
-    };
-  }
+  // Title across A–T, and U beside it.
+  for (let c = 0; c < cols; c++) put(0, c, c === 0 ? sheet.rows[0][0] : undefined, c === 0 ? 0 : 1);
+  put(0, cols, undefined, 3);
+  for (let c = 0; c < cols; c++) put(1, c, undefined, 2);
+  put(1, cols, undefined, 3);
 
-  // Body — the line block tinted, the part block plain, every other row banded.
-  for (let r = sheet.headerRow + 1; r < sheet.rows.length; r++) {
-    const banded = (r - sheet.headerRow) % 2 === 0;
+  const wrappedHeading = new Set([0, 1, 2, 4, 5, 6, 7, 8, 9, 10]);
+  for (let c = 0; c < cols; c++) put(2, c, BPMS_HEADERS[c], wrappedHeading.has(c) ? 4 : 5);
+  put(2, cols, undefined, 6);
+
+  const rowHeights: Record<number, number> = { 0: 600, 1: 180, 2: 1185 };
+  for (let r = BPMS_HEADER_ROW + 1; r < sheet.rows.length; r++) {
+    const values = sheet.rows[r];
     for (let c = 0; c < cols; c++) {
-      const isLineBlock = c < layout.firstPartCol;
-      const fill = isLineBlock ? LINE_TINT : (banded ? BAND : 'FFFFFFFF');
-      at(r, c).s = {
-        font: { sz: 10 },
-        fill: { patternType: 'solid', fgColor: { rgb: fill } },
-        alignment: {
-          horizontal: c === 0 ? 'center' : 'left',
-          vertical: 'top',
-          wrapText: layout.wrapCols.includes(c),
-        },
-        border: boxed,
-      };
+      const style = c >= BPMS_FIRST_PART_COL ? 9 : (c === 0 || c === 3) ? 7 : 8;
+      put(r, c, values[c], style);
     }
+    put(r, cols, undefined, 9);
+    rowHeights[r] = 1020;
   }
 
-  ws['!cols'] = layout.widths.map(wch => ({ wch }));
-  ws['!merges'] = sheet.merges;
-  ws['!rows'] = [{ hpt: 26 }];
-  ws['!autofilter'] = {
-    ref: `${cellRef(sheet.headerRow, 0)}:${cellRef(sheet.rows.length - 1, cols - 1)}`,
+  return {
+    name: BPMS_SHEET_NAME[sheet.tier],
+    cells,
+    colWidths: [...WIDTHS, LAST_COL_WIDTH[sheet.tier]],
+    restWidth: 2925,
+    rowHeights,
+    merges: sheet.merges.map(m => [m.s.r, m.e.r, m.s.c, m.e.c] as [number, number, number, number]),
+    freezeRows: 3,
+    zoom: 85,
   };
 }
