@@ -74,7 +74,7 @@ export interface TpmsPayload {
     scopeId: number | null;
     scopeName: string;
     switchgearType: string;
-    panelType: 'LV' | 'MV';
+    panelType: 'LV' | 'MV' | 'OTHER';
     cellCount: string;
     revision: number | null;
     tag: string;
@@ -297,7 +297,23 @@ export function buildTpmsImport(
   }
 
   // ── Device Library entry for the switchgear ───────────────────────────
-  const library = projectData.deviceLibrary ?? emptyTiers();
+  let library = projectData.deviceLibrary ?? emptyTiers();
+
+  // A scope that is not a switchgear (spare parts, tools, mechanical work)
+  // is filed under OTHER. Reads before that rule filed it under LV; what
+  // they made for it — its library entry, and the templates only it used —
+  // is moved across, under the same ids, rather than made a second time.
+  const movedScopeId = tier === 'OTHER' ? payload.scope.scopeId : null;
+  if (movedScopeId != null && options.deviceLibrary) {
+    const stale = (library.LV ?? []).filter(d => d.source === 'tpms' && d.tpmsScopeId === movedScopeId);
+    if (stale.length > 0) {
+      library = {
+        ...library,
+        LV: (library.LV ?? []).filter(d => !stale.includes(d)),
+        OTHER: [...(library.OTHER ?? []), ...stale.map(d => ({ ...d, type: 'OTHER' as Tier }))],
+      };
+    }
+  }
   let libraryItemId: string | undefined;
 
   if (options.deviceLibrary && payload.device?.name) {
@@ -335,6 +351,27 @@ export function buildTpmsImport(
   // ── Templates and the switchgear's rows ───────────────────────────────
   if (options.equipment) {
     const templates = { ...projectData.templates };
+    if (movedScopeId != null) {
+      const fromLv = (t: TemplateItem) => t.source === 'tpms' || t.hierarchy?.path?.[0] === 'TPMS';
+      const stay: TemplateItem[] = [];
+      const moved: TemplateItem[] = [];
+      for (const t of templates.LV ?? []) {
+        const ids = t.tpmsScopeIds ?? (t.tpmsScopeId != null ? [t.tpmsScopeId] : []);
+        if (!fromLv(t) || !ids.includes(movedScopeId)) { stay.push(t); continue; }
+        const rest = ids.filter(id => id !== movedScopeId);
+        // Shared with a real LV switchgear: it stays there, without this scope.
+        if (rest.length > 0) { stay.push({ ...t, tpmsScopeIds: rest }); continue; }
+        // Already made under OTHER by another scope of this read: this copy
+        // goes, unless the engineer has filed it somewhere of their own.
+        const filed = (t.hierarchy?.path?.[0] ?? 'TPMS') !== 'TPMS';
+        const twin = (templates.OTHER ?? []).some(o =>
+          fromLv(o) && (o.tpmsName ?? o.name) === (t.tpmsName ?? t.name));
+        if (twin && !filed) continue;
+        moved.push({ ...t, type: 'OTHER' });
+      }
+      templates.LV = stay;
+      templates.OTHER = [...(templates.OTHER ?? []), ...moved];
+    }
     const tierTemplates = [...(templates[tier] ?? [])];
 
     // Names TPMS gives the part columns for this project ride along as the

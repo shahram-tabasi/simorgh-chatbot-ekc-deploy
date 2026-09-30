@@ -403,9 +403,19 @@ export async function readSpecUpdateFromTpms(
     // engineer who moved a panel to GIS or OTHER still has the same panel.
     const matches = (d: DeviceLibraryItem) =>
       (sw.scopeId != null && d.tpmsScopeId === sw.scopeId) || d.name === sw.scopeName;
-    const tier = TIERS.find(t => nextLibrary[t].some(matches)) ?? (sw.panelType as Tier);
-    const index = (nextLibrary[tier] ?? []).findIndex(matches);
+    let tier = TIERS.find(t => nextLibrary[t].some(matches)) ?? (sw.panelType as Tier);
+    let index = (nextLibrary[tier] ?? []).findIndex(matches);
     if (index < 0) { newSwitchgears.push(sw.scopeName); continue; }
+
+    // Not a switchgear, filed under LV by a read before OTHER was used for
+    // it: it goes to OTHER. One the engineer moved elsewhere stays theirs.
+    if (sw.panelType === 'OTHER' && tier === 'LV' && nextLibrary.LV[index].source === 'tpms') {
+      const [item] = nextLibrary.LV.splice(index, 1);
+      nextLibrary.OTHER.push({ ...item, type: 'OTHER' });
+      tier = 'OTHER';
+      index = nextLibrary.OTHER.length - 1;
+      libraryTouched = true;
+    }
 
     const existing = nextLibrary[tier][index];
     const merged = mergeOverEdits(

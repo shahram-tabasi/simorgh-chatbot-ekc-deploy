@@ -17,7 +17,7 @@ export interface TpmsSwitchgear {
   scopeId: number;
   scopeName: string;
   switchgearType: string;
-  panelType: 'LV' | 'MV';
+  panelType: 'LV' | 'MV' | 'OTHER';
   cellCount: string;
   tag: string;
   device: { name: string; type: Tier; properties: Record<string, any> };

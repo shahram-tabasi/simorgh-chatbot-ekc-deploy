@@ -629,7 +629,9 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                       {tpmsHeader.switchgears.map(sw => (
                         <div key={sw.scopeId} className="flex items-center gap-2 px-3 py-1.5 text-sm">
                           <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
-                            sw.panelType === 'LV' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
+                            sw.panelType === 'LV' ? 'bg-green-100 text-green-700'
+                              : sw.panelType === 'OTHER' ? 'bg-gray-100 text-gray-700'
+                              : 'bg-orange-100 text-orange-700'
                           }`}>{sw.panelType}</span>
                           <span className="text-gray-800">{sw.scopeName}</span>
                           <span className="text-gray-400 truncate">{sw.switchgearType}</span>

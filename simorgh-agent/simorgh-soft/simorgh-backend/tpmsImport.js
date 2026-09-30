@@ -278,8 +278,11 @@ export function mapProjectToTechSettings(project, resolve) {
 }
 
 // A switchgear type name decides the tier, the same test Eplanix applies.
+// A scope with no switchgear type is not a switchgear at all — general tools,
+// spare parts, mechanical work — and is filed under OTHER, not LV.
 export function panelTypeFromSwitchgear(switchgearType) {
   const name = str(switchgearType).toUpperCase();
+  if (!name) return 'OTHER';
   const isMv = name.includes('SIMOPRIME') || name.includes('EK36') || name.includes('8BK');
   return isMv ? 'MV' : 'LV';
 }
