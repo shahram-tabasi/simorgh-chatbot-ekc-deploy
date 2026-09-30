@@ -54,6 +54,11 @@ export interface XlsSheet {
   freezeRows?: number;
   /** Zoom, percent. */
   zoom?: number;
+  /**
+   * Open in Page Break Preview. The EPLAN files are saved that way, and BPMS
+   * reads a sheet only when it is.
+   */
+  pageBreakPreview?: boolean;
 }
 
 // ── Bytes ────────────────────────────────────────────────────────────────────
@@ -277,8 +282,10 @@ function worksheet(sheet: XlsSheet, sst: Map<string, number>): Uint8Array {
 
   const frozen = (sheet.freezeRows ?? 0) > 0;
   record(out, 0x023e, new Bytes()
-    .u16(0x02 | 0x04 | 0x10 | 0x20 | 0x80 | 0x200 | (frozen ? 0x08 | 0x100 : 0) | 0x400)
-    .u16(0).u16(0).u16(64).u16(0).u16(0).u16(sheet.zoom ?? 0).u32(0));   // WINDOW2
+    .u16(0x02 | 0x04 | 0x10 | 0x20 | 0x80 | 0x200 | (frozen ? 0x08 | 0x100 : 0) | 0x400
+      | (sheet.pageBreakPreview ? 0x800 : 0))
+    .u16(0).u16(0).u16(64).u16(0)
+    .u16(sheet.pageBreakPreview ? sheet.zoom ?? 0 : 0).u16(sheet.zoom ?? 0).u32(0)); // WINDOW2
   if (sheet.zoom) record(out, 0x00a0, new Bytes().u16(sheet.zoom).u16(100)); // SCL
   if (frozen) {
     const n = sheet.freezeRows!;

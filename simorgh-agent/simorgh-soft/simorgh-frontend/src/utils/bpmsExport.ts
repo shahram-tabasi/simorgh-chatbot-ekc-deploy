@@ -347,5 +347,6 @@ export function bpmsXlsSheet(sheet: BpmsSheet): XlsSheet {
     merges: sheet.merges.map(m => [m.s.r, m.e.r, m.s.c, m.e.c] as [number, number, number, number]),
     freezeRows: 3,
     zoom: 85,
+    pageBreakPreview: true,
   };
 }
