@@ -72,6 +72,8 @@ const solid = (x: number, y: number, w: number, h: number) =>
 const dot = (cx: number, cy: number, r = 1.6) => `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${S}"/>`;
 const path = (d: string, w = 1.2, fill = 'none') =>
   `<path d="${d}" fill="${fill}" stroke="${S}" stroke-width="${w}"/>`;
+const esc = (s: string) => String(s ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const txt = (x: number, y: number, s: string, size = 8, anchor = 'middle') =>
   `<text x="${x}" y="${y}" font-size="${size}" text-anchor="${anchor}" fill="${S}" font-family="Segoe UI, Arial, sans-serif">${s}</text>`;
 
@@ -602,14 +604,277 @@ const SYMBOL_RIGHT: Partial<Record<SymbolId, number>> = {
   transformer: 24, 'bus-duct': 20, 'key-interlock': 24, magnet: 24, heater: 24,
 };
 
+// ── Symbols exported from EPLAN, in place of the ones here ──────────────────
+//
+// A file in the symbol pack named after one of these ids — `vcb.svg`,
+// `current-transformer.svg` — replaces that symbol everywhere: on every sheet,
+// in the printed set and in the library view. It is drawn to the same cell:
+// scaled to the cell's height, and placed so its own conductor (`data-pin-x`
+// in the file, the middle of it otherwise) lands on the branch line.
+export interface SymbolOverride {
+  /** A picture of the symbol. Ignored when `art` is present. */
+  url: string;
+  /**
+   * The symbol as geometry rather than as a picture — the markup for its
+   * shapes, in its own coordinate space, with no `<svg>` around it.
+   *
+   * A symbol brought in from a DXF arrives this way. It matters beyond how it
+   * looks: geometry goes back out to DXF and PDF as lines and arcs that can be
+   * edited and plotted at any scale, where a picture would have to be
+   * re-drawn by hand at the other end.
+   */
+  art?: string;
+  /** The symbol's own box, from its viewBox. */
+  width?: number;
+  height?: number;
+  /** Where the conductor runs inside that box. */
+  pinX?: number;
+  /**
+   * The points a wire may land on, in the symbol's own coordinates.
+   *
+   * Only a symbol somebody has drawn connection points on has these. The
+   * library's own symbols answer the question from their geometry — a
+   * single-line device is a conductor with something on it, and the two ends
+   * of that conductor are the two terminals — and that answer is right until
+   * somebody redraws the symbol as something the rule does not fit.
+   */
+  terminals?: { x: number; y: number; name: string; dir?: string }[];
+  /** How many cells down the line it takes (`data-cells` in the file). */
+  cells?: number;
+  title?: string;
+}
+
+// ── What is standing in for a symbol, and who said so ───────────────────────
+//
+// Three layers, and they are three because three different places answer the
+// question and none of them knows about the others:
+//
+//   **project** — this job's own drawing of the device, redrawn on the symbol
+//                 page. The most particular thing anybody has said, so it wins.
+//   **pack**    — the office's DXF symbol pack, kept in this browser.
+//   **eplan**   — symbols exported from EPLAN for the parts on this project.
+//
+// They used to be two, and the pack and EPLAN shared one slot that whichever
+// screen ran last overwrote. Worse, every screen set the layers from its own
+// effect, so what a symbol looked like depended on which tab had been opened
+// and in what order: the library showed the new drawing, the template preview
+// showed the old one, and the sheet showed whichever it had last been told.
+// "It is somehow not in sync" is that, exactly.
+//
+// So the layers are separate, each has one writer, and **anything that changes
+// them says so**. Drawing from a module-level variable is fine; drawing from
+// one that can change without React hearing about it is not, and that is what
+// `onSymbols` is for.
+
+let PROJECT_OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
+let PACK_OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
+let EPLAN_OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
+
+let VERSION = 0;
+const watchers = new Set<() => void>();
+
+/** Everything that draws a symbol, told that one has changed. */
+function announce(): void {
+  VERSION += 1;
+  for (const fn of watchers) fn();
+}
+
+/**
+ * How many times the symbols have changed.
+ *
+ * A number rather than the maps themselves: a screen only needs to know that
+ * it has to draw again, and comparing two nested maps on every render to learn
+ * that is work for nothing. Pairs with `onSymbols` for `useSyncExternalStore`.
+ */
+export const symbolsVersion = (): number => VERSION;
+
+/** Called whenever any layer changes. Returns the way to stop listening. */
+export function onSymbols(fn: () => void): () => void {
+  watchers.add(fn);
+  return () => { watchers.delete(fn); };
+}
+
+/** Hand the library the office's DXF pack. Passing {} clears that layer. */
+export function setPackSymbolOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
+  PACK_OVERRIDES = map ?? {};
+  announce();
+}
+
+/** Hand the library the symbols EPLAN exported for this project's parts. */
+export function setEplanSymbolOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
+  EPLAN_OVERRIDES = map ?? {};
+  announce();
+}
+
+/** Hand the library the project's own drawings. Passing {} clears them. */
+export function setProjectSymbolOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
+  PROJECT_OVERRIDES = map ?? {};
+  announce();
+}
+
+/** What the library will draw for an id, when something has replaced it. */
+export function symbolOverride(id: string): SymbolOverride | undefined {
+  return PROJECT_OVERRIDES[id as SymbolId]
+    ?? PACK_OVERRIDES[id as SymbolId]
+    ?? EPLAN_OVERRIDES[id as SymbolId];
+}
+
+/**
+ * Everything except the project's own — what a symbol falls back to when the
+ * project's drawing of it is put away again.
+ */
+export function packSymbolOverride(id: string): SymbolOverride | undefined {
+  return PACK_OVERRIDES[id as SymbolId] ?? EPLAN_OVERRIDES[id as SymbolId];
+}
+
+/** Which symbols this project draws its own way, for a screen that lists them. */
+export const redrawnSymbolIds = (): SymbolId[] =>
+  Object.keys(PROJECT_OVERRIDES) as SymbolId[];
+
+/**
+ * The geometry an overriding symbol is drawn with.
+ *
+ * A symbol keeps its own proportions and takes as many cells down the line as
+ * those proportions ask for — a whole vacuum breaker with its racking is taller
+ * than it is wide and needs two, where a meter needs one. The file decides it
+ * outright with `data-cells`; otherwise it comes from the symbol's own box.
+ */
+export function overrideBox(o: SymbolOverride): { w: number; h: number; dx: number; cells: number } {
+  const w0 = o.width && o.width > 0 ? o.width : 1;
+  const h0 = o.height && o.height > 0 ? o.height : 1;
+  const cells = Math.max(1, Math.min(4, Math.round(o.cells ?? h0 / w0) || 1));
+  const h = cells * CELL;
+  const scale = h / h0;
+  const pin = o.pinX != null && o.pinX >= 0 && o.pinX <= w0 ? o.pinX : w0 / 2;
+  return { w: w0 * scale, h, dx: -pin * scale, cells };   // dx: the box's left, from x
+}
+
+/** How tall a symbol is on the line: one cell, or as many as an overriding
+ *  symbol from the pack asks for. */
+export function symbolHeight(id: string): number {
+  const o = symbolOverride(id);
+  return o ? overrideBox(o).h : CELL;
+}
+
 /** The right-hand extent of a symbol, so a caller can place text clear of it. */
 export function symbolRight(id: string): number {
+  const o = symbolOverride(id);
+  if (o) {
+    const { w, dx } = overrideBox(o);
+    return Math.max(16, w + dx);
+  }
   return SYMBOL_RIGHT[id as SymbolId] ?? 16;
 }
 
-/** One symbol, drawn with the branch line through it. */
+/** The left-hand extent of a symbol — an overriding symbol can reach out to
+ *  the left, the way a breaker with its racking does. */
+export function symbolLeft(id: string): number {
+  const o = symbolOverride(id);
+  return o ? Math.max(16, -overrideBox(o).dx) : 16;
+}
+
+/**
+ * The symbol as this library itself draws it, with nothing standing in for it.
+ *
+ * The accessors above all answer with whatever is currently overriding a
+ * symbol, which is what every drawing wants. Putting an overriding symbol back
+ * is the one job that wants the other answer: what the page has to be redrawn
+ * with is the library's own, and asking through the overrides would hand back
+ * the very drawing that is being taken away.
+ */
+export function librarySymbol(id: SymbolId): {
+  markup: string; left: number; width: number; height: number;
+} {
+  const left = 16;
+  return {
+    markup: (IEC_SYMBOLS[id] ?? IEC_SYMBOLS.link).draw(left, 0),
+    left,
+    width: left + (SYMBOL_RIGHT[id as SymbolId] ?? 16),
+    height: CELL,
+  };
+}
+
+/**
+ * One symbol, drawn where the branch line meets it.
+ *
+ * **Nothing is drawn through a symbol.** A device's two terminals are joined
+ * inside it only if the device itself joins them, and most of what is on a
+ * feeder does not: a breaker, a disconnector, a contactor, a switch is drawn
+ * *open* — that is the whole meaning of the symbol, the state it sits in until
+ * something operates it. A line run from the top terminal to the bottom one
+ * past the open blade says the opposite, and says it in the one drawing the
+ * rest of the job is read from.
+ *
+ * That line used to be drawn under every overriding symbol — so a breaker the
+ * office redrew for a project, or replaced from its own DXF pack, came back
+ * shorted while the library's own copy of it stayed right. Redrawing a symbol
+ * must not change what it means.
+ *
+ * Geometry brings its own conductor: the art is a drawing of the device, leads
+ * and gap and all, scaled to exactly the box it declares, so there is nothing
+ * left for this to add. A picture is the one case that still needs a lead —
+ * see below.
+ */
 export function drawIecSymbol(id: SymbolId, x: number, y: number): string {
+  const o = symbolOverride(id);
+  if (o) {
+    const { w, h, dx } = overrideBox(o);
+    if (o.art) {
+      // Geometry, placed by the box it declares, so the symbol's own conductor
+      // lands on the branch — and its own gap stays a gap.
+      const k = h / (o.height && o.height > 0 ? o.height : 1);
+      return `<g transform="translate(${x + dx} ${y}) scale(${k})">${o.art}</g>`;
+    }
+    // A picture, and only a picture. `xMidYMid meet` letterboxes it inside the
+    // cell, so its ink can stop short of both ends with nothing to say where —
+    // which leaves a lead the only way to put it on the branch at all. An
+    // office that wants its switches drawn open sends geometry (a DXF on the
+    // CONN layer, or a redraw on the symbol page), not a picture.
+    return `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + h}" stroke="${S}" stroke-width="1"/>` +
+      `<image href="${esc(o.url)}" x="${x + dx}" y="${y}" width="${w}" height="${h}" ` +
+      `preserveAspectRatio="xMidYMid meet">` +
+      `<title>${esc(o.title || IEC_SYMBOLS[id]?.title || id)}</title></image>`;
+  }
   return (IEC_SYMBOLS[id] ?? IEC_SYMBOLS.link).draw(x, y);
+}
+
+/**
+ * Where a wire may land on a symbol drawn at (x, y) — the twin of
+ * `drawIecSymbol`, answering for the same placement.
+ *
+ * It is the twin deliberately. The terminals and the ink have to come out of
+ * the same arithmetic or they drift apart, and the way they drift is the worst
+ * one: everything looks right, and the wire joins nothing. So this reads the
+ * same override through the same box and applies the same transform, and
+ * anything that changes one has to walk past the other.
+ *
+ * A symbol nobody has drawn connection points on gets the two the library has
+ * always given it: a single-line device stands in the branch, current in at
+ * the top and out at the bottom, and those are the two ends of the conductor
+ * the symbol is drawn around.
+ */
+export function symbolTerminals(
+  id: SymbolId, x: number, y: number,
+): { x: number; y: number; name: string; dir?: string }[] {
+  const o = symbolOverride(id);
+  const h = symbolHeight(id);
+  if (o?.art && o.terminals?.length) {
+    const { dx } = overrideBox(o);
+    const k = h / (o.height && o.height > 0 ? o.height : 1);
+    // `dx` already carries the conductor back onto the branch — it is
+    // `-pinX * k` — so a point is its own offset in the art, at the same
+    // scale. Subtracting the pin again here is the mistake to watch for.
+    return o.terminals.map(p => ({
+      x: x + dx + p.x * k,
+      y: y + p.y * k,
+      name: p.name,
+      dir: p.dir,
+    }));
+  }
+  return [
+    { x, y, name: '1', dir: 'up' },
+    { x, y: y + h, name: '2', dir: 'down' },
+  ];
 }
 
 /** The whole library as a legend sheet, laid out like the office's own. */
@@ -630,7 +895,13 @@ export function buildSymbolCatalogueSvg(perRow = 5): string {
       const bx = 20 + col * cellW;
       const by = y + row * cellH;
       out.push(box(bx, by, cellW - 8, cellH - 8, '#fff', 0.8));
-      out.push(symbol.draw(bx + 46, by + 10));
+      // Drawn the way the sheet draws it, so a symbol the pack has replaced is
+      // the one on show here too — scaled into the card when it is a tall one.
+      const tall = symbolHeight(symbol.id) / CELL;
+      const art = drawIecSymbol(symbol.id, bx + 46, by + 10);
+      out.push(tall > 1
+        ? `<g transform="translate(${bx + 46} ${by + 10}) scale(${1 / tall}) translate(${-(bx + 46)} ${-(by + 10)})">${art}</g>`
+        : art);
       out.push(`<text x="${bx + 8}" y="${by + cellH - 22}" font-size="9" fill="#111" font-family="Segoe UI, Arial, sans-serif">${symbol.title}</text>`);
       out.push(`<text x="${bx + 8}" y="${by + cellH - 11}" font-size="9" fill="#666" font-family="Segoe UI, Arial, sans-serif">${symbol.titleFa}</text>`);
     });

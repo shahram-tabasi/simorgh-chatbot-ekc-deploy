@@ -5,8 +5,8 @@
 # =============================================================================
 services:
   tier-quota-service:
-    image: simorgh-tier-quota-service:local
-    build: ../tier-quota-service
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-tier-quota-service:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: tier-quota-service
     expose:
       - "8040"

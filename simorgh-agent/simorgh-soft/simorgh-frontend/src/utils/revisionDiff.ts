@@ -11,6 +11,7 @@
 // so this is also how the changes made in TPMS are read here.
 import { ProjectData, DeviceTableRow, Equipment, TemplateItem } from '../types/project';
 import { partsCellText, templateParts } from './tierEquipmentMatrix';
+import { type Tier } from './tiers';
 
 export type ChangeKind = 'added' | 'removed' | 'changed';
 
@@ -27,7 +28,7 @@ export interface LineChange {
 
 export interface EquipmentDiff {
   name: string;
-  type: 'LV' | 'MV' | 'HV';
+  type: Tier;
   kind: ChangeKind;
   lines: LineChange[];
   panel: FieldChange[];
@@ -36,7 +37,7 @@ export interface EquipmentDiff {
 
 export interface TemplateDiff {
   name: string;
-  type: 'LV' | 'MV' | 'HV';
+  type: Tier;
   kind: ChangeKind;
   changes: FieldChange[];
 }
@@ -81,13 +82,67 @@ const PROJECT_FIELDS: { key: keyof ProjectData; label: string }[] = [
   { key: 'standard',           label: 'Standard' },
 ];
 
-// A line is followed across revisions by its feeder number; a line without one
-// is followed by its position, which is the best that can be done.
-const lineKey = (row: DeviceTableRow) =>
-  text(row.feederNo) ? `F:${text(row.feederNo).toLowerCase()}` : `#${row.rowNumber}`;
+// A line is followed across revisions by its bus section and feeder number.
+//
+// A feeder number is not a key: a busbar section carries many rows under one
+// number, and this office's sheets do. Keyed on the number, every row after
+// the first with the same number was thrown away before it was compared, so a
+// changed row could vanish from the report and an unchanged one appear as
+// changed against its neighbour. Rows are paired instead — by id when the row
+// kept its id, then in order among rows sharing a section and number, then in
+// order among rows sharing a number — and every row is claimed once.
+const norm = (v: any) => text(v).toLowerCase();
 
-const equipmentKey = (eq: Equipment) => `${eq.type}::${text(eq.name).toLowerCase()}`;
-const templateKey = (t: TemplateItem) => `${t.type}::${text(t.name).toLowerCase()}`;
+function pairRows<T>(
+  a: T[], b: T[], keys: ((row: T) => string)[],
+): { pairs: [T, T][]; onlyA: T[]; onlyB: T[] } {
+  const leftA = new Set(a);
+  const leftB = new Set(b);
+  const pairs: [T, T][] = [];
+  for (const keyOf of keys) {
+    const queue = new Map<string, T[]>();
+    for (const row of b) {
+      if (!leftB.has(row)) continue;
+      const k = keyOf(row);
+      if (!k) continue;
+      if (!queue.has(k)) queue.set(k, []);
+      queue.get(k)!.push(row);
+    }
+    for (const row of a) {
+      if (!leftA.has(row)) continue;
+      const k = keyOf(row);
+      const match = k ? queue.get(k)?.shift() : undefined;
+      if (!match) continue;
+      pairs.push([row, match]);
+      leftA.delete(row);
+      leftB.delete(match);
+    }
+  }
+  return { pairs, onlyA: a.filter(r => leftA.has(r)), onlyB: b.filter(r => leftB.has(r)) };
+}
+
+const LINE_KEYS: ((row: DeviceTableRow) => string)[] = [
+  row => (row.id ? `id:${row.id}` : ''),
+  row => (text(row.feederNo) ? `${norm(row.busSection)}|${norm(row.feederNo)}` : ''),
+  row => (text(row.feederNo) ? norm(row.feederNo) : ''),
+  row => `#${row.rowNumber}`,
+];
+
+const EQUIPMENT_KEYS: ((eq: Equipment) => string)[] = [
+  eq => (eq.id ? `id:${eq.id}` : ''),
+  eq => `${eq.type}::${norm(eq.name)}`,
+];
+
+const TEMPLATE_KEYS: ((t: TemplateItem) => string)[] = [
+  t => (t.id ? `id:${t.id}` : ''),
+  t => `${t.type}::${norm(t.name)}`,
+];
+
+/** The row as it reads on screen: its template named by the template itself. */
+function withTemplateName(row: DeviceTableRow, templates: Map<string, TemplateItem>): DeviceTableRow {
+  const template = row.templateId ? templates.get(row.templateId) : undefined;
+  return template ? { ...row, templateName: template.name } : row;
+}
 
 function fieldDiff(
   a: any, b: any, fields: { key: string; label: string }[],
@@ -142,24 +197,36 @@ export function diffProjectSnapshots(base: ProjectData, target: ProjectData): Re
   const techSettings = techDiff(base.techSettings, target.techSettings);
 
   // ── Switchgears and their lines ───────────────────────────────────────
-  const baseEqs = new Map((base.equipments ?? []).map(e => [equipmentKey(e), e]));
-  const targetEqs = new Map((target.equipments ?? []).map(e => [equipmentKey(e), e]));
+  const templatesOf = (data: ProjectData) => new Map(
+    Object.values(data.templates ?? {}).flat().map(t => [t.id, t as TemplateItem]));
+  const baseTemplatesById = templatesOf(base);
+  const targetTemplatesById = templatesOf(target);
+
+  const eqPairing = pairRows(base.equipments ?? [], target.equipments ?? [], EQUIPMENT_KEYS);
+  const eqPairs: [Equipment | undefined, Equipment | undefined][] = [
+    ...eqPairing.pairs,
+    ...eqPairing.onlyA.map(a => [a, undefined] as [Equipment, undefined]),
+    ...eqPairing.onlyB.map(b => [undefined, b] as [undefined, Equipment]),
+  ];
   const equipments: EquipmentDiff[] = [];
   const totals = { added: 0, removed: 0, changed: 0 };
 
-  for (const key of new Set([...baseEqs.keys(), ...targetEqs.keys()])) {
-    const a = baseEqs.get(key);
-    const b = targetEqs.get(key);
+  for (const [a, b] of eqPairs) {
     const eq = (b ?? a)!;
     const kind: ChangeKind = !a ? 'added' : !b ? 'removed' : 'changed';
 
-    const aLines = new Map((a?.devices ?? []).map(r => [lineKey(r), r]));
-    const bLines = new Map((b?.devices ?? []).map(r => [lineKey(r), r]));
+    const aRows = (a?.devices ?? []).map(r => withTemplateName(r, baseTemplatesById));
+    const bRows = (b?.devices ?? []).map(r => withTemplateName(r, targetTemplatesById));
+    const linePairing = pairRows(aRows, bRows, LINE_KEYS);
+    const linePairs: [DeviceTableRow | undefined, DeviceTableRow | undefined][] = [
+      ...linePairing.pairs,
+      ...linePairing.onlyA.map(r => [r, undefined] as [DeviceTableRow, undefined]),
+      ...linePairing.onlyB.map(r => [undefined, r] as [undefined, DeviceTableRow]),
+    ];
     const lines: LineChange[] = [];
 
-    for (const lk of new Set([...aLines.keys(), ...bLines.keys()])) {
-      const la = aLines.get(lk);
-      const lb = bLines.get(lk);
+    for (const [la, lb] of linePairs) {
+      const lk = `${text((lb ?? la)!.busSection)}|${text((lb ?? la)!.feederNo)}|${(lb ?? la)!.rowNumber}`;
       if (la && lb) {
         const changes = fieldDiff(la, lb, LINE_FIELDS as any);
         if (changes.length > 0) {
@@ -188,7 +255,9 @@ export function diffProjectSnapshots(base: ProjectData, target: ProjectData): Re
     }
 
     lines.sort((x, y) => x.feederNo.localeCompare(y.feederNo, undefined, { numeric: true }));
-    const panel = a && b ? panelDiff(base, target, a, b) : [];
+    const panelRenamed = a && b && text(a.name) !== text(b.name)
+      ? [{ field: 'Name', from: text(a.name), to: text(b.name) }] : [];
+    const panel = a && b ? [...panelRenamed, ...panelDiff(base, target, a, b)] : [];
     const counts = {
       added: lines.filter(l => l.kind === 'added').length,
       removed: lines.filter(l => l.kind === 'removed').length,
@@ -206,16 +275,16 @@ export function diffProjectSnapshots(base: ProjectData, target: ProjectData): Re
   equipments.sort((a, b) => a.name.localeCompare(b.name));
 
   // ── Templates: what a template puts on a line ─────────────────────────
-  const allTemplates = (data: ProjectData) => [
-    ...(data.templates?.LV ?? []), ...(data.templates?.MV ?? []), ...(data.templates?.HV ?? []),
+  const tPairing = pairRows(
+    [...baseTemplatesById.values()], [...targetTemplatesById.values()], TEMPLATE_KEYS);
+  const tPairs: [TemplateItem | undefined, TemplateItem | undefined][] = [
+    ...tPairing.pairs,
+    ...tPairing.onlyA.map(t => [t, undefined] as [TemplateItem, undefined]),
+    ...tPairing.onlyB.map(t => [undefined, t] as [undefined, TemplateItem]),
   ];
-  const baseTemplates = new Map(allTemplates(base).map(t => [templateKey(t), t]));
-  const targetTemplates = new Map(allTemplates(target).map(t => [templateKey(t), t]));
   const templates: TemplateDiff[] = [];
 
-  for (const key of new Set([...baseTemplates.keys(), ...targetTemplates.keys()])) {
-    const a = baseTemplates.get(key);
-    const b = targetTemplates.get(key);
+  for (const [a, b] of tPairs) {
     const t = (b ?? a)!;
     const aParts = a ? templateParts(a) : {};
     const bParts = b ? templateParts(b) : {};
@@ -227,6 +296,9 @@ export function diffProjectSnapshots(base: ProjectData, target: ProjectData): Re
       if (from !== to) changes.push({ field: prop, from, to });
     }
     const kind: ChangeKind = !a ? 'added' : !b ? 'removed' : 'changed';
+    if (a && b && text(a.name) !== text(b.name)) {
+      changes.unshift({ field: 'Name', from: text(a.name), to: text(b.name) });
+    }
     if (kind !== 'changed' || changes.length > 0) {
       templates.push({ name: t.name, type: t.type, kind, changes });
       if (kind === 'added') totals.added += 1;

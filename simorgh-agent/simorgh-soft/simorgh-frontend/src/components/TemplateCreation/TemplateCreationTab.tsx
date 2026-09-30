@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { Keyboard, X, RotateCcw } from 'lucide-react';
+import { Keyboard, X, RotateCcw, Table2Icon } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
 import { TemplateTree } from './TemplateTree';
+import { PanelFrame } from '../shared/PanelFrame';
 import { TemplateProperties } from './TemplateProperties';
+import { TIERS } from '../../utils/tiers';
 
 interface TemplateCreationTabProps {
   onComplete: () => void;
@@ -224,14 +226,32 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
   onComplete,
   initialSelectedTemplate
 }) => {
-  const { projectData } = useProject();
+  const { projectData, holdLock, releaseLock } = useProject();
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(initialSelectedTemplate ?? null);
+
+  // The template open here is this person's while it is open: a colleague who
+  // clicks it is told who has it, and is not let in until it is let go —
+  // opening another one, or leaving this tab.
+  const openRef = React.useRef<string | null>(null);
+  const openTemplate = React.useCallback(async (templateId: string) => {
+    if (openRef.current === templateId) { setSelectedTemplate(templateId); return; }
+    if (!(await holdLock('template', templateId))) return;
+    if (openRef.current) releaseLock('template', openRef.current);
+    openRef.current = templateId;
+    setSelectedTemplate(templateId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  React.useEffect(() => () => {
+    if (openRef.current) releaseLock('template', openRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   React.useEffect(() => {
     if (initialSelectedTemplate) {
-      setSelectedTemplate(initialSelectedTemplate);
+      setSelectedTemplate(null);
+      void openTemplate(initialSelectedTemplate);
     }
-  }, [initialSelectedTemplate]);
+  }, [initialSelectedTemplate, openTemplate]);
 
   if (!projectData) {
     return (
@@ -245,13 +265,13 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
   }
 
   const handleTemplateSelect = (templateId: string) => {
-    setSelectedTemplate(templateId);
+    void openTemplate(templateId);
   };
 
   const getSelectedTemplateData = () => {
     if (!selectedTemplate) return null;
     const templates = projectData.templates || {};
-    for (const type of ['LV', 'MV', 'HV'] as const) {
+    for (const type of TIERS) {
       const template = (templates[type] || []).find(t => t.id === selectedTemplate);
       if (template) return template;
     }
@@ -263,19 +283,45 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex justify-between items-center mb-4 shrink-0">
         <h2 className="text-xl font-semibold">Create Template</h2>
       </div>
 
-      <div className="flex flex-grow border border-gray-200 rounded-md overflow-hidden">
-        <div className="w-1/4 border-r border-gray-200 overflow-y-auto">
+      <div className="flex flex-grow min-h-0 border border-gray-200 rounded-md overflow-hidden">
+        {/* Closed, the tree leaves no column behind it: the properties take
+            the whole width rather than three quarters of it. */}
+        <PanelFrame
+          id="project-templates"
+          title="Project Templates"
+          group="Create Template"
+          note="LV, MV, HV, GIS and Other, the sections under them, and BPMS — the templates read from TPMS"
+          side="left"
+          className="w-1/4 border-0 border-r border-gray-200 rounded-none"
+          bodyClassName="flex-1 overflow-y-auto"
+          actions={
+            // Every template in one table, in a tab of its own that follows
+            // the changes made here (TemplatesOverview).
+            <button
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.search = `?view=templates&projectId=${encodeURIComponent(projectData._id || 'unsaved')}`;
+                window.open(url.toString(), '_blank');
+              }}
+              title="All templates in one table — opens in a new tab and follows every change"
+              className="p-1 rounded text-gray-500 hover:text-gray-900 hover:bg-gray-200"
+            >
+              <Table2Icon className="w-3.5 h-3.5" />
+            </button>
+          }
+        >
           <TemplateTree
+            bare
             projectData={projectData}
             onTemplateSelect={handleTemplateSelect}
             selectedTemplateId={selectedTemplate}
           />
-        </div>
-        <div className="w-3/4 p-4 overflow-y-auto">
+        </PanelFrame>
+        <div className="flex-1 min-w-0 min-h-0 p-4 overflow-hidden">
           {selectedTemplateData ? (
             <TemplateProperties template={selectedTemplateData} />
           ) : (
@@ -286,7 +332,7 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
         </div>
       </div>
 
-      <div className="flex justify-end mt-4">
+      <div className="flex justify-end mt-4 shrink-0">
         <button
           className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
           onClick={onComplete}

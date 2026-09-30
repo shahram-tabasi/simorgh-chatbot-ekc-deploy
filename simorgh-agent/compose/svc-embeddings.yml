@@ -5,8 +5,8 @@
 # =============================================================================
 services:
   embeddings-service:
-    image: simorgh-embeddings-service:local
-    build: ../embeddings-service
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-embeddings-service:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: embeddings-service
     expose:
       - "8031"

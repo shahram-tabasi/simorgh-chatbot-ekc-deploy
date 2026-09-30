@@ -60,7 +60,7 @@ touched.
 | TPMS | Used for |
 |---|---|
 | `View_Project_Main` | OE number, project name (EN/FA), project expert, technical supervisor |
-| `view_scope` + `CODING_SECONDARY_GRP_TB` | the switchgear, its type, cell count, and whether it is LV or MV |
+| `view_scope` + `CODING_SECONDARY_GRP_TB` | the switchgear, **its name**, its type, cell count, and whether it is LV or MV — names are always read from `view_scope`, never from `View_draft` (the column is found from the view itself; `TPMS_SCOPE_NAME_COLUMN` overrides it) |
 | `technical_project_identity_` | Technical Settings (altitude, temperature, wire sizes and colours, paint) |
 | `technical_panel_identity` | the panel specification → a Device Library entry |
 | `TECHNICAL_PROPERTIES` | the titles behind the coded fields in the two tables above |
@@ -240,25 +240,51 @@ The shapes, as the legend draws them:
 | Motor / generator | a circle carrying `M` or `G` |
 | Capacitor delta, magnet, heating element, LCS, ATS, bus duct, key interlock, capacitive divider | as the legend draws them |
 
-### Series and parallel
+### The order of a cell
 
-A device is either **in the power path** — the line runs through it — or it is
-an **instrument** working off a transformer beside the line. The drawing keeps
-the two apart, because a single line that puts an ammeter in the power path
-reads as a board with an ammeter in series with the motor:
+Every device on a feeder is one of three things, and the drawing keeps them
+apart — a single line that puts an ammeter in the power path reads as a board
+with an ammeter in series with the motor:
 
-* the power path runs down the branch: breaker, contactor, fuse, CT, core
-  balance CT, surge arrester…
-* the instruments hang beside it, in groups — one group per transformer that
-  feeds them, each group starting level with its own transformer:
-  * the **CT** feeds the ammeter, the selector, the meters and the
-    **protection relay**;
-  * the **core-balance CT** feeds the **earth-fault relay**, and its second
-    connection comes down its own elbow into the protection relay, which works
-    off both;
-  * the **VT** feeds the voltmeter, its selector and the frequency meter;
-  * an instrument no transformer on the line feeds is control wiring, drawn
-    with the dashed link the legend uses for it.
+| | where it is drawn |
+|---|---|
+| **series** | the current runs through it — on the line |
+| **shunt** | it works between the line and earth — beside the line, with the earth under it |
+| **instrument** | it works off a transformer — in the secondary column to the right |
+
+An MV cell comes out in the order the office draws it in, whatever order the
+template filed its slots:
+
+1. **the main switch** — the disconnector, the vacuum breaker (fixed or
+   withdrawable, with its spring charge and racking), or the vacuum contactor
+   with its fuse;
+2. **the earth switch**, beside the line down to earth, with the **magnet**
+   under it on the dashed interlock;
+3. **the current transformer**, in series — one secondary out of it **per
+   core** (`300/5A x3` draws three), into the test block;
+4. **the capacitive voltage divider**, beside the line to earth;
+5. **the surge arrester**, beside the line to earth;
+6. **the core-balance CT**, in series, out to the relay.
+
+The secondary side follows the same rule:
+
+* the **CT** and the **core-balance CT** both come out into the **test block
+  (XD)**, the core-balance one on its own elbow into the bottom of it, and
+  everything below the test block on that column reaches the relay through it;
+* the **protection relay** sits under the test block, and the **alarm window**
+  under the relay;
+* with no test block on the feeder, the CT feeds the ammeter, the selectors,
+  the meters and the protection relay, and the core-balance CT feeds the
+  earth-fault relay with its second connection into the relay;
+* the **VT** feeds the voltmeter, its selector and the frequency meter;
+* an instrument no transformer on the line feeds is control wiring, drawn with
+  the dashed link the legend uses for it.
+
+What a device *is* comes from EPLAN's function definition when the parts
+database has one; otherwise from the part's own TPMS descriptions
+(`SEC_DES` / `ENG_DES` / `SHR_DES`), so an earth switch, a magnet or a
+capacitive divider is recognised from TPMS alone; otherwise from the slot it
+sits in.
 
 ### The sheet
 
@@ -291,6 +317,14 @@ differs between EPLAN versions. If the parts database is out of reach, or
 holds no symbol for a part, the drawing falls back to the slot mapping and the
 Eplanix tab says so.
 
+A file in that folder named after one of the library's own symbols — `vcb.svg`,
+`current-transformer.svg` — replaces that symbol **everywhere** instead of for
+one part, and the file itself says where its conductor runs (`data-pin-x`) and
+how many cells it takes (`data-cells`), so it lands on the branch line at the
+right size. `simorgh-backend/eplan-symbols/README.md` is the whole of it: both
+ways a file is used, what a file has to look like, how to turn a picture into
+one, what to do when it looks wrong, and the list of names.
+
 The symbol folder is `simorgh-backend/eplan-symbols/`, mounted read-only into
 the container at `/app/eplan-symbols` (`EPLAN_SYMBOL_DIR`) — adding a symbol
 is a copy, not a rebuild.
@@ -313,3 +347,31 @@ objects. They now query `View_Project_Main` and `View_draft`, which is what
 TPMS actually has. The project list also returns `code` (OE number) and
 `name` separately, so the combo box can show the OE number muted in front of
 the name the way it does for the suite's own projects.
+
+## Deploying it
+
+```bash
+cd ~/simorgh-chatbot-ekc-deploy
+git pull
+./deploy-soft.sh
+```
+
+`deploy-soft.sh` rebuilds and restarts the Design Suite container, prints its
+state and health, and says whether this pull touched anything nginx serves. It
+runs compose from `simorgh-agent/`, where the compose file and its `.env` live
+— compose run from the repository root reports `no configuration file
+provided: not found`, because there is none there.
+
+nginx is a separate matter and rarely needed: a rebuild replaces the app inside
+its container and leaves both proxies alone. Only a change under
+`simorgh-agent/nginx_configs/` (the container's nginx) or `host-nginx-config/`
+(the host's) needs one, and the host's reload wants root:
+
+```bash
+docker compose exec nginx nginx -t && docker compose exec nginx nginx -s reload
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+A symbol dropped into `simorgh-backend/eplan-symbols/` needs neither: the
+folder is mounted into the container, so a copy and a hard refresh
+(Ctrl+Shift+R) is the whole of it.

@@ -5,8 +5,8 @@
 # =============================================================================
 services:
   payments-service:
-    image: simorgh-payments-service:local
-    build: ../payments-service
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-payments-service:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: payments-service
     expose:
       - "8038"

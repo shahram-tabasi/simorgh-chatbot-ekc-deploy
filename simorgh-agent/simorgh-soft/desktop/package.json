@@ -1,7 +1,7 @@
 {
   "name": "simorgh-design-suite-desktop",
   "productName": "Simorgh Design Suite",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Windows desktop client for Simorgh Design Suite",
   "author": "شرکت سیمرغ فناوری هوشمند ایرانیان",
   "license": "UNLICENSED",
@@ -9,7 +9,8 @@
   "scripts": {
     "start": "electron .",
     "dist:win": "electron-builder --win --x64",
-    "pack": "electron-builder --dir"
+    "pack": "electron-builder --dir",
+    "pack:win": "electron-builder --win --x64 --dir"
   },
   "devDependencies": {
     "electron": "^31.7.7",
@@ -17,6 +18,7 @@
   },
   "build": {
     "appId": "ir.simorghfanavari.designsuite",
+    "publish": null,
     "productName": "Simorgh Design Suite",
     "copyright": "© Simorgh Smart Technology of Iranians Co.",
     "directories": {
@@ -26,9 +28,12 @@
     "files": [
       "main.js",
       "preload.js",
-      "setup.html",
+      "server.json",
       "build/icon.png",
-      "build/icon.ico"
+      "build/icon.ico",
+      "welcome.html",
+      "welcome-art.jpg",
+      "settings.html"
     ],
     "win": {
       "target": [
@@ -48,7 +53,24 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Simorgh Design Suite"
-    }
+      "shortcutName": "Simorgh Design Suite",
+      "license": "build/license.txt",
+      "include": "build/installer.nsh",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/installerSidebar.bmp",
+      "installerHeader": "build/installerHeader.bmp",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "runAfterFinish": true
+    },
+    "extraResources": [
+      {
+        "from": "bundle",
+        "to": "bundle",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }

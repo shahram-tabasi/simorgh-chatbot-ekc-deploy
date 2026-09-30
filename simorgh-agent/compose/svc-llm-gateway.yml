@@ -14,8 +14,8 @@
 # =============================================================================
 services:
   llm-gateway:
-    image: simorgh-llm-gateway:local
-    build: ../llm-gateway
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-llm-gateway:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: llm-gateway
     expose:
       - "8030"

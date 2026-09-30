@@ -1,0 +1,276 @@
+<!doctype html>
+<!--
+  Settings — and, on first start, the window where the way the app runs is
+  chosen. Everything is saved to config.json in the user's data folder by the
+  main process (main.js); this page only fills the form and asks it to test,
+  save, or build the Access parts file.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self'">
+<title>Settings — Simorgh Design Suite</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; color: #e2e8f0;
+    background: radial-gradient(900px 600px at 15% 0%, #14335f 0%, #0a1a33 45%, #060e1e 100%);
+    display: flex; flex-direction: column;
+  }
+  header { padding: 18px 26px 10px; }
+  h1 { margin: 0; font-size: 18px; font-weight: 600; color: #fff; }
+  header p { margin: 4px 0 0; color: #94a3b8; font-size: 12px; }
+  main { flex: 1; overflow-y: auto; padding: 6px 26px 18px; }
+  section {
+    margin-top: 12px; padding: 14px 16px; border-radius: 10px;
+    border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.035);
+  }
+  section h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: #bfdbfe; letter-spacing: .02em; }
+  .choice { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+  .choice:hover { background: rgba(255,255,255,.04); }
+  .choice input { margin-top: 3px; accent-color: #3b82f6; }
+  .choice b { display: block; color: #fff; font-weight: 600; }
+  .choice span { color: #94a3b8; font-size: 12px; }
+  .grid { display: grid; grid-template-columns: 110px 1fr 70px 1fr; gap: 8px 10px; align-items: center; margin-top: 8px; }
+  .grid label { color: #94a3b8; font-size: 12px; }
+  .wide { grid-column: 2 / 5; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 7px 9px; font-size: 13px; border-radius: 7px;
+    border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.06); color: #f8fafc;
+  }
+  input:focus { outline: none; border-color: #60a5fa; }
+  input::placeholder { color: #64748b; }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .row input[type=text] { flex: 1; min-width: 200px; }
+  button {
+    padding: 7px 14px; border: 0; border-radius: 7px; font-size: 12.5px; cursor: pointer;
+    background: rgba(255,255,255,.12); color: #fff; white-space: nowrap;
+  }
+  button:hover { background: rgba(255,255,255,.2); }
+  button.primary { background: #2563eb; }
+  button.primary:hover { background: #1d4ed8; }
+  button:disabled { opacity: .5; cursor: default; }
+  .result { margin-top: 8px; font-size: 12px; min-height: 16px; word-break: break-word; }
+  .ok { color: #4ade80; } .bad { color: #f87171; } .busy { color: #93c5fd; }
+  .sub { margin: 6px 0 0 30px; }
+  .hidden { display: none !important; }
+  .hint { color: #64748b; font-size: 11.5px; margin-top: 6px; line-height: 1.5; }
+  footer {
+    display: flex; justify-content: flex-end; gap: 8px; padding: 12px 26px;
+    border-top: 1px solid rgba(255,255,255,.08); background: rgba(0,0,0,.2);
+  }
+  footer .msg { flex: 1; align-self: center; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Settings</h1>
+  <p id="subtitle">How Simorgh Design Suite runs on this computer, and where it reads TPMS and the parts from.</p>
+</header>
+
+<main>
+  <section>
+    <h2>HOW THE APP RUNS</h2>
+    <label class="choice"><input type="radio" name="mode" value="local">
+      <div><b>On this computer</b><span>The whole suite runs here: its own database, TPMS and parts as set below. No company server needed.</span></div></label>
+    <label class="choice"><input type="radio" name="mode" value="server">
+      <div><b>Company server</b><span>Open the suite a server already runs — nothing runs on this computer.</span></div></label>
+    <div id="serverBox" class="sub">
+      <input type="text" id="serverUrl" spellcheck="false" placeholder="http://192.168.1.10/simorgh-design-suite/">
+    </div>
+    <div id="noBundle" class="hint hidden">This build does not include the local suite; only a company server can be used.</div>
+  </section>
+
+  <div id="localBox">
+    <section>
+      <h2>PROJECTS DATABASE</h2>
+      <label class="choice"><input type="radio" name="db" value="local">
+        <div><b>Built in</b><span>Projects are kept on this computer, in the app's own MongoDB.</span></div></label>
+      <label class="choice"><input type="radio" name="db" value="server">
+        <div><b>MongoDB server</b><span>Share projects with others through a MongoDB server.</span></div></label>
+      <div id="dbServerBox" class="sub">
+        <input type="text" id="dbUri" spellcheck="false" placeholder="mongodb://user:password@192.168.1.10:27017">
+      </div>
+    </section>
+
+    <section>
+      <h2>TPMS CONNECTION (MySQL)</h2>
+      <div class="grid">
+        <label>Host</label><input type="text" id="tpmsHost" placeholder="office default">
+        <label>Port</label><input type="text" id="tpmsPort" placeholder="3306">
+        <label>Database</label><input type="text" id="tpmsDatabase" placeholder="office default">
+        <label>User</label><input type="text" id="tpmsUser" placeholder="office default">
+        <label>Password</label><input type="password" id="tpmsPassword" placeholder="office default" class="wide">
+      </div>
+      <div class="row"><button id="testTpms">Test connection</button></div>
+      <div class="result" id="tpmsResult"></div>
+      <div class="hint">A field left empty uses the office's default.</div>
+    </section>
+
+    <section>
+      <h2>PARTS (EPLAN)</h2>
+      <label class="choice"><input type="radio" name="parts" value="access">
+        <div><b>Access file</b><span>Parts from an Access database (tblPart). Add parts by hand in Microsoft Access; they appear at the next search.</span></div></label>
+      <div id="accessBox" class="sub">
+        <div class="row" style="margin-top:0">
+          <input type="text" id="accessFile" spellcheck="false">
+          <button id="browseAccess">Browse…</button>
+          <button id="openAccess">Open in Access</button>
+          <button id="testAccess">Test</button>
+        </div>
+        <div class="result" id="accessResult"></div>
+        <div class="row">
+          <button id="exportAccess" class="primary">Create the Access file from SQL Server…</button>
+        </div>
+        <div class="hint">Reads every part from the SQL Server below once and writes them into a new Access file. After that no SQL Server is needed for parts.</div>
+        <div class="result" id="exportResult"></div>
+      </div>
+      <label class="choice"><input type="radio" name="parts" value="sql">
+        <div><b>SQL Server</b><span>Parts read live from EPLAN's SQL Server database.</span></div></label>
+      <div class="grid sub" style="margin-left:30px">
+        <label>Server</label><input type="text" id="sqlServer" placeholder="office default">
+        <label>Port</label><input type="text" id="sqlPort" placeholder="1433">
+        <label>Database</label><input type="text" id="sqlDatabase" placeholder="office default">
+        <label>User</label><input type="text" id="sqlUser" placeholder="office default">
+        <label>Password</label><input type="password" id="sqlPassword" placeholder="office default" class="wide">
+      </div>
+      <div class="row sub" style="margin-left:30px"><button id="testSql">Test connection</button></div>
+      <div class="result sub" style="margin-left:30px" id="sqlResult"></div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="msg" id="saveMsg"></div>
+  <button id="cancel">Cancel</button>
+  <button id="save" class="primary">Save and start</button>
+</footer>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const radios = name => [...document.querySelectorAll(`input[name=${name}]`)];
+  const radio = name => (radios(name).find(r => r.checked) || {}).value;
+  const setRadio = (name, value) => radios(name).forEach(r => { r.checked = r.value === value; });
+  const say = (el, text, cls) => { el.textContent = text; el.className = 'result ' + (cls || ''); };
+
+  const firstRun = new URLSearchParams(location.search).get('firstRun') === '1';
+  let hasLocalBundle = true;
+
+  function refresh() {
+    const local = radio('mode') === 'local';
+    $('serverBox').classList.toggle('hidden', local);
+    $('localBox').classList.toggle('hidden', !local);
+    $('dbServerBox').classList.toggle('hidden', radio('db') !== 'server');
+    $('accessBox').style.opacity = radio('parts') === 'access' ? '1' : '.45';
+  }
+  document.addEventListener('change', refresh);
+
+  const sqlForm = () => ({
+    server: $('sqlServer').value.trim(), port: $('sqlPort').value.trim(),
+    database: $('sqlDatabase').value.trim(), user: $('sqlUser').value.trim(),
+    password: $('sqlPassword').value,
+  });
+  const tpmsForm = () => ({
+    host: $('tpmsHost').value.trim(), port: $('tpmsPort').value.trim(),
+    database: $('tpmsDatabase').value.trim(), user: $('tpmsUser').value.trim(),
+    password: $('tpmsPassword').value,
+  });
+  const localForm = () => ({
+    database: { kind: radio('db'), uri: $('dbUri').value.trim() },
+    tpms: tpmsForm(),
+    parts: { source: radio('parts'), accessFile: $('accessFile').value.trim(), sqlServer: sqlForm() },
+  });
+
+  async function load() {
+    const { config, hasLocalBundle: bundled, defaultUrl } = await window.simorgh.getSettings();
+    hasLocalBundle = bundled;
+    if (firstRun) {
+      $('title').textContent = 'Welcome to Simorgh Design Suite';
+      $('subtitle').textContent = 'Choose how the app runs. All of this can be changed later from File → Settings.';
+    }
+    setRadio('mode', config.mode || (bundled ? 'local' : 'server'));
+    if (!bundled) {
+      radios('mode').find(r => r.value === 'local').disabled = true;
+      $('noBundle').classList.remove('hidden');
+      setRadio('mode', 'server');
+    }
+    $('serverUrl').value = config.serverUrl || defaultUrl || '';
+    const l = config.local;
+    setRadio('db', l.database.kind);
+    $('dbUri').value = l.database.uri || '';
+    $('tpmsHost').value = l.tpms.host; $('tpmsPort').value = l.tpms.port;
+    $('tpmsDatabase').value = l.tpms.database; $('tpmsUser').value = l.tpms.user;
+    $('tpmsPassword').value = l.tpms.password;
+    setRadio('parts', l.parts.source);
+    $('accessFile').value = l.parts.accessFile;
+    const s = l.parts.sqlServer;
+    $('sqlServer').value = s.server; $('sqlPort').value = s.port; $('sqlDatabase').value = s.database;
+    $('sqlUser').value = s.user; $('sqlPassword').value = s.password;
+    refresh();
+  }
+
+  async function test(kind, cfg, out) {
+    say(out, 'Testing… (the first test starts the suite on this computer, which takes a moment)', 'busy');
+    const r = await window.simorgh.test(kind, cfg);
+    say(out, (r.ok ? '✓ ' : '✗ ') + r.message, r.ok ? 'ok' : 'bad');
+  }
+  $('testTpms').onclick = () => test('mysql', tpmsForm(), $('tpmsResult'));
+  $('testSql').onclick = () => test('sqlserver', sqlForm(), $('sqlResult'));
+  $('testAccess').onclick = () => test('access', { file: $('accessFile').value.trim() }, $('accessResult'));
+
+  $('browseAccess').onclick = async () => {
+    const f = await window.simorgh.chooseAccessFile($('accessFile').value.trim(), false);
+    if (f) { $('accessFile').value = f; setRadio('parts', 'access'); refresh(); }
+  };
+  $('openAccess').onclick = async () => {
+    const err = await window.simorgh.openPath($('accessFile').value.trim());
+    say($('accessResult'), err ? '✗ ' + err : '', err ? 'bad' : '');
+  };
+
+  $('exportAccess').onclick = async () => {
+    const out = $('exportResult');
+    const file = await window.simorgh.chooseAccessFile($('accessFile').value.trim(), true);
+    if (!file) return;
+    $('exportAccess').disabled = true;
+    say(out, 'Starting…', 'busy');
+    try {
+      const started = await window.simorgh.exportAccess(sqlForm(), file);
+      if (!started.ok) { say(out, '✗ ' + started.message, 'bad'); return; }
+      for (;;) {
+        await new Promise(r => setTimeout(r, 1000));
+        const job = await window.simorgh.job(started.job);
+        if (job.state === 'running') { say(out, job.step, 'busy'); continue; }
+        if (job.state === 'done') {
+          say(out, '✓ ' + job.message, 'ok');
+          $('accessFile').value = file;
+          setRadio('parts', 'access');
+          refresh();
+        } else {
+          say(out, '✗ ' + job.message, 'bad');
+        }
+        break;
+      }
+    } finally {
+      $('exportAccess').disabled = false;
+    }
+  };
+
+  $('save').onclick = async () => {
+    const mode = radio('mode');
+    if (mode === 'server' && !$('serverUrl').value.trim()) { $('serverUrl').focus(); return; }
+    if (mode === 'local' && radio('db') === 'server' && !$('dbUri').value.trim()) { $('dbUri').focus(); return; }
+    $('save').disabled = true;
+    say($('saveMsg'), 'Saving…', 'busy');
+    const r = await window.simorgh.saveSettings({ mode, serverUrl: $('serverUrl').value.trim(), local: localForm() });
+    if (!r.ok) {
+      say($('saveMsg'), '✗ ' + r.message, 'bad');
+      $('save').disabled = false;
+    }
+  };
+  $('cancel').onclick = () => window.simorgh.closeWindow();
+
+  load();
+</script>
+</body>
+</html>

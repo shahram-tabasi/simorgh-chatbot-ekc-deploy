@@ -5,10 +5,8 @@
 # =============================================================================
 services:
   simorgh-soft:
-    build:
-      context: ../simorgh-soft
-      dockerfile: Dockerfile
-    image: simorgh-soft:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-soft:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: simorgh-soft
     expose:
       - "80"
@@ -18,6 +16,12 @@ services:
       - PORT=3001
       - MONGODB_URI=mongodb://simorgh-soft-mongo:27017
       - DATABASE_NAME=${SIMORGH_SOFT_DATABASE_NAME:-simorgh_db}
+      # The office's symbol library, in a database of its own beside the
+      # projects. Separate because it belongs to the office rather than to any
+      # job: it outlives every project in it, and it can be dumped, restored
+      # or carried to another site by itself. The nightly mongodump takes
+      # every database on the server, so it is already in the backup.
+      - LIBRARY_DATABASE_NAME=${SIMORGH_SOFT_LIBRARY_DATABASE_NAME:-simorgh_library}
       - SQL_USER=${SIMORGH_SOFT_SQL_USER:-userfanni}
       - SQL_PASSWORD=${SIMORGH_SOFT_SQL_PASSWORD:-12345678}
       - SQL_SERVER=${SIMORGH_SOFT_SQL_SERVER:-192.168.1.39}
@@ -29,19 +33,56 @@ services:
       - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-TPMS}
       - EPLAN_SYMBOL_DIR=/app/eplan-symbols
+      # The AI assistant's model. Defaults to the VLM on 192.168.1.61; set
+      # these in simorgh-agent/.env to move it without rebuilding the image.
+      - LOCAL_MODEL_URL=${LOCAL_MODEL_URL:-http://192.168.1.61/v1/chat/completions}
+      - LOCAL_MODEL_NAME=${LOCAL_MODEL_NAME:-qwen2.5-vl-7b}
+      - LOCAL_MODEL_KEY=${LOCAL_MODEL_KEY:-}
+      - LOCAL_MODEL_MAX_TOKENS=${LOCAL_MODEL_MAX_TOKENS:-4096}
+      - LLM_GATEWAY_URL=${SOFT_LLM_GATEWAY_URL:-}
+      # EPLAN bridge — where "Send to EPLAN" in the Eplanix tab posts. The
+      # default is eplan-bridge's compose service name, reachable on this
+      # same app_net without any override.
+      - EPLAN_BRIDGE_URL=${EPLAN_BRIDGE_URL:-http://eplan-bridge:8026}
+      - EPLAN_BRIDGE_API_KEY=${EPLAN_BRIDGE_API_KEY:-}
+      - EPLAN_BRIDGE_TIMEOUT_MS=${EPLAN_BRIDGE_TIMEOUT_MS:-120000}
+      # Downloading what EPLAN produced. The drawings live on the techserver
+      # SMB share, which this backend has no credentials for and no SMB client
+      # in, so it streams through techserver-mcp rather than holding either.
+      # That is the service that already speaks to this host, and its /eplan/
+      # routes are where the PDF and the project archive come from now — a
+      # second service SMB-ing into the same shares with a second SMB library
+      # was one configuration too many, and it drifted.
+      # Generous timeout: a project archive is often hundreds of megabytes,
+      # fetched over SMB and then zipped.
+      - EPLAN_FILES_URL=${EPLAN_FILES_URL:-http://techserver-mcp:8053}
+      - EPLAN_FILES_API_KEY=${EPLAN_FILES_API_KEY:-}
+      - EPLAN_DOWNLOAD_TIMEOUT_MS=${EPLAN_DOWNLOAD_TIMEOUT_MS:-900000}
     volumes:
       # Windows installer drop folder — the app offers whatever .exe is in here,
       # so publishing a new desktop build is a copy, not an image rebuild.
       - ../simorgh-soft/simorgh-backend/downloads:/app/downloads:ro
-      # Symbols exported from EPLAN as SVG, named after the symbol (SG3.svg).
-      # Whatever is in here is drawn on the single line instead of the app's
-      # own symbol — again a copy, not an image rebuild.
-      - ../simorgh-soft/simorgh-backend/eplan-symbols:/app/eplan-symbols:ro
+      # Symbols exported from EPLAN or drawn by the office, as SVG or DXF and
+      # named after the symbol (SG3.svg, circuit-breaker.dxf). Whatever is in
+      # here is drawn on the single line instead of the app's own symbol —
+      # again a copy, not an image rebuild.
+      #
+      # Writable, so the Symbols tab can put a symbol here as well as read one:
+      # the app only ever writes a file, never removes one, and a symbol is
+      # taken out by deleting it here, deliberately. Put :ro back to close that
+      # off — everything else about the pack works exactly the same either way,
+      # and the upload says plainly that the folder is read-only.
+      - ../simorgh-soft/simorgh-backend/eplan-symbols:/app/eplan-symbols
     depends_on:
       simorgh-soft-mongo:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ || exit 1"]
+      # /api/health, not /  — the static root is served by this container's
+      # own nginx directly and answers even when the Node backend behind it
+      # (proxied at /api/) has died, which is exactly the failure mode this
+      # is meant to catch: a dead Node process otherwise leaves the whole
+      # API 502ing while Docker still reports the container healthy.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/api/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

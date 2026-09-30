@@ -8,8 +8,8 @@
 # =============================================================================
 services:
   org-data-service:
-    image: simorgh-org-data-service:local
-    build: ../org-data-service
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-org-data-service:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: org-data-service
     expose:
       - "8042"

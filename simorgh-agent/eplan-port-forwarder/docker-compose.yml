@@ -1,0 +1,47 @@
+# The relay as a container — NOT the way to deploy this on the EPLAN machine.
+#
+# On Docker Desktop this cannot reach AsyncTcpServer at all (it binds the
+# host's loopback, and a container can only dial the host's real interface),
+# and publishing these ports puts Docker's proxy on them, which makes the relay
+# forward to itself and makes EPLAN's own port resolver time out on the machine
+# itself. `forwarder.py` detects that at startup and refuses to run.
+#
+# Use the `netsh interface portproxy` rules in README.md instead. They run in
+# the kernel on that machine and dial 127.0.0.1, which is the only place
+# AsyncTcpServer listens.
+#
+# This file stays for the case the container IS right for: relaying to
+# something that binds a real interface, on a host that is not also publishing
+# the same ports.
+#
+#   docker compose up -d
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# Then set EPLAN_HOST on eplan-bridge-service (in the main stack, on the
+# other server) to this machine's LAN IP — see ../eplan-bridge-service and
+# ../docs/EPLAN_SEND.md.
+services:
+  eplan-port-forwarder:
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-eplan-port-forwarder:${IMAGE_TAG:-latest}
+    # No `build:` here on purpose, the same rule the main stack follows: a
+    # service that names both pulls *and*, when the pull fails, builds —
+    # silently, and on a machine nobody is watching. Building is the
+    # override's job, above.
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
+    container_name: eplan-port-forwarder
+    restart: unless-stopped
+    environment:
+      # Docker Desktop's DNS name for the Windows host — "127.0.0.1" inside
+      # this container is the container's own loopback, not the host's,
+      # and AsyncTcpServer is bound to the host's loopback. Leave this as
+      # host.docker.internal unless you run forwarder.py directly on
+      # Windows instead of in this container (then use 127.0.0.1).
+      - TARGET_HOST=host.docker.internal
+      - PORT_MIN=${EPLAN_PORT_MIN:-12000}
+      - PORT_MAX=${EPLAN_PORT_MAX:-12100}
+    ports:
+      # Published on every interface of this machine so the bridge, on the
+      # other server, can reach it — restrict this with the Windows
+      # Firewall to that server's address, the pool is an unauthenticated
+      # raw relay onto AsyncTcpServer.
+      - "${EPLAN_PORT_MIN:-12000}-${EPLAN_PORT_MAX:-12100}:${EPLAN_PORT_MIN:-12000}-${EPLAN_PORT_MAX:-12100}"

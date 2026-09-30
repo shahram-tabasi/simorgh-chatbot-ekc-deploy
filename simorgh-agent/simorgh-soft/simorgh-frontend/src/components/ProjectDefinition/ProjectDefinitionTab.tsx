@@ -5,10 +5,18 @@ import {
   findDeviceLibraryUsage, removeDeviceLibraryItemEverywhere, UsageReport,
 } from '../../utils/cascadeDelete';
 import { CascadeDeleteModal } from '../shared/CascadeDeleteModal';
+import { MenuBox } from '../shared/MenuBox';
 import {
   PlusIcon, EditIcon, TrashIcon, XIcon,
-  ChevronDownIcon, ChevronRightIcon, CheckIcon, SaveIcon, CopyIcon, ClipboardIcon
+  ChevronDownIcon, ChevronRightIcon, CheckIcon, SaveIcon, CopyIcon, ClipboardIcon,
+  Maximize2Icon, Minimize2Icon, RefreshCwIcon, DatabaseIcon
 } from 'lucide-react';
+import {
+  DEVICE_PROP_GROUPS, DEVICE_PROP_LABELS, DEVICE_PROP_TOTAL, filledPropertyCount,
+} from '../../utils/deviceProperties';
+import { readSpecUpdateFromTpms, TpmsSpecUpdate } from '../../services/tpmsSync';
+import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, emptyTiers } from '../../utils/tiers';
+import { appConfirm } from '../shared/AppDialog';
 
 // ──────────────────────────────────────────────────────────────
 // Stable helper components — MUST live outside any other component
@@ -75,22 +83,60 @@ type ModalMode = 'view' | 'edit' | 'add';
 interface DevicePropertiesModalProps {
   item:      DeviceLibraryItem | null;
   mode:      ModalMode;
-  addType?:  'LV' | 'MV' | 'HV';
+  addType?:  Tier;
   onSave:    (item: DeviceLibraryItem) => void;
   onClose:   () => void;
+  /** The device whose specification was copied, if any — see SpecClipboard. */
+  clip:      DeviceLibraryItem | null;
+  onCopy:    (item: DeviceLibraryItem) => void;
+}
+
+// Copying a specification is copying the whole device's; pasting it is either
+// the whole of it or one tab — the tabs are the groups in DEVICE_PROP_GROUPS,
+// so "paste Busbar & Construction" writes exactly the fields that tab shows
+// and leaves the other three as they were.
+type SpecGroupId = 'electrical' | 'control' | 'busbar' | 'padlock';
+
+function pasteSpec(
+  into: DeviceLibraryProperties, from: DeviceLibraryProperties, group?: SpecGroupId,
+): DeviceLibraryProperties {
+  const keys = group
+    ? DEVICE_PROP_GROUPS.find(g => g.id === group)?.keys ?? []
+    : DEVICE_PROP_GROUPS.flatMap(g => g.keys);
+  const next = { ...into } as Record<string, unknown>;
+  const src = from as Record<string, unknown>;
+  for (const key of keys) {
+    if (src[key] === undefined) delete next[key];
+    else next[key] = src[key];
+  }
+  return next as DeviceLibraryProperties;
 }
 
 const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
-  item, mode: initialMode, addType, onSave, onClose
+  item, mode: initialMode, addType, onSave, onClose, clip, onCopy
 }) => {
   const [mode,  setMode]  = useState<ModalMode>(initialMode);
   const [name,  setName]  = useState(item?.name ?? '');
-  const [type,  setType]  = useState<'LV' | 'MV' | 'HV'>(item?.type ?? addType ?? 'LV');
+  const [type,  setType]  = useState<Tier>(item?.type ?? addType ?? 'LV');
   const [props, setProps] = useState<DeviceLibraryProperties>(item?.properties ?? {});
   const [activeSection, setActiveSection] = useState<'electrical' | 'control' | 'busbar' | 'padlock'>('electrical');
+  // A panel specification is a long form; full screen gives it the whole
+  // window (and two columns of fields) instead of a 760px dialog.
+  const [fullScreen, setFullScreen] = useState(false);
 
   const setProp = (key: keyof DeviceLibraryProperties, value: string | boolean) =>
     setProps(prev => ({ ...prev, [key]: value }));
+
+  // F11 toggles full screen, Esc steps back out of it before it closes the
+  // dialog — so leaving full screen never loses what was typed.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'F11') { e.preventDefault(); setFullScreen(v => !v); }
+      if (e.key === 'Escape' && fullScreen) { e.preventDefault(); setFullScreen(false); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [fullScreen]);
 
   const isEditable = mode !== 'view';
 
@@ -101,9 +147,17 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
 
   // PropField and PropCheckbox are defined at module level to prevent focus loss
 
-  const typeColor = type === 'LV' ? 'bg-green-100 text-green-700'
-    : type === 'MV' ? 'bg-orange-100 text-orange-700'
-    : 'bg-red-100 text-red-700';
+  const typeColor = TIER_PILL[type] ?? TIER_PILL.OTHER;
+
+  // Paste from the copied device, all of it or the tab on screen. A paste
+  // into a device being viewed turns the dialog to editing, so the change is
+  // seen and saved (or cancelled) like any other edit.
+  const canPaste = !!clip && clip.id !== item?.id;
+  const paste = (group?: SpecGroupId) => {
+    if (!clip) return;
+    setProps(prev => pasteSpec(prev, clip.properties ?? {}, group));
+    if (mode === 'view') setMode('edit');
+  };
 
   const sections = [
     { id: 'electrical' as const, label: 'Electrical / Mechanical' },
@@ -113,8 +167,14 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
   ];
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-2xl w-[760px] max-h-[92vh] flex flex-col">
+    <div className={`fixed inset-0 bg-black bg-opacity-50 flex z-50 ${
+      fullScreen ? 'p-0' : 'items-center justify-center'
+    }`}>
+      <div className={`bg-white shadow-2xl flex flex-col ${
+        fullScreen
+          ? 'w-screen h-screen rounded-none'
+          : 'rounded-lg w-[760px] max-h-[92vh]'
+      }`}>
 
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-6 py-4 border-b">
@@ -126,7 +186,23 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
               <span className={`text-xs px-2 py-0.5 rounded font-semibold ${typeColor}`}>{type}</span>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            <button
+              className="px-2.5 py-1.5 border rounded text-xs flex items-center gap-1 hover:bg-gray-50"
+              onClick={() => onCopy({ id: item?.id ?? 'new', name: name || 'this device', type, properties: props })}
+              title="Copy this device's whole specification"
+            >
+              <CopyIcon className="w-3 h-3" /> Copy spec
+            </button>
+            {canPaste && (
+              <button
+                className="px-2.5 py-1.5 border border-blue-300 bg-blue-50 text-blue-800 rounded text-xs flex items-center gap-1 hover:bg-blue-100"
+                onClick={() => paste()}
+                title={`Paste every tab of ${clip!.name}'s specification here`}
+              >
+                <ClipboardIcon className="w-3 h-3" /> Paste all from {clip!.name}
+              </button>
+            )}
             {mode === 'view' && (
               <button
                 className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm flex items-center gap-1 hover:bg-blue-700"
@@ -135,7 +211,16 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
                 <EditIcon className="w-3 h-3" /> Edit
               </button>
             )}
-            <button className="p-1 hover:bg-gray-100 rounded" onClick={onClose}>
+            <button
+              className="p-1 hover:bg-gray-100 rounded"
+              onClick={() => setFullScreen(v => !v)}
+              title={fullScreen ? 'Exit full screen (F11)' : 'Full screen (F11)'}
+            >
+              {fullScreen
+                ? <Minimize2Icon className="w-5 h-5 text-gray-500" />
+                : <Maximize2Icon className="w-5 h-5 text-gray-500" />}
+            </button>
+            <button className="p-1 hover:bg-gray-100 rounded" onClick={onClose} title="Close">
               <XIcon className="w-5 h-5 text-gray-500" />
             </button>
           </div>
@@ -161,11 +246,11 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
                 <select
                   className="border border-gray-300 rounded px-2 py-1 text-sm"
                   value={type}
-                  onChange={e => setType(e.target.value as 'LV' | 'MV' | 'HV')}
+                  onChange={e => setType(e.target.value as Tier)}
                 >
-                  <option value="LV">LV – Low Voltage</option>
-                  <option value="MV">MV – Medium Voltage</option>
-                  <option value="HV">HV – High Voltage</option>
+                  {TIERS.map(t => (
+                    <option key={t} value={t}>{t} – {TIER_LABEL[t]}</option>
+                  ))}
                 </select>
               </div>
             )}
@@ -187,12 +272,25 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
               {sec.label}
             </button>
           ))}
+          {canPaste && (
+            <button
+              className="ml-auto my-1.5 px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 rounded flex items-center gap-1"
+              onClick={() => paste(activeSection)}
+              title={`Paste only this tab from ${clip!.name}`}
+            >
+              <ClipboardIcon className="w-3 h-3" />
+              Paste this tab from {clip!.name}
+            </button>
+          )}
         </div>
 
         {/* ── Section content ── */}
         <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
           {activeSection === 'electrical' && (
-            <div>
+            <div className={fullScreen ? 'grid grid-cols-2 gap-x-10' : ''}>
+              <PropField label="Rated Insulation Voltage"              value={props.ratedInsulationVoltage ?? ''}              isEditable={isEditable} onChange={v => setProp('ratedInsulationVoltage', v)} />
+              <PropField label="Service Voltage"                       value={props.serviceVoltage ?? ''}                       isEditable={isEditable} onChange={v => setProp('serviceVoltage', v)} />
+              <PropField label="Rated Power-Frequency Withstand Voltage" value={props.ratedPowerFrequencyWithstandVoltage ?? ''} isEditable={isEditable} onChange={v => setProp('ratedPowerFrequencyWithstandVoltage', v)} />
               <PropField label="Frequency"                              value={props.frequency ?? ''}                              isEditable={isEditable} onChange={v => setProp('frequency', v)} />
               <PropField label="Main Busbar Configuration"             value={props.mainBusbarConfiguration ?? ''}             isEditable={isEditable} onChange={v => setProp('mainBusbarConfiguration', v)} />
               <PropField label="Main Busbar Rated Current"             value={props.mainBusbarRatedCurrent ?? ''}             isEditable={isEditable} onChange={v => setProp('mainBusbarRatedCurrent', v)} />
@@ -204,19 +302,18 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
               <PropField label="Rated Impulse Withstand Voltage"       value={props.ratedImpulseWithstandVoltage ?? ''}       isEditable={isEditable} onChange={v => setProp('ratedImpulseWithstandVoltage', v)} />
             </div>
           )}
+          {/* The three voltages that used to sit here now open the
+              Electrical / Mechanical tab — they belong with the ratings. */}
           {activeSection === 'control' && (
-            <div>
+            <div className={fullScreen ? 'grid grid-cols-2 gap-x-10' : ''}>
               <PropField label="Control, Protection, Closing, Tripping & Signalling" value={props.controlProtectionClosingTrippingSignalling ?? ''} isEditable={isEditable} onChange={v => setProp('controlProtectionClosingTrippingSignalling', v)} />
-              <PropField label="Rated Insulation Voltage"              value={props.ratedInsulationVoltage ?? ''}              isEditable={isEditable} onChange={v => setProp('ratedInsulationVoltage', v)} />
-              <PropField label="Service Voltage"                       value={props.serviceVoltage ?? ''}                       isEditable={isEditable} onChange={v => setProp('serviceVoltage', v)} />
               <PropField label="Spring Charging Motor"                 value={props.springChargingMotor ?? ''}                 isEditable={isEditable} onChange={v => setProp('springChargingMotor', v)} />
               <PropField label="Switchgear Lighting & Space Heater"    value={props.switchgearLightingSpaceHeater ?? ''}    isEditable={isEditable} onChange={v => setProp('switchgearLightingSpaceHeater', v)} />
               <PropField label="Motors Space Heater"                   value={props.motorsSpaceHeater ?? ''}                   isEditable={isEditable} onChange={v => setProp('motorsSpaceHeater', v)} />
-              <PropField label="Rated Power-Frequency Withstand Voltage" value={props.ratedPowerFrequencyWithstandVoltage ?? ''} isEditable={isEditable} onChange={v => setProp('ratedPowerFrequencyWithstandVoltage', v)} />
             </div>
           )}
           {activeSection === 'busbar' && (
-            <div>
+            <div className={fullScreen ? 'grid grid-cols-2 gap-x-10' : ''}>
               <PropField label="Main Busbar Size"       value={props.mainBusbarSize ?? ''}       isEditable={isEditable} onChange={v => setProp('mainBusbarSize', v)} />
               <PropField label="Earth Busbar Size"      value={props.earthBusbarSize ?? ''}      isEditable={isEditable} onChange={v => setProp('earthBusbarSize', v)} />
               <PropField label="Neutral Busbar Size"    value={props.neutralBusbarSize ?? ''}    isEditable={isEditable} onChange={v => setProp('neutralBusbarSize', v)} />
@@ -275,36 +372,48 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   onComplete, requestedSubTab, requestedDeviceId
 }) => {
   const {
-    projectData, updateProjectData, saveProject,
+    projectData, updateProjectData,
     selectedEquipment, setSelectedEquipment,
   } = useProject();
 
   const [activeSubTab,       setActiveSubTab]       = useState<SubTab>('project-data');
   const [projectNameEditing, setProjectNameEditing] = useState(false);
-  const [expandedTypes,      setExpandedTypes]      = useState<Set<string>>(new Set(['LV', 'MV', 'HV']));
+  const [expandedTypes,      setExpandedTypes]      = useState<Set<string>>(new Set(TIERS));
 
   const [ctxMenu, setCtxMenu] = useState<{
     visible: boolean; x: number; y: number;
-    typeNode: 'LV' | 'MV' | 'HV' | null;
+    typeNode: Tier | null;
     itemId:   string | null;
   }>({ visible: false, x: 0, y: 0, typeNode: null, itemId: null });
 
+  // Which devices in the library have their specification open. The breakdown
+  // is the point of this screen for a project that came from TPMS: the panels
+  // arrive named and empty, and the engineer fills them in from here.
+  const [expandedDevices, setExpandedDevices] = useState<Set<string>>(new Set());
+
+  // Reading the specifications from TPMS again. Nothing is written until the
+  // engineer has seen what would change.
+  const [tpmsUpdate, setTpmsUpdate] = useState<{
+    busy: boolean; progress: string;
+    result: TpmsSpecUpdate | null; error: string | null;
+  }>({ busy: false, progress: '', result: null, error: null });
+
   const [copiedDevice, setCopiedDevice] = useState<DeviceLibraryItem | null>(null);
   const [pasteNameModal, setPasteNameModal] = useState<{
-    visible: boolean; targetType: 'LV' | 'MV' | 'HV' | null; suggestedName: string;
+    visible: boolean; targetType: Tier | null; suggestedName: string;
   }>({ visible: false, targetType: null, suggestedName: '' });
 
   const [deviceModal, setDeviceModal] = useState<{
     visible:  boolean;
     item:     DeviceLibraryItem | null;
     mode:     ModalMode;
-    addType?: 'LV' | 'MV' | 'HV';
+    addType?: Tier;
   }>({ visible: false, item: null, mode: 'add' });
 
   // Pending Device Library deletion — held until the user confirms in the
   // cascade dialog, which lists everywhere the device is used.
   const [libDeleteTarget, setLibDeleteTarget] = useState<{
-    item: DeviceLibraryItem; type: 'LV' | 'MV' | 'HV'; usage: UsageReport;
+    item: DeviceLibraryItem; type: Tier; usage: UsageReport;
   } | null>(null);
 
   // Navigate here from DeviceSelection → Device Library
@@ -315,8 +424,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   // Auto-open a specific device in edit mode when navigated from DeviceSelection
   useEffect(() => {
     if (requestedDeviceId && requestedSubTab === 'device-library') {
-      const library = projectData.deviceLibrary ?? { LV: [], MV: [], HV: [] };
-      for (const t of ['LV', 'MV', 'HV'] as const) {
+      const library = projectData.deviceLibrary ?? emptyTiers();
+      for (const t of TIERS) {
         const found = (library[t] ?? []).find(d => d.id === requestedDeviceId);
         if (found) {
           setDeviceModal({ visible: true, item: found, mode: 'edit' });
@@ -336,7 +445,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   }, [ctxMenu.visible]);
 
   const techSettings  = projectData.techSettings  ?? DEFAULT_TECH_SETTINGS;
-  const deviceLibrary = projectData.deviceLibrary ?? { LV: [], MV: [], HV: [] };
+  const deviceLibrary = projectData.deviceLibrary ?? emptyTiers();
 
   // ── helpers ──────────────────────────────────────────────────
   const setMain  = (field: string, val: string)  => updateProjectData({ [field]: val });
@@ -347,11 +456,6 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
         [section]: { ...(techSettings[section] as Record<string,string>), [field]: val }
       }
     });
-
-  const handleSave = async () => {
-    try   { await saveProject(); alert('Project saved successfully!'); }
-    catch (error) { alert((error as Error)?.message || 'Error saving project'); }
-  };
 
   // ── Device Library CRUD ──────────────────────────────────────
   const addLib = (item: DeviceLibraryItem) => {
@@ -378,7 +482,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   // the entry disappears from the library AND from the Device Selection tree
   // — the equipment created from it and every row that equipment holds go
   // with it. The user sees exactly what will be removed first.
-  const deleteLib = (id: string, t: 'LV' | 'MV' | 'HV') => {
+  const deleteLib = (id: string, t: Tier) => {
     const item = (deviceLibrary[t] ?? []).find(d => d.id === id);
     if (!item) return;
     setLibDeleteTarget({ item, type: t, usage: findDeviceLibraryUsage(projectData, id, t) });
@@ -394,6 +498,56 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     }
     updateProjectData(removeDeviceLibraryItemEverywhere(projectData, item.id, type));
     setLibDeleteTarget(null);
+  };
+
+  // ── Reading the specifications from TPMS again ───────────────────────
+  //
+  // The project was opened from TPMS and the engineer has been working in it
+  // since: specifications entered, templates defined, panels built up in
+  // Device Selection. Meanwhile TPMS may have corrected a rated voltage or an
+  // IP class. This brings those corrections across and leaves everything else
+  // exactly as it is — a field the engineer changed is never overwritten by a
+  // value TPMS has not moved. What would change is listed first.
+  const tpmsLink = projectData.tpmsSync;
+
+  const runTpmsUpdate = async () => {
+    setTpmsUpdate({ busy: true, progress: 'Reading the project from TPMS…', result: null, error: null });
+    try {
+      const result = await readSpecUpdateFromTpms(
+        projectData, message => setTpmsUpdate(prev => ({ ...prev, progress: message })));
+      setTpmsUpdate({ busy: false, progress: '', result, error: null });
+    } catch (err) {
+      setTpmsUpdate({ busy: false, progress: '', result: null, error: (err as Error).message });
+    }
+  };
+
+  const applyTpmsUpdate = () => {
+    if (tpmsUpdate.result) updateProjectData(tpmsUpdate.result.patch);
+    setTpmsUpdate({ busy: false, progress: '', result: null, error: null });
+  };
+
+  const closeTpmsUpdate = () => setTpmsUpdate({ busy: false, progress: '', result: null, error: null });
+
+  // What TPMS said about a panel beyond its ratings: the switchgear it is, how
+  // many cells, its tag. It rides on the equipment, which is where the import
+  // puts it, so the breakdown can show it beside the specification.
+  const tpmsFactsFor = (item: DeviceLibraryItem) => {
+    const equipment = (projectData.equipments ?? []).find(
+      eq => eq.properties?.deviceLibraryItemId === item.id ||
+        (item.tpmsScopeId != null && (eq.properties?.tpms as any)?.scopeId === item.tpmsScopeId));
+    const tpms = (equipment?.properties?.tpms ?? {}) as Record<string, any>;
+    return {
+      equipment,
+      switchgearType: String(tpms.switchgearType ?? equipment?.description ?? ''),
+      cellCount: String(tpms.cellCount ?? ''),
+      rows: equipment?.devices?.length ?? 0,
+    };
+  };
+
+  const toggleDevice = (id: string) => {
+    const next = new Set(expandedDevices);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setExpandedDevices(next);
   };
 
   const closeDeviceModal = () => setDeviceModal({ visible: false, item: null, mode: 'add' });
@@ -412,10 +566,19 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     setPasteNameModal({ visible: false, targetType: null, suggestedName: '' });
   };
 
-  const typeColor = (t: 'LV' | 'MV' | 'HV') =>
-    t === 'LV' ? 'text-green-600 bg-green-50'
-    : t === 'MV' ? 'text-orange-600 bg-orange-50'
-    : 'text-red-600 bg-red-50';
+  const typeColor = (t: Tier) => TIER_BADGE[t] ?? TIER_BADGE.OTHER;
+
+  // Paste a copied specification over an existing device — all of it, or one
+  // tab. What is overwritten is said first: a paste has no undo here.
+  const pasteSpecInto = async (target: DeviceLibraryItem, group?: SpecGroupId) => {
+    if (!copiedDevice) return;
+    const what = group
+      ? `the "${DEVICE_PROP_GROUPS.find(g => g.id === group)?.label}" tab`
+      : 'the whole specification';
+    if (!await appConfirm(`Replace ${what} of ${target.name} with ${copiedDevice.name}'s?`,
+      { title: 'Paste specification', confirmLabel: 'Replace' })) return;
+    updateLib({ ...target, properties: pasteSpec(target.properties ?? {}, copiedDevice.properties ?? {}, group) });
+  };
 
   // ── Style shortcuts ──────────────────────────────────────────
   const inp   = 'col-span-2 border border-gray-300 rounded px-2 py-1 text-sm';
@@ -629,19 +792,76 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   );
 
   // ── Render: Device Library tab ────────────────────────────────
+  // One device, broken out: what TPMS knows about the panel, then the whole
+  // specification group by group — the fields that are filled in and the ones
+  // still to enter, because a blank the engineer cannot see is a blank that
+  // never gets filled.
+  const renderDeviceBreakdown = (item: DeviceLibraryItem) => {
+    const facts = tpmsFactsFor(item);
+    const props = (item.properties ?? {}) as Record<string, any>;
+    const show = (key: string) => {
+      const value = props[key];
+      if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+      return value == null || String(value).trim() === '' ? '' : String(value);
+    };
+
+    return (
+      <div className="pl-12 pr-4 py-3 border-b bg-gray-50/70">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-gray-600 mb-3">
+          {facts.switchgearType && <span><span className="text-gray-400">Switchgear</span> <strong>{facts.switchgearType}</strong></span>}
+          {facts.cellCount && <span><span className="text-gray-400">Cells</span> <strong>{facts.cellCount}</strong></span>}
+          <span><span className="text-gray-400">Feeders</span> <strong>{facts.rows}</strong></span>
+          {item.tpmsScopeId != null && <span><span className="text-gray-400">TPMS scope</span> <strong>{item.tpmsScopeId}</strong></span>}
+          <button
+            className="ml-auto px-2.5 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1"
+            onClick={() => setDeviceModal({ visible: true, item, mode: 'edit' })}
+          >
+            <EditIcon className="w-3 h-3" /> Enter specification
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8">
+          {DEVICE_PROP_GROUPS.map(group => (
+            <div key={group.id} className="mb-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">{group.label}</p>
+              <div className="border border-gray-200 rounded bg-white overflow-hidden">
+                {group.keys.map(key => {
+                  const value = show(key);
+                  return (
+                    <div key={key} className="grid grid-cols-2 gap-2 px-3 py-1 border-b border-gray-50 last:border-b-0 text-xs">
+                      <span className="text-gray-500">{DEVICE_PROP_LABELS[key] ?? key}</span>
+                      <span className={value ? 'text-gray-900' : 'text-gray-300 italic'}>{value || 'not entered'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   const renderDeviceLibrary = () => (
     <div>
-      <p className="text-sm text-gray-500 mb-3">
-        Right-click on a voltage category to add a device. Double-click on a device to view/edit its properties.
-      </p>
+      <div className="flex items-start justify-between gap-4 mb-3">
+        <p className="text-sm text-gray-500">
+          Right-click on a group to add a device; right-click a device to copy its specification
+          and paste it into another, whole or tab by tab. Click a device to break out its
+          specification, double-click to open it.
+        </p>
+      </div>
 
       <div className="border border-gray-200 rounded-md overflow-hidden">
         {/* Root header */}
         <div className="px-4 py-2 bg-gray-100 border-b font-semibold text-sm flex items-center gap-2 select-none">
           <span>📦</span> Device Library
+          <span className="ml-auto text-xs font-normal text-gray-500">
+            {TIERS.reduce((n, t) => n + (deviceLibrary[t] ?? []).length, 0)} device(s)
+          </span>
         </div>
 
-        {(['LV', 'MV', 'HV'] as const).map(t => {
+        {TIERS.map(t => {
           const items    = deviceLibrary[t] ?? [];
           const expanded = expandedTypes.has(t);
 
@@ -666,7 +886,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                     : <ChevronRightIcon className="w-4 h-4 text-gray-500" />}
                   <span className={`text-xs px-2 py-0.5 rounded font-bold ${typeColor(t)}`}>{t}</span>
                   <span className="text-sm font-medium">
-                    {t === 'LV' ? 'Low Voltage' : t === 'MV' ? 'Medium Voltage' : 'High Voltage'}
+                    {TIER_LABEL[t]}
                   </span>
                 </div>
                 <span className="text-xs text-gray-400">{items.length} device{items.length !== 1 ? 's' : ''}</span>
@@ -680,21 +900,46 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                       No devices — right-click to add
                     </div>
                   )}
-                  {items.map(item => (
-                    <div
-                      key={item.id}
-                      className="flex items-center justify-between pl-12 pr-4 py-2 border-b hover:bg-blue-50 cursor-pointer text-sm group"
-                      onDoubleClick={() => setDeviceModal({ visible: true, item, mode: 'view' })}
-                      onContextMenu={e => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setCtxMenu({ visible: true, x: e.clientX, y: e.clientY, typeNode: t, itemId: item.id });
-                      }}
-                    >
-                      <span>🔧 {item.name}</span>
-                      <span className="text-xs text-gray-300 group-hover:text-gray-400">dbl-click to open</span>
-                    </div>
-                  ))}
+                  {items.map(item => {
+                    const facts = tpmsFactsFor(item);
+                    const filled = filledPropertyCount(item.properties as Record<string, unknown>);
+                    const open = expandedDevices.has(item.id);
+                    return (
+                      <React.Fragment key={item.id}>
+                        <div
+                          className="flex items-center gap-3 pl-8 pr-4 py-2 border-b hover:bg-blue-50 cursor-pointer text-sm group"
+                          onClick={() => toggleDevice(item.id)}
+                          onDoubleClick={() => setDeviceModal({ visible: true, item, mode: 'view' })}
+                          onContextMenu={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setCtxMenu({ visible: true, x: e.clientX, y: e.clientY, typeNode: t, itemId: item.id });
+                          }}
+                        >
+                          {open
+                            ? <ChevronDownIcon  className="w-4 h-4 text-gray-400 shrink-0" />
+                            : <ChevronRightIcon className="w-4 h-4 text-gray-400 shrink-0" />}
+                          <span className="shrink-0">🔧 {item.name}</span>
+                          {facts.switchgearType && (
+                            <span className="text-xs text-gray-500 truncate">{facts.switchgearType}</span>
+                          )}
+                          {item.source === 'tpms' && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 shrink-0">
+                              TPMS
+                            </span>
+                          )}
+                          <span className="ml-auto flex items-center gap-3 shrink-0 text-xs">
+                            {facts.cellCount && <span className="text-gray-400">{facts.cellCount} cell(s)</span>}
+                            <span className="text-gray-400">{facts.rows} feeder(s)</span>
+                            <span className={filled === 0 ? 'text-amber-600' : 'text-gray-500'}>
+                              {filled}/{DEVICE_PROP_TOTAL} spec
+                            </span>
+                          </span>
+                        </div>
+                        {open && renderDeviceBreakdown(item)}
+                      </React.Fragment>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -704,10 +949,10 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
       {/* Context Menu */}
       {ctxMenu.visible && (
-        <div
-          className="fixed z-50 bg-white border shadow-lg rounded py-1 w-44"
-          style={{ top: ctxMenu.y, left: ctxMenu.x }}
-          onClick={e => e.stopPropagation()}
+        <MenuBox
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          className="z-50 bg-white border shadow-lg rounded py-1 w-60 max-h-[90vh] overflow-y-auto"
         >
           {/* Add Device / Paste – shown when right-clicking on type header */}
           {!ctxMenu.itemId && ctxMenu.typeNode && (
@@ -733,7 +978,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                     setCtxMenu(prev => ({ ...prev, visible: false }));
                   }}
                 >
-                  <ClipboardIcon className="w-4 h-4 mr-2" /> Paste "{copiedDevice.name}"
+                  <ClipboardIcon className="w-4 h-4 mr-2" /> Paste as new device "{copiedDevice.name}"
                 </button>
               )}
             </>
@@ -763,6 +1008,36 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                 >
                   <CopyIcon className="w-4 h-4 mr-2" /> Copy
                 </button>
+                {copiedDevice && copiedDevice.id !== found.id && (
+                  <>
+                    <div className="border-t my-1" />
+                    <p className="px-4 pt-1 pb-0.5 text-[10px] uppercase tracking-wide text-gray-400">
+                      Specification from {copiedDevice.name}
+                    </p>
+                    <button
+                      className="w-full text-left px-4 py-1.5 text-sm hover:bg-gray-100 flex items-center"
+                      onClick={() => {
+                        setCtxMenu(prev => ({ ...prev, visible: false }));
+                        pasteSpecInto(found);
+                      }}
+                    >
+                      <ClipboardIcon className="w-4 h-4 mr-2" /> Paste all tabs
+                    </button>
+                    {DEVICE_PROP_GROUPS.map(g => (
+                      <button
+                        key={g.id}
+                        className="w-full text-left pl-10 pr-4 py-1 text-xs hover:bg-gray-100 text-gray-700"
+                        onClick={() => {
+                          setCtxMenu(prev => ({ ...prev, visible: false }));
+                          pasteSpecInto(found, g.id as SpecGroupId);
+                        }}
+                      >
+                        Paste {g.label} only
+                      </button>
+                    ))}
+                    <div className="border-t my-1" />
+                  </>
+                )}
                 {copiedDevice && (
                   <button
                     className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
@@ -775,7 +1050,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                       setCtxMenu(prev => ({ ...prev, visible: false }));
                     }}
                   >
-                    <ClipboardIcon className="w-4 h-4 mr-2" /> Paste "{copiedDevice.name}"
+                    <ClipboardIcon className="w-4 h-4 mr-2" /> Paste as new device "{copiedDevice.name}"
                   </button>
                 )}
                 <button
@@ -798,7 +1073,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           >
             <XIcon className="w-4 h-4 mr-2" /> Cancel
           </button>
-        </div>
+        </MenuBox>
       )}
 
       {/* Device Properties Modal */}
@@ -809,6 +1084,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           addType={deviceModal.addType}
           onSave={handleDeviceSave}
           onClose={closeDeviceModal}
+          clip={copiedDevice}
+          onCopy={setCopiedDevice}
         />
       )}
 
@@ -821,10 +1098,6 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           cascadeNote={
             'Deleting it here removes it from the Device Library AND from Device Selection — ' +
             'the equipment above and all of its device rows are deleted too.'
-          }
-          cascadeNoteFa={
-            'با حذف از این قسمت، دستگاه هم از Device Library و هم از Device Selection حذف می‌شود — ' +
-            'تجهیز مربوطه در شاخه پروژه و همه ردیف‌های آن هم پاک می‌شوند.'
           }
           onConfirm={confirmDeleteLib}
           onCancel={() => setLibDeleteTarget(null)}
@@ -869,8 +1142,11 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   // ── Main render ───────────────────────────────────────────────
   return (
     <div>
-      {/* Sub-tab Navigation */}
-      <div className="flex border-b mb-6">
+      {/* Sub-tab Navigation — with the TPMS update beside it, above both tabs:
+          it brings across both the project data (master data, technical
+          settings) and every panel's specification in the Device Library. It
+          stays until TPMS is retired and the whole project starts here. */}
+      <div className="flex items-end border-b mb-6">
         {([
           { id: 'project-data'   as SubTab, label: '📋 Project Data' },
           { id: 'device-library' as SubTab, label: '📦 Device Library' },
@@ -887,19 +1163,122 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
             {tab.label}
           </button>
         ))}
+        {tpmsLink?.projectMainId ? (
+          <button
+            className="ml-auto mb-1.5 shrink-0 px-3 py-1.5 border border-purple-300 bg-purple-50 text-purple-800 rounded text-xs
+                       hover:bg-purple-100 disabled:opacity-50 flex items-center gap-1.5"
+            onClick={runTpmsUpdate}
+            disabled={tpmsUpdate.busy}
+            title="Bring across what TPMS has changed — project data, technical settings and each panel's specification — and leave your own work alone"
+          >
+            <RefreshCwIcon className={`w-3.5 h-3.5 ${tpmsUpdate.busy ? 'animate-spin' : ''}`} />
+            {tpmsUpdate.busy ? 'Reading TPMS…' : 'Update from TPMS'}
+          </button>
+        ) : null}
       </div>
 
       {activeSubTab === 'project-data'   && renderProjectData()}
       {activeSubTab === 'device-library' && renderDeviceLibrary()}
 
-      {/* Save / Next */}
+      {/* What TPMS would change, before it changes it. */}
+      {(tpmsUpdate.busy || tpmsUpdate.result || tpmsUpdate.error) && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center gap-2 px-6 py-4 border-b">
+              <DatabaseIcon className="w-5 h-5 text-purple-600" />
+              <h3 className="font-semibold">Update from TPMS — project data and device specifications</h3>
+              <button className="ml-auto text-gray-400 hover:text-gray-600" onClick={closeTpmsUpdate}>
+                <XIcon className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+              {tpmsUpdate.busy && (
+                <p className="text-sm text-gray-600 flex items-center gap-2">
+                  <RefreshCwIcon className="w-4 h-4 animate-spin" /> {tpmsUpdate.progress || 'Reading…'}
+                </p>
+              )}
+
+              {tpmsUpdate.error && (
+                <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+                  {tpmsUpdate.error}
+                </p>
+              )}
+
+              {tpmsUpdate.result && (
+                <>
+                  {tpmsUpdate.result.changes.length === 0 ? (
+                    <p className="text-sm text-gray-600">
+                      Nothing has changed in TPMS — the specifications here are up to date.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-sm text-gray-600 mb-3">
+                        {tpmsUpdate.result.changes.length} specification(s) have changed in TPMS. Everything
+                        you have entered yourself stays as it is — only these fields are written.
+                      </p>
+                      <table className="w-full text-xs border border-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left">Where</th>
+                            <th className="px-3 py-2 text-left">Field</th>
+                            <th className="px-3 py-2 text-left">Here now</th>
+                            <th className="px-3 py-2 text-left">In TPMS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tpmsUpdate.result.changes.map((c, i) => (
+                            <tr key={`${c.where}-${c.field}-${i}`} className="border-t border-gray-100">
+                              <td className="px-3 py-1.5 text-gray-500">{c.where}</td>
+                              <td className="px-3 py-1.5">{DEVICE_PROP_LABELS[c.field] ?? c.field}</td>
+                              <td className="px-3 py-1.5 text-gray-400 line-through">{c.from}</td>
+                              <td className="px-3 py-1.5 text-green-700 font-medium">{c.to}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  )}
+
+                  {tpmsUpdate.result.newSwitchgears.length > 0 && (
+                    <p className="mt-4 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                      TPMS has {tpmsUpdate.result.newSwitchgears.length} switchgear(s) this project does not:{' '}
+                      {tpmsUpdate.result.newSwitchgears.join(', ')}. Adding a panel is more than a
+                      specification change — open the project from TPMS again to bring them in.
+                    </p>
+                  )}
+
+                  {tpmsUpdate.result.problems.length > 0 && (
+                    <ul className="mt-4 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2 list-disc pl-6">
+                      {tpmsUpdate.result.problems.map((p, i) => <li key={i}>{p}</li>)}
+                    </ul>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 px-6 py-4 border-t bg-gray-50">
+              <button className="px-4 py-2 border rounded text-sm hover:bg-gray-100" onClick={closeTpmsUpdate}>
+                {tpmsUpdate.result && tpmsUpdate.result.changes.length === 0 ? 'Close' : 'Cancel'}
+              </button>
+              {tpmsUpdate.result && tpmsUpdate.result.changes.length > 0 && (
+                <button
+                  className="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 flex items-center gap-1"
+                  onClick={applyTpmsUpdate}
+                >
+                  <CheckIcon className="w-4 h-4" /> Apply {tpmsUpdate.result.changes.length} change(s)
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Next. Saving is not a button here: the project saves itself as it is
+          edited, and File → Save is there for anybody who wants to say so
+          outright. A Save on one tab of five suggested the other four did
+          not save, which was never true. */}
       <div className="flex justify-end gap-3 mt-6">
-        <button
-          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-          onClick={handleSave}
-        >
-          Save Project
-        </button>
         <button
           className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
           onClick={onComplete}

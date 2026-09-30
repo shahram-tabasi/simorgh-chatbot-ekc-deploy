@@ -1,7 +1,16 @@
 // src/components/TemplateCreation/TemplateProperties.tsx - FIXED SQL CONNECTION
 import React, { useEffect, useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
-import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon } from 'lucide-react';
+import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon, CopyIcon, ClipboardPasteIcon } from 'lucide-react';
+import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
+import { PanelFrame } from '../shared/PanelFrame';
+import { PartCell } from './PartCell';
+import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
+import { EplanSymbolMap } from '../../utils/eplanSingleLine';
+import { useSymbolVersion } from '../../utils/cad/useSymbols';
+import { templateMeta } from '../../utils/templateMeta';
+import { type Tier, LAYOUT_OF } from '../../utils/tiers';
+import { appConfirm } from '../shared/AppDialog';
 
 // Reserved keys inside template.properties used to carry per-template metadata.
 // These keys are NOT real property rows; the renderer skips them.
@@ -10,11 +19,41 @@ const META_LOCKED = '__locked';
 
 const PAGE_SIZE = 100;
 
+// The one row whose name is not the engineer's to change. ACCESSORY is where
+// the drawing hangs what belongs to the device above it rather than to the
+// branch (see "An accessory is not a device on the branch"), and it finds the
+// row by this name — renamed, the accessories would land on the branch as
+// devices of their own.
+const UNRENAMABLE_ROWS = ['ACCESSORY'];
+
+/**
+ * A section of a template, copied to be pasted into another.
+ *
+ * Kept at module level rather than in the component: picking another template
+ * in the tree hands this component a different template, and the whole point
+ * is that what was copied from the first is still there to paste into the
+ * second.
+ */
+interface SectionClip {
+  templateId: string;
+  templateName: string;
+  slot: string;
+  label: string;
+  parts: PartInfo[];
+}
+let sectionClip: SectionClip | null = null;
+
 interface TemplateItem {
   id: string;
   name: string;
-  type: 'LV' | 'MV' | 'HV';
+  type: Tier;
   properties: Record<string, PropertyValue>;
+  /** Where it is filed and what it was sized for — see utils/templateMeta. */
+  hierarchy?: {
+    path?: string[];
+    leafKind?: string;
+    params?: { kw?: string; currentA?: string };
+  };
 }
 
 interface PropertyValue {
@@ -27,6 +66,19 @@ interface PartInfo {
   quantity: number;
   priority: number;
   fullData?: any;
+  /**
+   * The symbol this part is drawn with, when somebody said so outright.
+   * Absent means the drawing works it out — from EPLAN, the description, then
+   * the row — which is what it always did.
+   */
+  symbolId?: string;
+  /** SIM-TABLE, typed by hand instead of the usual Order Number / Designation 3. */
+  simTableOverride?: string;
+  /** Manufacturer, typed by hand instead of read from the part. Dropped
+   *  whenever the part itself is replaced — handlePartSelect always builds a
+   *  fresh PartInfo, so a new part starts without this and falls back to its
+   *  own Manufacturer field. */
+  manufacturerOverride?: string;
 }
 
 interface TemplatePropertiesProps {
@@ -378,9 +430,9 @@ const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
                   <DetailRow label="Manufacturer" value={selectedPart.Manufacturer} highlight />
                   <DetailRow label="Supplier" value={selectedPart.Supplier} />
                   
-                  {/* Eplanix section with Order Number */}
+                  {/* SIM-TABLE section with Order Number */}
                   <div className="mt-4 border-t pt-3">
-                    <div className="text-sm font-semibold text-gray-700 mb-2">Eplanix</div>
+                    <div className="text-sm font-semibold text-gray-700 mb-2">SIM-TABLE</div>
                     <DetailRow label="Order Number" value={selectedPart.OrderNumber} />
                     {/* Show Designation 3 if OrderNumber is empty, "-", or "_" */}
                     {(!selectedPart.OrderNumber || 
@@ -472,10 +524,16 @@ const DetailRow: React.FC<{
 export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   template
 }) => {
-  const { updateTemplate } = useProject();
+  const { updateTemplate, projectData, patchProjectData, isCurrentRevisionEditable } = useProject();
+  const [clip, setClipState] = useState<SectionClip | null>(sectionClip);
+  const setClip = (next: SectionClip | null) => { sectionClip = next; setClipState(next); };
   const [properties, setProperties] = useState<Record<string, PropertyValue>>(
     template.properties || {}
   );
+  // Which part the panel is showing, and whether the one graphic window is
+  // open on this template. Both sit beside the table; neither changes it.
+  const [selectedPart, setSelectedPart] = useState<PartRef | null>(null);
+  const [graphicSymbols, setGraphicSymbols] = useState<EplanSymbolMap | null>(null);
   const [dialogState, setDialogState] = useState<{
     isOpen: boolean;
     propertyName: string;
@@ -491,6 +549,15 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   useEffect(() => {
     setProperties(template.properties || {});
   }, [template]);
+
+  // The previews here draw from the same symbol library the sheets do, and are
+  // redrawn when any of it changes — the project's own drawing of a device,
+  // the office's DXF pack, whichever screen changed it. Loading it was this
+  // screen's job once, from here, and that is how a symbol redrawn in the
+  // drawing tab could be the new one on the sheet and the old one in this
+  // preview at the same moment.
+  // Called for what it subscribes to, not for what it returns.
+  useSymbolVersion();
 
   // ── LV property layout (per spec) ──────────────────────────────────────────
   // All LV rows are now renamable (user can edit all property names)
@@ -551,12 +618,76 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   let fixedRows: string[] = [];
   let renamableSpares: string[] = [];
   let extendedSpares: string[] = [];
-  switch (template.type) {
+  // GIS templates carry MV's rows and OTHER's carry LV's (LAYOUT_OF).
+  switch (LAYOUT_OF[template.type] ?? template.type) {
     case 'LV': fixedRows = lvFixed; renamableSpares = lvRenamableSpares; extendedSpares = lvExtendedSpares; break;
     case 'MV': fixedRows = mvFixed; renamableSpares = mvRenamableSpares; extendedSpares = mvExtendedSpares; break;
     case 'HV': fixedRows = hvProperties; break;
   }
   const propertiesToShow = [...fixedRows, ...renamableSpares, ...extendedSpares];
+
+  // Every part of this template, in the order the sheet would draw them —
+  // read from the same `properties` the table renders, so the two never differ.
+  const partRefs: PartRef[] = propertiesToShow.flatMap(property =>
+    (properties[property]?.parts ?? []).map((part, index) => ({ slot: property, index, part })));
+
+  // The description of every part that arrived without one — the parts read
+  // from TPMS, and any picked before the description came across — looked up
+  // in the parts database's `note` column by order or part number. Shown in
+  // the Description column; nothing is written to the template.
+  const numbersOf = (part: any): string[] =>
+    [part?.fullData?.OrderNumber, part?.fullData?.PartNumber, part?.partNumber]
+      .map(n => String(n ?? '').trim()).filter(Boolean);
+  const missing = [...new Set(partRefs
+    .filter(ref => !String((ref.part as any)?.fullData?.Description ?? '').trim())
+    .flatMap(ref => numbersOf(ref.part)))].sort();
+  const missingKey = missing.join('|');
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (missing.length === 0) return;
+    let cancelled = false;
+    fetch(`${(import.meta as { env?: Record<string, string> }).env?.VITE_API_URL || ''}/api/eplan-parts/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ numbers: missing }),
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then(body => { if (!cancelled && body?.notes) setNotes(prev => ({ ...prev, ...body.notes })); })
+      .catch(() => { /* the column stays as it was */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingKey]);
+  const descriptionOf = (part: any): string =>
+    String(part?.fullData?.Description ?? '').trim()
+      || numbersOf(part).map(n => notes[n]).find(Boolean)
+      || '';
+
+  const sameRef = (a: PartRef | null, b: PartRef | null) =>
+    Boolean(a && b && a.slot === b.slot && a.index === b.index);
+
+  // The panel follows the table: a part that has gone stops being the one on
+  // show, and the first part of a fresh template is picked so the panel is
+  // never blank when there is something to see.
+  const shownPart = partRefs.find(ref => sameRef(ref, selectedPart)) ?? partRefs[0] ?? null;
+
+  /** Pin a symbol to a part, or clear it and let the drawing work it out. */
+  const changePartSymbol = (ref: PartRef, symbolId: string | undefined) => {
+    const row = properties[ref.slot];
+    if (!row?.parts?.[ref.index]) return;
+    const parts = row.parts.map((part, i) => {
+      if (i !== ref.index) return part;
+      const { symbolId: _was, ...rest } = part;
+      return symbolId ? { ...rest, symbolId } : rest;
+    });
+    const next = { ...properties, [ref.slot]: { ...row, parts } };
+    setProperties(next);
+    updateTemplate(template.id, next as any);
+    setSelectedPart({ ...ref, part: parts[ref.index] });
+  };
+
+  /** Keep the template's own drawing with the project. */
+  const saveTemplateGraphic = (next: Record<string, any>) =>
+    patchProjectData(() => ({ drawingEdits: next }));
   // Rows that come BEFORE the extended-spare block — used to count empty slots.
   const regularRows = [...fixedRows, ...renamableSpares];
   // The very first fixed row gets "Q" as default label when a part is added.
@@ -595,6 +726,31 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   const [renamingRow, setRenamingRow] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
 
+  // ── Manufacturer: read from the part(s), typed by hand when the pencil is
+  // clicked. One value per property row — editing it sets the same override
+  // on every part under that property, which is what the aggregate label
+  // already shows joined with " / ". Replacing a part drops its override
+  // (handlePartSelect always builds a fresh PartInfo), which is the point:
+  // a new part's own manufacturer wins over a stale manual edit.
+  const [editingManufacturer, setEditingManufacturer] = useState<string | null>(null);
+  const [manufacturerDraft, setManufacturerDraft] = useState('');
+
+  const commitManufacturer = (propertyName: string, value: string) => {
+    const currentProperty = properties[propertyName];
+    if (currentProperty) {
+      const trimmed = value.trim();
+      const updatedParts = currentProperty.parts.map(p => ({
+        ...p,
+        manufacturerOverride: trimmed || undefined,
+      }));
+      const updatedProperties = { ...properties, [propertyName]: { parts: updatedParts } };
+      setProperties(updatedProperties);
+      updateTemplate(template.id, updatedProperties);
+    }
+    setEditingManufacturer(null);
+    setManufacturerDraft('');
+  };
+
   const writeMetadata = (
     nextDisplayNames: Record<string, string>,
     nextLocked: string[]
@@ -608,24 +764,73 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     updateTemplate(template.id, updated as any);
   };
 
+  // A row renamed is renamed in every template of this group, not only the
+  // one on screen. The rows are the group's columns — Device Selection, the
+  // BPMS sheet and the EPLAN header all read them as one table — and a
+  // column called one thing on one template and another on the next is a
+  // table with two headings for the same column.
   const commitRename = (rawName: string, newName: string) => {
+    if (UNRENAMABLE_ROWS.includes(rawName)) return;
     const trimmed = newName.trim();
-    const next = { ...displayNames };
-    if (!trimmed || trimmed === rawName) {
-      delete next[rawName];
-    } else {
-      next[rawName] = trimmed;
-    }
-    writeMetadata(next, lockedRows);
+    const renamed = (names: Record<string, string> | undefined) => {
+      const next = { ...(names ?? {}) };
+      if (!trimmed || trimmed === rawName) delete next[rawName];
+      else next[rawName] = trimmed;
+      return next;
+    };
+    const next = renamed(displayNames);
+    setProperties(prev => ({ ...prev, [META_DISPLAY_NAMES]: next as any }));
+    patchProjectData(prev => ({
+      templates: {
+        ...prev.templates,
+        [template.type]: (prev.templates?.[template.type] ?? []).map(t => ({
+          ...t,
+          properties: {
+            ...(t.properties ?? {}),
+            [META_DISPLAY_NAMES]: renamed((t.properties as any)?.[META_DISPLAY_NAMES]) as any,
+          },
+        })),
+      },
+    }));
     setRenamingRow(null);
     setRenameDraft('');
   };
 
-  const toggleLock = (rawName: string) => {
+  // ── Copying a section to another template ──────────────────────────────
+  // A section is one property row: its parts, and everything said about them
+  // — label, quantity, priority, the SIM-TABLE and manufacturer typed in, the
+  // symbol picked. Copied whole, so the paste is the row as it was.
+  const copySection = (slot: string) => {
+    const parts = properties[slot]?.parts ?? [];
+    if (parts.length === 0) return;
+    setClip({
+      templateId: template.id,
+      templateName: template.name,
+      slot,
+      label: getDisplayName(slot),
+      parts: JSON.parse(JSON.stringify(parts)),
+    });
+  };
+
+  const pasteSection = async (slot: string) => {
+    if (!clip) return;
+    const current = properties[slot]?.parts ?? [];
+    if (current.length > 0 && !await appConfirm(
+      `Replace the ${current.length} part(s) in ${getDisplayName(slot)} with the ` +
+      `${clip.parts.length} part(s) of ${clip.label} from ${clip.templateName}?`,
+      { title: 'Paste section', confirmLabel: 'Replace' })) return;
+    const parts: PartInfo[] = JSON.parse(JSON.stringify(clip.parts));
+    const updated = { ...properties, [slot]: { parts } };
+    setProperties(updated);
+    updateTemplate(template.id, updated as any);
+  };
+
+  const toggleLock = async (rawName: string) => {
     if (lockedRows.includes(rawName)) {
       // Unlocking — show the warning required by spec.
-      const ok = window.confirm(
-        '⚠ Warning: this equipment will not be displayed in the single-line diagrams below.\n\nUnlock anyway?'
+      const ok = await appConfirm(
+        'This equipment will not be displayed in the single-line diagrams below.\n\nUnlock anyway?',
+        { title: 'Unlock row', confirmLabel: 'Unlock' },
       );
       if (!ok) return;
       writeMetadata(displayNames, lockedRows.filter(r => r !== rawName));
@@ -699,11 +904,24 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
 
     setProperties(updatedProperties);
     updateTemplate(template.id, updatedProperties as any);
+    // Show the part that was just entered, which is the whole point of the
+    // panel beside the table: put a part in, see what it draws.
+    setSelectedPart({
+      slot: propertyName,
+      index: partIndex !== null ? partIndex : updatedParts.length - 1,
+      part: updatedParts[partIndex !== null ? partIndex : updatedParts.length - 1],
+    });
   };
 
-  const handleRemovePart = (propertyName: string, partIndex: number) => {
+  const handleRemovePart = async (propertyName: string, partIndex: number) => {
     const currentProperty = properties[propertyName];
     if (!currentProperty) return;
+    // Asked first: there is no undo here, and the button sits one column from
+    // the ones clicked all day.
+    const part = currentProperty.parts[partIndex];
+    if (!await appConfirm(
+      `Delete ${part?.partNumber || 'this part'} from ${getDisplayName(propertyName)}?`,
+      { danger: true, confirmLabel: 'Delete' })) return;
 
     const updatedProperty = {
       parts: currentProperty.parts.filter((_, index) => index !== partIndex)
@@ -744,14 +962,41 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   };
 
   return (
-    <div className="h-full">
-      <div className="mb-4">
+    <div className="h-full min-h-0 flex flex-col">
+      <div className="mb-4 shrink-0">
         <h3 className="text-lg font-semibold">{template.name}</h3>
-        <p className="text-sm text-gray-500">Type: {template.type}</p>
+        <p className="text-sm text-gray-500">
+          Type: {template.type}
+          {templateMeta(template) && <span className="ml-2">· {templateMeta(template)}</span>}
+        </p>
+        {clip && (
+          <div className="mt-2 inline-flex items-center gap-2 text-xs bg-green-50 border border-green-200 text-green-800 rounded px-2 py-1">
+            <ClipboardPasteIcon className="w-3.5 h-3.5" />
+            <span>
+              Copied <strong>{clip.label}</strong> ({clip.parts.length} part{clip.parts.length === 1 ? '' : 's'})
+              from {clip.templateName} — press the paste icon on a row to put it there.
+            </span>
+            <button className="text-green-700 hover:text-green-900" title="Forget it" onClick={() => setClip(null)}>
+              <XIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
       </div>
 
-      <div className="border border-gray-200 rounded-md overflow-hidden">
-        <table className="w-full">
+      {/* The table is untouched; the schematic sits beside it — and gives its
+          room back when it is closed. */}
+      {/* Each side scrolls on its own: the parts table, and the drawing. */}
+      <div className="flex gap-4 items-stretch flex-1 min-h-0">
+      {/* `overflow-x-auto` rather than `overflow-hidden`, and a min-width the
+          columns actually need.
+          Nine columns of fixed width plus the part name come to about 1180px.
+          Without the minimum the table squeezed itself into whatever the
+          schematic left it — a part number reading "3RV2321-4…", a label
+          reading "Mc" — and with `overflow-hidden` the far columns could not
+          be reached at all. Now it keeps its columns and scrolls under its own
+          headings, which is what a wide table is supposed to do. */}
+      <div className="flex-1 min-w-0 min-h-0 border border-gray-200 rounded-md overflow-auto">
+        <table className="w-full min-w-[1180px]">
           <thead>
             <tr className="bg-gray-50">
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-36">
@@ -773,7 +1018,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                 Priority
               </th>
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-32">
-                Eplanix
+                SIM-TABLE
               </th>
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-40">
                 Description
@@ -788,16 +1033,21 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
               const propertyValue = properties[property] || { parts: [] };
               const parts = propertyValue.parts || [];
 
-              // Distinct manufacturers under property name, joined with "/"
+              // Distinct manufacturers under property name, joined with "/" —
+              // a manual override on a part wins over its own Manufacturer
+              // field, until that part is replaced.
               const manufacturers = Array.from(new Set(
-                parts.map(p => p.fullData?.Manufacturer)
+                parts.map(p => p.manufacturerOverride ?? p.fullData?.Manufacturer)
                      .filter((m: any): m is string => Boolean(m && String(m).trim()))
               ));
               const manufacturerLabel = manufacturers.join(' / ');
+              const hasManufacturerOverride = parts.some(p => p.manufacturerOverride !== undefined);
 
               const displayLabel = getDisplayName(property);
-              // For LV and MV, all rows are renamable (including fixed rows)
-              const isRenamable  = template.type === 'LV' || template.type === 'MV';
+              // Every LV and MV row is renamable (GIS and OTHER follow their
+              // layout) — except ACCESSORY, which the drawing finds by name.
+              const isRenamable  = (LAYOUT_OF[template.type] === 'LV' || LAYOUT_OF[template.type] === 'MV')
+                && !UNRENAMABLE_ROWS.includes(property);
               const isExtended   = extendedSpares.includes(property);
               const isLocked     = isRowLocked(property);
               const isEnabled    = !isLocked && (!isExtended || isExtendedEnabled(property));
@@ -834,10 +1084,25 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                       <span className={isLocked ? 'line-through text-gray-400' : ''}>{displayLabel}</span>
                       {isRenamable && (
                         <button
-                          title="Rename"
+                          title={`Rename — in every ${template.type} template`}
                           className="text-gray-400 hover:text-blue-600"
                           onClick={() => { setRenamingRow(property); setRenameDraft(displayLabel); }}
                         ><Edit2Icon className="w-3.5 h-3.5" /></button>
+                      )}
+                      {parts.length > 0 && (
+                        <button
+                          title={`Copy ${displayLabel} — its parts and everything set on them — to paste into another template`}
+                          className={clip && clip.templateId === template.id && clip.slot === property
+                            ? 'text-blue-600' : 'text-gray-400 hover:text-blue-600'}
+                          onClick={() => copySection(property)}
+                        ><CopyIcon className="w-3.5 h-3.5" /></button>
+                      )}
+                      {clip && isEnabled && !(clip.templateId === template.id && clip.slot === property) && (
+                        <button
+                          title={`Paste ${clip.label} from ${clip.templateName} here`}
+                          className="text-green-600 hover:text-green-800"
+                          onClick={() => pasteSection(property)}
+                        ><ClipboardPasteIcon className="w-3.5 h-3.5" /></button>
                       )}
                       {isLocked && (
                         <button
@@ -853,9 +1118,41 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                       )}
                     </div>
                   )}
-                  {manufacturerLabel && (
-                    <div className="text-[10px] font-normal text-gray-500 mt-0.5">
-                      {manufacturerLabel}
+                  {editingManufacturer === property ? (
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <input
+                        autoFocus
+                        type="text"
+                        placeholder="Manufacturer…"
+                        className="flex-1 border border-gray-300 rounded px-1.5 py-0.5 text-[10px]"
+                        value={manufacturerDraft}
+                        onChange={(e) => setManufacturerDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') commitManufacturer(property, manufacturerDraft);
+                          if (e.key === 'Escape') { setEditingManufacturer(null); setManufacturerDraft(''); }
+                        }}
+                      />
+                      <button
+                        title="Save"
+                        className="text-green-600 hover:text-green-800"
+                        onClick={() => commitManufacturer(property, manufacturerDraft)}
+                      ><CheckIcon className="w-3.5 h-3.5" /></button>
+                      <button
+                        title="Cancel"
+                        className="text-gray-500 hover:text-gray-700"
+                        onClick={() => { setEditingManufacturer(null); setManufacturerDraft(''); }}
+                      ><XIcon className="w-3.5 h-3.5" /></button>
+                    </div>
+                  ) : (parts.length > 0) && (
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <span className={`text-[10px] font-normal ${hasManufacturerOverride ? 'text-blue-600' : 'text-gray-500'}`}>
+                        {manufacturerLabel || '—'}
+                      </span>
+                      <button
+                        title="Edit manufacturer"
+                        className="text-gray-400 hover:text-blue-600"
+                        onClick={() => { setEditingManufacturer(property); setManufacturerDraft(manufacturerLabel); }}
+                      ><Edit2Icon className="w-3 h-3" /></button>
                     </div>
                   )}
                 </div>
@@ -903,11 +1200,11 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                         {/* Part number + replace button */}
                         <td className="px-4 py-2 border-b">
                           <div className="flex items-center gap-2">
-                            <input
-                              type="text"
-                              className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm bg-gray-100"
+                            <PartCell
+                              label="Part"
                               value={part.partNumber}
-                              readOnly
+                              source="From the EPLAN parts database — use Replace to change it"
+                              className="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm bg-gray-100"
                             />
                             <button
                               onClick={() => handleOpenPartDialog(property, part, partIndex)}
@@ -920,71 +1217,72 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                         </td>
                         {/* RATING column — shows Designation3 of the selected part */}
                         <td className="px-4 py-2 border-b">
-                          <input
-                            type="text"
-                            className="w-full border border-gray-200 rounded px-2 py-1 text-sm bg-amber-50 text-amber-900"
+                          <PartCell
+                            label="Rating"
                             value={part.fullData?.Designation3 || ''}
-                            readOnly
-                            title="Rating (Designation 3)"
+                            source="Designation 3, from the EPLAN parts database"
+                            className="w-full border border-gray-200 rounded px-2 py-1 text-sm bg-amber-50 text-amber-900"
                           />
                         </td>
                         <td className="px-4 py-2 border-b">
-                          <input
-                            type="text"
-                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                          <PartCell
+                            label="Label"
                             value={part.label}
-                            onChange={(e) =>
-                              handleUpdatePart(property, partIndex, 'label', e.target.value)
-                            }
-                          />
-                        </td>
-                        <td className="px-4 py-2 border-b">
-                          <input
-                            type="number"
+                            onChange={v => handleUpdatePart(property, partIndex, 'label', v)}
                             className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                            value={part.quantity}
-                            onChange={(e) =>
-                              handleUpdatePart(property, partIndex, 'quantity', parseInt(e.target.value) || 1)
-                            }
-                            min="1"
                           />
                         </td>
                         <td className="px-4 py-2 border-b">
-                          <input
+                          <PartCell
+                            label="Qty"
                             type="number"
+                            min={1}
+                            value={String(part.quantity)}
+                            onChange={v => handleUpdatePart(property, partIndex, 'quantity', parseInt(v, 10) || 1)}
                             className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
-                            value={part.priority}
-                            onChange={(e) =>
-                              handleUpdatePart(property, partIndex, 'priority', parseInt(e.target.value) || 1)
-                            }
-                            min="1"
                           />
                         </td>
-                        {/* Eplanix column: OrderNumber or Designation3 */}
                         <td className="px-4 py-2 border-b">
-                          <input
-                            type="text"
-                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-blue-50"
+                          <PartCell
+                            label="Priority"
+                            type="number"
+                            min={1}
+                            value={String(part.priority)}
+                            onChange={v => handleUpdatePart(property, partIndex, 'priority', parseInt(v, 10) || 1)}
+                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                          />
+                        </td>
+                        {/* SIM-TABLE: OrderNumber or Designation3, editable —
+                            a manual edit sticks until this part is replaced
+                            (handlePartSelect always builds a fresh PartInfo,
+                            which starts without simTableOverride). */}
+                        <td className="px-4 py-2 border-b">
+                          <PartCell
+                            label="SIM-TABLE"
+                            onChange={v => handleUpdatePart(property, partIndex, 'simTableOverride', v)}
                             value={
-                              (part.fullData?.OrderNumber && 
-                               part.fullData.OrderNumber !== '-' && 
-                               part.fullData.OrderNumber !== '_' && 
-                               part.fullData.OrderNumber.trim() !== '') 
-                                ? part.fullData.OrderNumber 
-                                : (part.fullData?.Designation3 || '')
+                              part.simTableOverride !== undefined
+                                ? part.simTableOverride
+                                : (part.fullData?.OrderNumber &&
+                                   part.fullData.OrderNumber !== '-' &&
+                                   part.fullData.OrderNumber !== '_' &&
+                                   part.fullData.OrderNumber.trim() !== '')
+                                  ? part.fullData.OrderNumber
+                                  : (part.fullData?.Designation3 || '')
                             }
-                            readOnly
-                            title="Eplanix (Order Number or Designation 3)"
+                            className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-blue-50"
                           />
                         </td>
                         {/* Description column from SQL Server */}
                         <td className="px-4 py-2 border-b">
-                          <input
-                            type="text"
+                          {/* The longest value in the row by far, so its panel
+                              gets several lines rather than one. */}
+                          <PartCell
+                            label="Description"
+                            multiline
+                            source="From the EPLAN parts database (note)"
+                            value={descriptionOf(part)}
                             className="w-full border border-gray-300 rounded px-2 py-1 text-sm bg-gray-50"
-                            value={part.fullData?.Description || ''}
-                            readOnly
-                            title="Description from SQL Server"
                           />
                         </td>
                         <td className="px-4 py-2 border-b">
@@ -1017,6 +1315,42 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           </tbody>
         </table>
       </div>
+
+      <PanelFrame
+        id="template-graphic"
+        title="Template graphic"
+        menuLabel="Template graphic"
+        group="Create Template"
+        note="The whole cell, drawn the way a feeder built on it will be."
+        side="right"
+        className="w-80 shrink-0 border-0 bg-transparent"
+        bodyClassName="pt-2 flex-1 overflow-y-auto"
+      >
+        <PartSchematicPanel
+          bare
+          template={template}
+          tier={template.type}
+          parts={partRefs}
+          selected={shownPart}
+          onSelect={setSelectedPart}
+          onSymbolChange={changePartSymbol}
+          onOpenGraphic={setGraphicSymbols}
+        />
+      </PanelFrame>
+      </div>
+
+      {/* One window, for the whole template — not one per part. */}
+      {graphicSymbols && (
+        <TemplateGraphicEditor
+          template={template}
+          tier={template.type}
+          symbols={graphicSymbols}
+          savedEdits={projectData.drawingEdits}
+          canEdit={isCurrentRevisionEditable}
+          onSaveEdits={saveTemplateGraphic}
+          onClose={() => setGraphicSymbols(null)}
+        />
+      )}
 
       <PartSelectionDialog
         isOpen={dialogState.isOpen}

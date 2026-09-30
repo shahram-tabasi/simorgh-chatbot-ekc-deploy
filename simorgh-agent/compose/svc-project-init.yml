@@ -5,10 +5,8 @@
 # =============================================================================
 services:
   project-init:
-    build:
-      context: ..
-      dockerfile: project-init-service/Dockerfile
-    image: simorgh-project-init:local
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-project-init:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: project-init
     expose:
       - "8022"

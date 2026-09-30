@@ -5,7 +5,7 @@
 // views and tables:
 //
 //   View_Project_Main                 the OE project
-//   view_scope + CODING_SECONDARY_GRP_TB   the switchgear (scope) and its type
+//   view_scope + CODING_SECONDARY_GRP_TB   the switchgear (scope), its name and its type
 //   technical_project_identity_       project-wide technical settings
 //   technical_panel_identity          the panel's own specification
 //   TECHNICAL_PROPERTIES              lookup titles for the coded fields above
@@ -19,10 +19,13 @@
 // with its device rows, and the templates behind them. Read-only throughout —
 // nothing here writes to TPMS.
 
+import { deadline, MYSQL_PING_TIMEOUT_MS } from './dbTimeout.js';
+
 // Equipment slot → template property, in the order the Create Template screen
 // lays them out. Slots 1‑17 line up with Simorgh's LV list exactly; slots 18
 // (F.C/soft starter) and 19 (surge arrester) have no LV property of their own,
 // so they land in the two spare rows LV has beyond MV's five.
+
 export const LV_SLOT_PROPERTIES = {
   1: 'CB ORDER',
   2: 'ACCESSORY',
@@ -139,6 +142,13 @@ export function buildLines(joinedRows) {
       priority: Number(row.priority) || 0,
       ecode: str(row.Ecode),
       scode: str(row.SCODE),
+      // BRAND_DES is "برند" in the view's own schema comments — the maker of
+      // the part, as against SCODE, which is "کد سازنده", the maker's code for
+      // it. They are different fields and the template needs both: the code is
+      // the order number, the brand is the manufacturer. This was never
+      // fetched, so the manufacturer arrived empty and a brand name read as
+      // though it were the order.
+      brand: str(row.BRAND_DES),
       secDes: str(row.SEC_DES),
       engDes: str(row.ENG_DES),
       shrDes: str(row.SHR_DES),
@@ -320,7 +330,7 @@ export function buildImportPayload({
   const deviceProperties = mapPanelToDeviceProperties(panelRow, projectIdentityRow, resolve);
   delete deviceProperties.__designTemperature;
 
-  const scopeName = str(scopeRow?.scopeName) || str(lines[0]?.scopeName) || 'Switchgear';
+  const scopeName = str(scopeRow?.scopeName) || str(scopeRow?.TAG) || 'Switchgear';
 
   return {
     project: {
@@ -428,17 +438,19 @@ export const SQL = {
     FROM View_Project_Main
     WHERE IDProjectMain = ?`,
 
-  scope: `
+  // A switchgear's name is read from view_scope, never from View_draft.
+  // The draft rows carry a copy of it, but only a panel somebody has drawn
+  // lines for has any drafts — a panel with none came out as "Switchgear 42",
+  // and a panel renamed in TPMS kept its old name on every old draft. The
+  // column holding the name is found once per server (see scopeNameColumn),
+  // so these statements are written against it.
+  scope: col => `
     SELECT vs.IDProjectMain, vs.IDProjectScope, vs.SW_Type, vs.Cell_No, vs.TAG,
+           vs.\`${col}\` AS scopeName,
            c.ENG_DES AS swTypeName
     FROM view_scope vs
     LEFT JOIN CODING_SECONDARY_GRP_TB c ON c.ID = vs.SW_Type
     WHERE vs.IDProjectMain = ? AND vs.IDProjectScope = ?
-    LIMIT 1`,
-
-  scopeName: `
-    SELECT scopeName FROM View_draft
-    WHERE Tablo_ID = ? AND scopeName IS NOT NULL AND scopeName <> ''
     LIMIT 1`,
 
   panel: `
@@ -459,7 +471,7 @@ export const SQL = {
            d.cable_size, d.cb_rating, d.contactor_rating, d.overLoad_rating,
            d.module_type, d.templateName, d.ordering,
            e.equipment, e.label, e.SCODE, e.SEC_DES, e.ENG_DES, e.SHR_DES,
-           e.priority, e.QTY, e.Ecode,
+           e.priority, e.QTY, e.Ecode, e.BRAND_DES,
            t.lable AS tlabel
     FROM View_draft d
     LEFT JOIN View_draft_Equipment e ON e.draftId = d.ID
@@ -470,6 +482,34 @@ export const SQL = {
         ON m.ECODE = l.ECODE AND m.id = l.id
     ) t ON t.ECODE = e.Ecode
     WHERE d.Project_ID = ? AND d.Tablo_ID = ? AND d.revision = ?
+    ORDER BY d.ordering, d.ID, e.equipment, e.priority`,
+
+  // One switchgear as it stood at a project revision: its lines at the
+  // newest revision *it* has up to that one. TPMS numbers revisions per
+  // switchgear — a panel drafted at REV 1 and never touched again has no
+  // lines "at REV 5", yet at REV 5 it is still there, exactly as REV 1 left
+  // it. Read at the exact number, every such panel dropped out of the
+  // project: 84 panels in TPMS came across as the 14 revised last.
+  linesUpTo: `
+    SELECT d.ID AS draftId, d.scopeName, d.bus_section, d.feeder_no, d.wiring_type,
+           d.rating_power, d.flc, d.tag, d.Designation, d.Module, d.Size, d.sfd_hfd,
+           d.cable_size, d.cb_rating, d.contactor_rating, d.overLoad_rating,
+           d.module_type, d.templateName, d.ordering,
+           e.equipment, e.label, e.SCODE, e.SEC_DES, e.ENG_DES, e.SHR_DES,
+           e.priority, e.QTY, e.Ecode, e.BRAND_DES,
+           t.lable AS tlabel
+    FROM View_draft d
+    LEFT JOIN View_draft_Equipment e ON e.draftId = d.ID
+    LEFT JOIN (
+      SELECT l.ECODE, l.lable
+      FROM Technical_draft_lable_eplan_TB l
+      JOIN (SELECT ECODE, MAX(id) AS id FROM Technical_draft_lable_eplan_TB GROUP BY ECODE) m
+        ON m.ECODE = l.ECODE AND m.id = l.id
+    ) t ON t.ECODE = e.Ecode
+    WHERE d.Project_ID = ? AND d.Tablo_ID = ? AND d.revision = (
+      SELECT MAX(x.revision) FROM View_draft x
+      WHERE x.Project_ID = ? AND x.Tablo_ID = ? AND x.revision <= ?
+    )
     ORDER BY d.ordering, d.ID, e.equipment, e.priority`,
 
   columns: `
@@ -485,7 +525,7 @@ export const SQL = {
            d.cable_size, d.cb_rating, d.contactor_rating, d.overLoad_rating,
            d.module_type, d.templateName, d.ordering,
            e.equipment, e.label, e.SCODE, e.SEC_DES, e.ENG_DES, e.SHR_DES,
-           e.priority, e.QTY, e.Ecode,
+           e.priority, e.QTY, e.Ecode, e.BRAND_DES,
            t.lable AS tlabel
     FROM View_draft d
     LEFT JOIN View_draft_Equipment e ON e.draftId = d.ID
@@ -505,17 +545,11 @@ export const SQL = {
     WHERE Project_ID = ? AND revision IS NOT NULL
     ORDER BY revision`,
 
-  // Its switchgears, as the drafts name them.
-  projectScopes: `
-    SELECT DISTINCT Tablo_ID AS scopeId, scopeName
-    FROM View_draft
-    WHERE Project_ID = ? AND scopeName IS NOT NULL AND scopeName <> ''
-    ORDER BY scopeName`,
-
-  // Every switchgear of a project with its type and cell count, in one read
-  // instead of one read per switchgear.
-  projectScopeDetails: `
+  // Every switchgear of a project with its name, type and cell count, in one
+  // read instead of one read per switchgear.
+  projectScopeDetails: col => `
     SELECT vs.IDProjectScope AS scopeId, vs.SW_Type, vs.Cell_No, vs.TAG,
+           vs.\`${col}\` AS scopeName,
            c.ENG_DES AS swTypeName
     FROM view_scope vs
     LEFT JOIN CODING_SECONDARY_GRP_TB c ON c.ID = vs.SW_Type
@@ -545,11 +579,12 @@ export const SQL = {
     FROM View_Project_Main
     ORDER BY Project_Name`,
 
-  scopeList: `
-    SELECT DISTINCT Tablo_ID AS value, scopeName AS text
-    FROM View_draft
-    WHERE Project_ID = ? AND scopeName IS NOT NULL AND scopeName <> ''
-    ORDER BY scopeName`,
+  scopeList: col => `
+    SELECT DISTINCT IDProjectScope AS value,
+           COALESCE(NULLIF(\`${col}\`, ''), TAG, CONCAT('Switchgear ', IDProjectScope)) AS text
+    FROM view_scope
+    WHERE IDProjectMain = ?
+    ORDER BY text`,
 
   revisionList: `
     SELECT DISTINCT revision AS value, revision AS text
@@ -557,6 +592,103 @@ export const SQL = {
     WHERE Tablo_ID = ? AND revision IS NOT NULL
     ORDER BY revision`,
 };
+
+// Which column of view_scope holds the switchgear's name.
+//
+// The view is TPMS's and its column names are not ours to fix, so rather than
+// guess one and fail every read on a server where it is spelled otherwise,
+// the view's own columns are read once and the name is picked from them.
+// TPMS_SCOPE_NAME_COLUMN names it outright when an office knows better.
+const SCOPE_NAME_CANDIDATES = [
+  'scopename', 'scope_name', 'scope', 'scope_title', 'name', 'title',
+  'panel_name', 'panelname', 'tablo_name', 'tabloname', 'tag',
+];
+let scopeNameColumnPromise = null;
+
+export function pickScopeNameColumn(columns) {
+  const byLower = new Map((columns || []).map(c => [String(c).toLowerCase(), String(c)]));
+  for (const candidate of SCOPE_NAME_CANDIDATES) {
+    if (byLower.has(candidate)) return byLower.get(candidate);
+  }
+  return 'TAG';
+}
+
+async function scopeNameColumn(pool) {
+  const forced = String(process.env.TPMS_SCOPE_NAME_COLUMN || '').trim();
+  if (/^\w+$/.test(forced)) return forced;
+  if (!scopeNameColumnPromise) {
+    scopeNameColumnPromise = (async () => {
+      const [rows] = await pool.query(
+        `SELECT COLUMN_NAME AS name FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND LOWER(TABLE_NAME) = 'view_scope'`);
+      const column = pickScopeNameColumn(rows.map(r => r.name));
+      console.log(`ℹ️  TPMS: switchgear names are read from view_scope.${column}`);
+      return column;
+    })().catch(err => { scopeNameColumnPromise = null; throw err; });
+  }
+  return scopeNameColumnPromise;
+}
+
+const TPMS_QUERY_TIMEOUT_MS = Number(process.env.TPMS_QUERY_TIMEOUT_MS || 60000);
+
+// mysql2's pool has no default query timeout (see mysqlConfig in server.js),
+// so a stuck TPMS query would otherwise hold one of the 10 pool connections
+// indefinitely, starving every other request. Wrapping execute/query here —
+// rather than editing each call site below — puts a bound on every one of
+// them at once.
+//
+// The timeout alone still leaves the caller waiting the full minute for a
+// failure that is knowable in milliseconds. A pooled socket to TPMS can be
+// dead on arrival — dropped in transit while idle, with nothing on either end
+// told about it (see the keepalive note on mysqlConfig in server.js) — and
+// mysql2 will happily hand it over, at which point the query goes nowhere and
+// the request burns the whole TPMS_QUERY_TIMEOUT_MS before 500ing. Every
+// retry draws another socket from the same pool and does the same thing.
+//
+// So check the connection is alive before trusting it with a query. On a
+// healthy LAN connection the ping is a sub-millisecond round-trip; on a dead
+// one it fails in MYSQL_PING_TIMEOUT_MS and the socket is destroyed rather
+// than released, which takes it out of the pool for good and lets the next
+// attempt dial a fresh one. That turns a hard 500 into a recovery the caller
+// never sees.
+async function liveConnection(pool, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    // Outside the try on purpose: a getConnection() failure means the host
+    // itself is unreachable, which retrying here would only slow down.
+    const conn = await pool.getConnection();
+    try {
+      await deadline(conn.ping(), MYSQL_PING_TIMEOUT_MS, 'TPMS ping');
+      return conn;
+    } catch (err) {
+      lastErr = err;
+      try { conn.destroy(); } catch { /* already gone */ }
+      console.warn(`⚠️ TPMS: discarded a dead pooled connection (${err.message})`);
+    }
+  }
+  throw lastErr ?? new Error('no usable TPMS connection');
+}
+
+function withQueryTimeout(pool) {
+  const wrapSql = sql => (typeof sql === 'string' ? { sql, timeout: TPMS_QUERY_TIMEOUT_MS } : sql);
+  const run = method => async (sql, params) => {
+    const conn = await liveConnection(pool);
+    let fatal = false;
+    try {
+      return await conn[method](wrapSql(sql), params);
+    } catch (err) {
+      // A query timeout is fatal in mysql2's eyes — it cannot cancel the
+      // statement server-side, so the socket is left out of step with the
+      // protocol and must not be reused.
+      fatal = Boolean(err && err.fatal);
+      throw err;
+    } finally {
+      if (fatal) { try { conn.destroy(); } catch { /* already gone */ } }
+      else conn.release();
+    }
+  };
+  return { execute: run('execute'), query: run('query') };
+}
 
 // Registers the TPMS routes. `getPool` returns the shared mysql2 pool.
 export function registerTpmsImportRoutes(app, getPool) {
@@ -566,9 +698,10 @@ export function registerTpmsImportRoutes(app, getPool) {
   const listRoute = (path, sql, paramFrom) => {
     app.get(path, async (req, res) => {
       try {
-        const pool = await getPool();
+        const pool = withQueryTimeout(await getPool());
         const params = paramFrom ? [paramFrom(req)] : [];
-        const [rows] = await pool.execute(sql, params);
+        const statement = typeof sql === 'function' ? sql(await scopeNameColumn(pool)) : sql;
+        const [rows] = await pool.execute(statement, params);
         res.json({ success: true, count: rows.length, items: rows, projects: rows, scopes: rows, revisions: rows });
       } catch (err) {
         console.error(`❌ Error in ${path}:`, err.message);
@@ -592,15 +725,15 @@ export function registerTpmsImportRoutes(app, getPool) {
     }
     try {
       const started = Date.now();
-      const pool = await getPool();
+      const pool = withQueryTimeout(await getPool());
       const one = async (sql, params) => (await pool.execute(sql, params))[0][0] || null;
       const many = async (sql, params) => (await pool.execute(sql, params))[0];
 
-      const [projectRow, projectIdentityRow, scopeRows, revisionRows, columnRows] =
+      const nameColumn = await scopeNameColumn(pool);
+      const [projectRow, projectIdentityRow, revisionRows, columnRows] =
         await Promise.all([
           one(SQL.project, [projectId]),
           one(SQL.projectIdentity, [projectId]),
-          many(SQL.projectScopes, [projectId]),
           many(SQL.projectRevisions, [projectId]),
           many(SQL.columns, [projectId]),
         ]);
@@ -615,16 +748,14 @@ export function registerTpmsImportRoutes(app, getPool) {
       // switchgears now come from a single read, and the panel specification
       // is fetched per switchgear on its own route (see below), so no single
       // request grows with the size of the project.
-      const [detailRows] = await pool.query(SQL.projectScopeDetails, [projectId]);
+      const [detailRows] = await pool.query(SQL.projectScopeDetails(nameColumn), [projectId]);
       const details = new Map(detailRows.map(r => [Number(r.scopeId), r]));
-      const named = new Map(scopeRows.map(r => [Number(r.scopeId), r.scopeName]));
-      const ids = new Set([...details.keys(), ...named.keys()]);
 
-      const scopes = [...ids].map(id => {
+      const scopes = [...details.keys()].map(id => {
         const detail = details.get(id) || {};
         return {
           scopeId: id,
-          scopeName: str(named.get(id)) || str(detail.TAG) || `Switchgear ${id}`,
+          scopeName: str(detail.scopeName) || str(detail.TAG) || `Switchgear ${id}`,
           scopeRow: { ...detail, IDProjectScope: id },
           panelRow: null,          // read per switchgear, on its own route
         };
@@ -663,7 +794,7 @@ export function registerTpmsImportRoutes(app, getPool) {
       return res.status(400).json({ success: false, error: 'projectId and scopeId are required' });
     }
     try {
-      const pool = await getPool();
+      const pool = withQueryTimeout(await getPool());
       const one = async (sql, params) => (await pool.execute(sql, params))[0][0] || null;
       const [panelRow, projectIdentityRow] = await Promise.all([
         one(SQL.panel, [projectId, scopeId]),
@@ -704,13 +835,14 @@ export function registerTpmsImportRoutes(app, getPool) {
       try { return await fn(); } finally { timings[name] = Date.now() - t; }
     };
     try {
-      const pool = await getPool();
+      const pool = withQueryTimeout(await getPool());
       const projectRow = await time('project', async () =>
         (await pool.execute(SQL.project, [projectId]))[0][0] || null);
       if (!projectRow) return res.status(404).json({ success: false, error: 'No such project in TPMS' });
 
+      const nameColumn = await scopeNameColumn(pool);
       const scopes = await time('switchgears', async () =>
-        (await pool.query(SQL.projectScopeDetails, [projectId]))[0]);
+        (await pool.query(SQL.projectScopeDetails(nameColumn), [projectId]))[0]);
       const perRevision = await time('revisions', async () =>
         (await pool.query(SQL.statsRevisions, [projectId]))[0]);
       const parts = await time('parts', async () =>
@@ -748,6 +880,9 @@ export function registerTpmsImportRoutes(app, getPool) {
     // read — it is the request that times out on the way through nginx — so
     // the client walks it switchgear by switchgear and each read stays small.
     const scopeId = req.query.scopeId != null ? Number(req.query.scopeId) : null;
+    // `upTo=1`: each switchgear at its own newest revision up to this one,
+    // rather than only the switchgears that have lines at exactly this one.
+    const upTo = req.query.upTo === '1' || req.query.upTo === 'true';
     if (!Number.isFinite(projectId) || !Number.isFinite(revision)) {
       return res.status(400).json({ success: false, error: 'projectId and revision are required' });
     }
@@ -755,16 +890,23 @@ export function registerTpmsImportRoutes(app, getPool) {
       return res.status(400).json({ success: false, error: 'scopeId must be a number' });
     }
     try {
-      const pool = await getPool();
+      const pool = withQueryTimeout(await getPool());
       const started = Date.now();
       const [joinedRows] = scopeId != null
-        ? await pool.query(SQL.lines, [projectId, scopeId, revision])
+        ? (upTo
+            ? await pool.query(SQL.linesUpTo, [projectId, scopeId, projectId, scopeId, revision])
+            : await pool.query(SQL.lines, [projectId, scopeId, revision]))
         : await pool.query(SQL.linesForRevision, [projectId, revision]);
       if (scopeId != null) {
         for (const row of joinedRows) if (row.tabloId == null) row.tabloId = scopeId;
       }
+      // The lines carry View_draft's copy of the name; the name is view_scope's.
+      const nameColumn = await scopeNameColumn(pool);
+      const [nameRows] = await pool.query(SQL.projectScopeDetails(nameColumn), [projectId]);
+      const names = new Map(nameRows.map(r => [Number(r.scopeId), str(r.scopeName) || str(r.TAG)]));
       const switchgears = buildLinesByScope(joinedRows).map(entry => ({
         ...entry,
+        scopeName: names.get(Number(entry.scopeId)) || entry.scopeName,
         counts: {
           lines: entry.lines.length,
           parts: entry.lines.reduce(
@@ -786,33 +928,39 @@ export function registerTpmsImportRoutes(app, getPool) {
     const projectId = Number(req.query.projectId);
     const scopeId = Number(req.query.scopeId);
     const revisionId = Number(req.query.revisionId);
+    // A revision is optional. A panel TPMS holds no revision for yet is a real
+    // panel with a real specification — the feeder lines are simply not drawn
+    // up. Everything else on this route (the project, the scope, the panel,
+    // the identity, the columns) is read without a revision anyway; only the
+    // lines are revision by revision. Refusing the whole import for the want
+    // of a revision left the engineer with nothing to carry on from, when what
+    // they wanted was to carry on by hand.
+    const hasRevision = Number.isFinite(revisionId);
 
-    if (!Number.isFinite(projectId) || !Number.isFinite(scopeId) || !Number.isFinite(revisionId)) {
+    if (!Number.isFinite(projectId) || !Number.isFinite(scopeId)) {
       return res.status(400).json({
         success: false,
-        error: 'projectId, scopeId and revisionId are required',
+        error: 'projectId and scopeId are required',
       });
     }
 
     try {
-      const pool = await getPool();
+      const pool = withQueryTimeout(await getPool());
       const one = async (sql, params) => (await pool.execute(sql, params))[0][0] || null;
       const many = async (sql, params) => (await pool.execute(sql, params))[0];
+      const nameColumn = await scopeNameColumn(pool);
 
       const [projectRow, scopeRow, panelRow, projectIdentityRow, joinedRows, columnRows] =
         await Promise.all([
           one(SQL.project, [projectId]),
-          one(SQL.scope, [projectId, scopeId]),
+          one(SQL.scope(nameColumn), [projectId, scopeId]),
           one(SQL.panel, [projectId, scopeId]),
           one(SQL.projectIdentity, [projectId]),
-          many(SQL.lines, [projectId, scopeId, revisionId]),
+          hasRevision ? many(SQL.lines, [projectId, scopeId, revisionId]) : Promise.resolve([]),
           many(SQL.columns, [projectId]),
         ]);
 
-      if (scopeRow && !scopeRow.scopeName) {
-        const named = await one(SQL.scopeName, [scopeId]);
-        if (named) scopeRow.scopeName = named.scopeName;
-      }
+      if (scopeRow && !str(scopeRow.scopeName)) scopeRow.scopeName = str(scopeRow.TAG);
 
       const propertyIds = collectPropertyIds(panelRow, projectIdentityRow);
       let propertyTitles = {};
@@ -827,10 +975,10 @@ export function registerTpmsImportRoutes(app, getPool) {
 
       const payload = buildImportPayload({
         projectRow, scopeRow, panelRow, projectIdentityRow, propertyTitles,
-        joinedRows, columnRows, revisionId,
+        joinedRows, columnRows, revisionId: hasRevision ? revisionId : null,
       });
 
-      console.log(`✅ TPMS import: project ${projectId} / scope ${scopeId} / rev ${revisionId} — ` +
+      console.log(`✅ TPMS import: project ${projectId} / scope ${scopeId} / rev ${hasRevision ? revisionId : 'none'} — ` +
         `${payload.counts.lines} lines, ${payload.counts.parts} parts`);
       res.json({ success: true, ...payload });
     } catch (err) {

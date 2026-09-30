@@ -1,0 +1,399 @@
+// Sending a project to EPLAN.
+//
+// The actual EPLAN listener (AsyncTcpServer, in the Eplanix add-in) binds
+// 127.0.0.1 on the EPLAN machine — Eplanix's own MVC app gets away with
+// that because it runs on that same machine. This backend runs on a
+// different server, so it never talks to that socket directly: it posts to
+// eplan-bridge-service (see simorgh-agent/eplan-bridge-service), the
+// HTTP-to-TCP bridge already running in this stack's compose network,
+// which does the length-prefixed TCP framing and the pool bookkeeping
+// (auto-picking one of the ports Eplanix's own TcpPortResolverService hands
+// out from, so nothing here has to know or guess a port).
+//
+//   EPLAN_BRIDGE_URL       default: http://eplan-bridge:8026 (the compose
+//                          service name — works as-is inside the stack)
+//   EPLAN_BRIDGE_API_KEY   sent as X-API-Key, if the bridge was deployed
+//                          with one set
+//   EPLAN_BRIDGE_TIMEOUT_MS
+//
+// See simorgh-agent/docs/EPLAN_SEND.md for the whole path, including how
+// the bridge itself reaches EPLAN across servers (eplan-port-forwarder).
+
+const DEFAULT_BRIDGE_URL = 'http://eplan-bridge:8026';
+const DEFAULT_EPLAN_FILES_URL = 'http://techserver-mcp:8053';
+
+// Where EPLAN says it put the drawing.
+//
+// AsyncTcpServer answers with ProjectService's return value: the project path
+// prefixed by the generation type — "sld<path>", "old<path>", or for both at
+// once "sldold<sldPath>&*<oldPath>". Each path starts with the EPLAN variable
+// $(MD_Projects), which is the techserver root, so what follows is
+// "\OE12112\Drawing\MV\Single line\...\ASLD.elk": the OE share, then the
+// path inside it. Eplanix's own FinishJob view parses the identical string to
+// build its download links, including appending .elk when it is missing.
+//
+// techserver-mcp addresses files as (oenum, path-within-share), which is why
+// the two are split apart here rather than passed on as one string.
+const MD_PROJECTS = '$(MD_Projects)';
+
+function parseEplanProjects(raw) {
+  const status = String(raw || '').trim();
+  if (!status || status.toLowerCase().startsWith('error')) return [];
+
+  let parts;
+  if (status.startsWith('sldold')) {
+    parts = status.slice(6).split('&*').filter(Boolean)
+      .map((p, i) => ({ raw: p, type: i === 0 ? 'sld' : 'old' }));
+  } else if (status.startsWith('sld')) {
+    parts = [{ raw: status.slice(3), type: 'sld' }];
+  } else if (status.startsWith('old')) {
+    parts = [{ raw: status.slice(3), type: 'old' }];
+  } else {
+    return [];
+  }
+
+  return parts.map(({ raw: p, type }) => {
+    let rest = p.trim();
+    if (rest.startsWith(MD_PROJECTS)) rest = rest.slice(MD_PROJECTS.length);
+    rest = rest.replace(/^[\\/]+/, '');
+    if (!/\.elk$/i.test(rest)) rest += '.elk';
+
+    const segments = rest.split(/[\\/]+/);
+    const oenum = segments.shift() || '';
+    return {
+      type,
+      displayName: type === 'sld' ? 'Singleline Project' : 'Outline Project',
+      oenum,
+      path: segments.join('/'),
+      fileName: segments[segments.length - 1] || '',
+    };
+  }).filter(x => x.oenum && x.path);
+}
+
+
+function filesConfig() {
+  return {
+    url: String(process.env.EPLAN_FILES_URL || DEFAULT_EPLAN_FILES_URL).replace(/\/$/, ''),
+    apiKey: process.env.EPLAN_FILES_API_KEY || '',
+    timeoutMs: Number(process.env.EPLAN_DOWNLOAD_TIMEOUT_MS) || 900000,
+  };
+}
+
+function bridgeConfig() {
+  const url = String(process.env.EPLAN_BRIDGE_URL || DEFAULT_BRIDGE_URL).replace(/\/$/, '');
+  return {
+    url,
+    apiKey: process.env.EPLAN_BRIDGE_API_KEY || '',
+    timeoutMs: Number(process.env.EPLAN_BRIDGE_TIMEOUT_MS) || 120000,
+  };
+}
+
+function bridgeHeaders(apiKey) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['X-API-Key'] = apiKey;
+  return headers;
+}
+
+async function callBridge(path, { method = 'GET', body, apiKey, timeoutMs } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(path, {
+      method,
+      headers: bridgeHeaders(apiKey),
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    const raw = await response.text();
+    let parsed;
+    try { parsed = raw ? JSON.parse(raw) : {}; } catch { parsed = { detail: raw.slice(0, 500) }; }
+    return { ok: response.ok, status: response.status, body: parsed };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── The records, kept in Mongo ────────────────────────────────────────────
+//
+// What EPLAN draws is the project as it stands here — the one in this app's
+// Mongo, with every correction the engineer made to it — never TPMS's copy.
+// So the EplanData records are written to Mongo first, one document per
+// project, switchgear and revision, and the send reads them back from there.
+// Nothing on the way to EPLAN goes to TPMS; the stored document is also the
+// record of exactly what was handed over, which is what somebody asks for the
+// first time a drawing disagrees with the project.
+const EPLAN_DATA = 'eplanData';
+
+function eplanDataKey({ projectId, equipmentId, revision }) {
+  return {
+    projectId: String(projectId),
+    equipmentId: String(equipmentId),
+    revision: revision == null ? '' : String(revision),
+  };
+}
+
+export function registerEplanRoutes(app, getDb) {
+  // Store (or replace) the records for one switchgear at one revision.
+  app.put('/api/eplan/data', async (req, res) => {
+    const { projectId, equipmentId, revision, scopeName, records } = req.body || {};
+    if (!projectId || !equipmentId || !Array.isArray(records)) {
+      return res.status(400).json({
+        success: false, error: 'projectId, equipmentId and a records array are required',
+      });
+    }
+    try {
+      const db = getDb();
+      const key = eplanDataKey({ projectId, equipmentId, revision });
+      await db.collection(EPLAN_DATA).updateOne(
+        key,
+        { $set: {
+            ...key,
+            scopeName: String(scopeName || records[0]?.ScopeName || ''),
+            records,
+            recordCount: records.length,
+            updatedAt: new Date().toISOString(),
+        } },
+        { upsert: true },
+      );
+      res.json({ success: true, records: records.length });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // What is stored — the last records written for a switchgear.
+  app.get('/api/eplan/data', async (req, res) => {
+    const { projectId, equipmentId } = req.query;
+    if (!projectId || !equipmentId) {
+      return res.status(400).json({ success: false, error: 'projectId and equipmentId are required' });
+    }
+    try {
+      const db = getDb();
+      const key = eplanDataKey(req.query);
+      const doc = req.query.revision != null
+        ? await db.collection(EPLAN_DATA).findOne(key)
+        : await db.collection(EPLAN_DATA).find({ projectId: key.projectId, equipmentId: key.equipmentId })
+            .sort({ updatedAt: -1 }).limit(1).next();
+      res.json({ success: true, found: !!doc, ...(doc ? { data: doc } : {}) });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Where the app would send, and whether an API key is configured — the
+  // dialog shows this, there is nothing left for the user to pick.
+  app.get('/api/eplan/target', (req, res) => {
+    const { url, apiKey } = bridgeConfig();
+    res.json({ url, authenticated: !!apiKey });
+  });
+
+  // Is an EPLAN instance currently available to draw with? Asks the
+  // bridge's own pool check rather than opening a socket from here — this
+  // backend never holds one itself.
+  app.post('/api/eplan/ping', async (req, res) => {
+    const { url, apiKey } = bridgeConfig();
+    try {
+      const result = await callBridge(`${url}/port/resolve`, {
+        method: 'POST', body: { username: req.body?.userName || 'simorgh' }, apiKey, timeoutMs: 10000,
+      });
+      if (result.ok) {
+        return res.json({ reachable: true, target: `${result.body.host}:${result.body.port}` });
+      }
+      return res.json({ reachable: false, error: result.body.detail || `bridge answered ${result.status}` });
+    } catch (err) {
+      const timedOut = err.name === 'AbortError';
+      return res.json({
+        reachable: false,
+        error: timedOut ? 'Timed out waiting for the EPLAN bridge.' : `Could not reach the EPLAN bridge: ${err.message}`,
+      });
+    }
+  });
+
+  // The records themselves.
+  app.post('/api/eplan/send', async (req, res) => {
+    const { projectName, userName, projectId, equipmentId, revision } = req.body || {};
+    let { data } = req.body || {};
+
+    // Sent by reference: the records are the ones stored in Mongo for this
+    // switchgear, not whatever came in the request.
+    if (projectId && equipmentId) {
+      try {
+        const doc = await getDb().collection(EPLAN_DATA)
+          .findOne(eplanDataKey({ projectId, equipmentId, revision }));
+        if (!doc) {
+          return res.status(404).json({
+            success: false,
+            error: 'No EPLAN data is stored for this switchgear yet — it is written when the project is sent.',
+          });
+        }
+        data = doc.records;
+      } catch (err) {
+        return res.status(500).json({ success: false, error: `Could not read the EPLAN data: ${err.message}` });
+      }
+    }
+
+    if (!Array.isArray(data) || data.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Nothing to send — the request carried no EplanData records.',
+      });
+    }
+
+    const { url, apiKey, timeoutMs } = bridgeConfig();
+    const body = {
+      project_name: projectName || data[0]?.ProjectName || 'project',
+      username: userName || data[0]?.UserName || 'simorgh',
+      eplan_data: data,
+      // No `port`: the bridge auto-picks one from the pool, the same way
+      // TcpPortResolverService does for Eplanix's own interactive users.
+    };
+
+    try {
+      const result = await callBridge(`${url}/draw`, { method: 'POST', body, apiKey, timeoutMs });
+      const parsed = result.body;
+
+      // EPLAN answers a failed job with a Content of "Error: …" and the bridge
+      // still calls that completed. Passed on as a success it read as a
+      // drawing made, while the files at that path were the last ones EPLAN
+      // did make — the usual cause being a project that already exists
+      // there, which the add-in's CreateProject refuses to make again.
+      const eplanError = /^\s*error/i.test(String(parsed.project_path || ''))
+        ? String(parsed.project_path).trim() : null;
+      if (eplanError) {
+        return res.status(502).json({
+          success: false,
+          error: `EPLAN did not draw it — ${eplanError.replace(/^\s*error:?\s*/i, '')}. `
+            + 'If this switchgear was already drawn at this revision and revision name, EPLAN will '
+            + 'not create the same project twice: tick "Delete and draw again" (or "Update existing '
+            + 'project"), or change the revision name.',
+          existingProject: true,
+        });
+      }
+
+      if (!result.ok || parsed.status === 'failed') {
+        return res.status(result.ok ? 502 : result.status).json({
+          success: false,
+          error: parsed.detail || parsed.message || parsed.error || `The EPLAN bridge answered ${result.status}.`,
+        });
+      }
+
+      // The download buttons need an address, not the sentence the bridge
+      // composes for the status line — so the raw path is parsed into the
+      // project(s) EPLAN wrote, each one already split into the OE share and
+      // the path inside it that techserver-mcp wants.
+      const projects = parseEplanProjects(parsed.project_path);
+
+      // Remember what was drawn where, so the next send of the same switchgear
+      // at the same revision can say beforehand that the project exists.
+      if (projectId && equipmentId) {
+        try {
+          await getDb().collection(EPLAN_DATA).updateOne(
+            eplanDataKey({ projectId, equipmentId, revision }),
+            { $set: { lastSend: {
+                at: new Date().toISOString(),
+                revName: String(data[0]?.RevName ?? ''),
+                generationType: String(data[0]?.GenerationType ?? ''),
+                updateExisting: !!data[0]?.UpdateExisting,
+                projectPath: String(parsed.project_path || ''),
+            } } },
+          );
+        } catch (err) {
+          console.warn('Could not record the EPLAN send:', err.message);
+        }
+      }
+
+      return res.json({
+        success: true,
+        records: data.length,
+        status: parsed.status || 'completed',
+        jobId: parsed.job_id,
+        message: parsed.message || `${data.length} record(s) sent to EPLAN.`,
+        projects,
+      });
+    } catch (err) {
+      const timedOut = err.name === 'AbortError';
+      return res.status(504).json({
+        success: false,
+        error: timedOut
+          ? `Timed out waiting for the EPLAN bridge (${Math.round(timeoutMs / 1000)}s).`
+          : `Could not reach the EPLAN bridge at ${url}: ${err.message}`,
+      });
+    }
+  });
+
+  // ── Downloading what EPLAN produced ──────────────────────────────────────
+  //
+  // The drawings land on the techserver SMB share, which this backend has no
+  // credentials for and no SMB client in, so the bytes are streamed through
+  // techserver-mcp rather than either being duplicated here — the same service
+  // that already reads that host for everything else.
+  //
+  // Streamed, not buffered: an EPLAN project zip is routinely hundreds of
+  // megabytes, and reading one into memory to hand it on would be the largest
+  // allocation this process ever makes, once per click.
+  const download = (route, endpoint, what) => {
+    app.get(route, async (req, res) => {
+      const { oenum, path: projectPath } = req.query;
+      if (!oenum || !projectPath) {
+        return res.status(400).json({
+          success: false,
+          error: 'oenum and path are both required — they come from the send response.',
+        });
+      }
+
+      const { url, apiKey, timeoutMs } = filesConfig();
+      const target = `${url}${endpoint}?oenum=${encodeURIComponent(oenum)}`
+                   + `&path=${encodeURIComponent(projectPath)}`;
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const upstream = await fetch(target, {
+          signal: controller.signal,
+          headers: apiKey ? { 'X-API-Key': apiKey } : {},
+        });
+
+        if (!upstream.ok) {
+          const detail = await upstream.text().catch(() => '');
+          let parsed; try { parsed = JSON.parse(detail); } catch { parsed = null; }
+          return res.status(upstream.status).json({
+            success: false,
+            error: parsed?.detail || `Could not fetch the ${what} (${upstream.status}).`,
+          });
+        }
+
+        for (const header of ['content-type', 'content-disposition', 'content-length']) {
+          const value = upstream.headers.get(header);
+          if (value) res.setHeader(header, value);
+        }
+        // Node's fetch gives a web ReadableStream; Readable.fromWeb bridges it
+        // onto the response without collecting it first.
+        const { Readable } = await import('node:stream');
+        await new Promise((resolve, reject) => {
+          const body = Readable.fromWeb(upstream.body);
+          body.on('error', reject);
+          res.on('finish', resolve);
+          res.on('close', resolve);
+          body.pipe(res);
+        });
+      } catch (err) {
+        const timedOut = err.name === 'AbortError';
+        // Headers are already out once streaming starts; destroying is all
+        // that is left, and it surfaces to the browser as a failed download
+        // rather than a silently truncated file.
+        if (res.headersSent) return res.destroy(err);
+        return res.status(504).json({
+          success: false,
+          error: timedOut
+            ? `Timed out fetching the ${what} (${Math.round(timeoutMs / 1000)}s).`
+            : `Could not fetch the ${what}: ${err.message}`,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+  };
+
+  download('/api/eplan/pdf', '/eplan/pdf', 'PDF');
+  download('/api/eplan/zip', '/eplan/zip', 'project archive');
+}

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The uninstaller the setup program leaves in the install folder. .NET
+       Framework 4.8, which every supported Windows already has, so neither
+       program needs a runtime installed first. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>SimorghUninstall</AssemblyName>
+    <RootNamespace>SimorghUninstall</RootNamespace>
+    <ApplicationIcon>..\..\build\icon.ico</ApplicationIcon>
+    <Product>Simorgh Design Suite</Product>
+    <Company>Simorgh Technology</Company>
+    <Copyright>© Simorgh Technology</Copyright>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\Product.cs" Link="Product.cs" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Windows.Forms" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

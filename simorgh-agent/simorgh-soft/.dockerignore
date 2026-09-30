@@ -4,3 +4,7 @@ simorgh-frontend/dist
 .git
 *.log
 .env
+# The EPLAN handbook. Reference material for the people building this, read
+# here and never by the app — 28 MB of PDFs that would otherwise be uploaded
+# to the daemon on every single build of this image.
+docs

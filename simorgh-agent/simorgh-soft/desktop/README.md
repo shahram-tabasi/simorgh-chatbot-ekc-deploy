@@ -12,14 +12,77 @@ later from **File → Change server address…**.
 
 ## Building the installer
 
-The `.exe` is an NSIS installer, which electron-builder can only produce on
-Windows (or on Linux with wine, which the deploy environment does not have).
+The `.exe` is an NSIS installer. Any of these three produce the same file.
 
-**Through GitHub Actions (no Windows machine needed)**
+**On the Linux server (one command)**
+
+```bash
+cd simorgh-agent/simorgh-soft/desktop
+./build-win.sh                                        # asks for the server on first run
+./build-win.sh http://192.168.1.68/simorgh-design-suite/   # or opens it by itself
+```
+
+It needs wine once — including its 32-bit side, because the NSIS stub and
+rcedit (which writes the icon and version into the .exe) are 32-bit programs:
+
+```bash
+sudo dpkg --add-architecture i386
+sudo apt-get update
+sudo apt-get install -y wine libgd3:i386 wine32:i386
+```
+
+Everything else — the Electron binaries, NSIS, rcedit — electron-builder
+downloads on the first run and keeps in `~/.cache/electron-builder`. The build
+takes about two minutes and lands in
+`release/SimorghDesignSuite-Setup-<version>.exe` (~76 MB).
+
+**From GitHub — there is always one waiting**
+
+Every push that touches this folder builds the installer and publishes it, so
+the newest build is always at the same address:
+
+> **Releases → `desktop-latest`** →
+> `SimorghDesignSuite-Setup-<version>.exe`
+
+```
+https://github.com/shahram-tabasi/simorgh-chatbot-ekc-deploy/releases/tag/desktop-latest
+```
+
+The same file is attached to the run as an artifact too — Actions → **Desktop
+installer (Windows)** → the newest run → **Artifacts** — but that copy is the
+first thing to go when the account's Actions artifact storage fills up (the
+upload then fails with *Artifact storage quota has been hit*, which is why the
+release is the one to rely on). Freeing that quota is a matter of deleting old
+artifacts under Actions, or lowering the retention in
+Settings → Actions → *Artifact and log retention*.
+
+**Building one on demand**
 
 1. Actions → **Desktop installer (Windows)** → *Run workflow*.
-   (Pushing a tag that starts with `desktop-v` runs it too.)
-2. Download **SimorghDesignSuite-Windows-Setup** from the finished run.
+   * **Server address** — the site this build should open, e.g.
+     `http://192.168.1.68/simorgh-design-suite/`. Leave it blank and the app
+     asks on first run, as it always has.
+   * Run it on whichever branch carries the version you want to ship.
+2. Download **SimorghDesignSuite-Setup-<version>** from the finished run
+   and unzip it — the `.exe` is inside.
+
+   * **Also publish it as a GitHub release** — ticking this attaches the `.exe`
+     to a release tagged `desktop-v<version>`, which gives it a plain URL to
+     hand out instead of a zipped artifact.
+
+**Serving it from the app itself**
+
+The suite offers the installer for download from its own footer. Put the `.exe`
+in `simorgh-backend/downloads/` on the server — the folder is mounted into the
+container, so it is a copy, not a rebuild:
+
+```bash
+scp SimorghDesignSuite-Setup-1.0.0.exe \
+    ubuntu@server:~/simorgh-chatbot-ekc-deploy/simorgh-agent/simorgh-soft/simorgh-backend/downloads/
+```
+
+Whatever `.exe` is newest in that folder is what `/api/desktop/latest` reports
+and the download button serves.
 
 **On a Windows machine**
 
@@ -29,9 +92,54 @@ npm install
 npm run dist:win
 ```
 
+To have that build open a particular server by itself, write the address beside
+`main.js` before building:
+
+```powershell
+'{ "url": "http://192.168.1.68/simorgh-design-suite/" }' | Set-Content server.json
+```
+
 The installer lands in `desktop\release\SimorghDesignSuite-Setup-<version>.exe`.
 It installs per-user (no admin rights), lets the user pick the folder, and adds
 Desktop and Start-menu shortcuts.
+
+## How it runs
+
+Chosen on first start, changeable from **File → Settings…**:
+
+- **On this computer.** The app carries the whole suite in `resources/bundle`:
+  the built frontend, the backend (`simorgh-backend`, with its node_modules)
+  and `mongod.exe`. It starts MongoDB (data in `%APPDATA%\Simorgh Design
+  Suite\database`) and the backend on 127.0.0.1, and opens the suite from them.
+  Settings holds the projects database (built in, or a MongoDB server), the
+  TPMS (MySQL) connection and where the EPLAN parts come from:
+  - an **Access file** (tblPart) — added to by hand in Microsoft Access, read
+    again whenever it changes; **Create the Access file from SQL Server…**
+    makes one from the office's parts database once (Windows' own Jet engine,
+    nothing to install);
+  - or **SQL Server**, read live.
+  Empty fields mean the office defaults. Logs: **File → Open logs folder**.
+- **Company server.** The window onto a suite a server runs, as before.
+
+The bundle is built by the workflow (frontend, backend, MongoDB) and checked by
+`scripts/smoke-local.mjs` before it is packed.
+
+## The installer
+
+`installer/` is the office's own setup program (.NET Framework 4.8, part of
+Windows): the five screens of its artwork — Welcome, License, Components,
+Install, Finish — built in code from `installer/Setup/Assets`, which are cut
+from `simorgh-frontend/public/1.png … 5.png`. It carries the packed app,
+installs per user under `%LOCALAPPDATA%\Programs\Simorgh Design Suite`
+(no administrator), removes an older NSIS installation first, makes the
+shortcuts chosen on the Components screen and registers an uninstaller in
+Apps & features. Uninstalling keeps the projects database and settings unless
+asked to remove them. `SimorghSetup.exe --screens <folder>` draws every screen
+to PNG; the workflow uploads those as `setup-screens`.
+
+- **Icon** (`build/icon.ico`, `build/icon.png`): the Simorgh in white.
+- **Welcome window** (`welcome.html`): shown every time the app starts, while
+  the suite starts and loads behind it.
 
 ## Running it during development
 
@@ -42,7 +150,8 @@ SIMORGH_URL=http://localhost/simorgh-design-suite/ npm start
 ```
 
 `SIMORGH_URL` only sets what the first-run dialog suggests; once an address is
-saved, the saved one wins.
+saved, the saved one wins. The order is: the address the user saved →
+`SIMORGH_URL` → `server.json` baked into the build → `http://localhost/simorgh-design-suite/`.
 
 ## Version
 

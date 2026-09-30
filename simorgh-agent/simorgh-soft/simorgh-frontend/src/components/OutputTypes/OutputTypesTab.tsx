@@ -12,43 +12,14 @@ import {
   LV_DEVICE_COLS, MV_DEVICE_COLS,
   buildTierMatrix,
 } from '../../utils/tierEquipmentMatrix';
-import { buildBpmsSheets, sheetName, styleBpmsSheet } from '../../utils/bpmsExport';
+import { BpmsTier, buildBpmsSheets, sheetName, styleBpmsSheet } from '../../utils/bpmsExport';
 import { RevisionDiff, diffProjectSnapshots, buildDiffRows } from '../../utils/revisionDiff';
+// The specification's field labels live with the specification itself, so the
+// Device Library breakdown and these sheets always read the same names.
+import { DEVICE_PROP_LABELS } from '../../utils/deviceProperties';
+import { TIERS, TIER_PILL, LAYOUT_OF, type Tier } from '../../utils/tiers';
+import { appAlert } from '../shared/AppDialog';
 
-// ── Human-readable labels for DeviceLibraryProperties fields ──
-const DEVICE_PROP_LABELS: Record<string, string> = {
-  frequency:                                    'Frequency',
-  mainBusbarConfiguration:                      'Main Busbar Configuration',
-  mainBusbarRatedCurrent:                       'Main Busbar Rated Current (A)',
-  ratedShortTimeWithstandCurrent:               'Rated Short Time Withstand Current (kA)',
-  isc:                                          'ISC (kA)',
-  height:                                       'Height (mm)',
-  width:                                        'Width (mm)',
-  depth:                                        'Depth (mm)',
-  ratedImpulseWithstandVoltage:                 'Rated Impulse Withstand Voltage (kV)',
-  controlProtectionClosingTrippingSignalling:   'Control / Protection / Closing / Tripping / Signalling',
-  ratedInsulationVoltage:                       'Rated Insulation Voltage (V)',
-  serviceVoltage:                               'Service Voltage',
-  springChargingMotor:                          'Spring Charging Motor',
-  switchgearLightingSpaceHeater:                'Switchgear Lighting / Space Heater',
-  motorsSpaceHeater:                            'Motors Space Heater',
-  ratedPowerFrequencyWithstandVoltage:          'Rated Power Frequency Withstand Voltage',
-  mainBusbarSize:                               'Main Busbar Size',
-  earthBusbarSize:                              'Earth Busbar Size',
-  neutralBusbarSize:                            'Neutral Busbar Size',
-  ral:                                          'RAL',
-  incomingConnection:                           'Incoming Connection',
-  outgoingConnection:                           'Outgoing Connection',
-  ip:                                           'IP Rating',
-  switchgearAccess:                             'Switchgear Access',
-  switchgearArrangement:                        'Switchgear Arrangement',
-  busbarType:                                   'Busbar Type',
-  thermoFitCover:                               'Thermo-Fit Cover',
-  coating:                                      'Coating',
-  padLockCbOnOff:                               'Pad Lock CB On / Off',
-  padLockCbTestService:                         'Pad Lock CB Test / Service',
-  padLockHvDoor:                                'Pad Lock HV Door',
-};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const v = (val: any) => (val == null || val === '' ? '—' : String(val));
@@ -63,14 +34,18 @@ function exportTierExcel(data: ProjectData, tier: 'LV' | 'MV') {
   XLSX.writeFile(wb, `${data.projectName}_${tier}_Equipment.xlsx`);
 }
 
-// ─── BPMS export (LV only) ────────────────────────────────────────────────────
-// One sheet per LV switchgear, laid out like the hand-made BPMS workbook: the
+// ─── BPMS export ──────────────────────────────────────────────────────────────
+// The BPMS sheet for one switchgear, laid out like the hand-made workbook: the
 // line columns from Device Selection, then one row per part on that line's
-// template from Create Template.
-function exportBpmsExcel(data: ProjectData, revisionNumber?: string) {
-  const sheets = buildBpmsSheets(data, { revisionNumber });
+// template from Create Template. One switchgear per file, because that is what
+// a BPMS sheet is — it is read beside one panel's own drawing set, and a
+// workbook holding every switchgear in the project is a different document.
+function exportBpmsExcel(
+  data: ProjectData, tier: BpmsTier, equipmentId: string, revisionNumber?: string,
+) {
+  const sheets = buildBpmsSheets(data, { revisionNumber, tier, equipmentId });
   if (sheets.length === 0) {
-    alert('No LV equipment in this project — the BPMS report covers LV switchgears only.');
+    void appAlert(`No ${tier} switchgear to report on — pick one first.`);
     return;
   }
   const wb = XLSX.utils.book_new();
@@ -81,8 +56,95 @@ function exportBpmsExcel(data: ProjectData, revisionNumber?: string) {
     XLSX.utils.book_append_sheet(wb, ws, sheetName(sheet.name, taken));
   }
   const rev = revisionNumber ? `_REV${revisionNumber}` : '';
-  XLSX.writeFile(wb, `${data.projectName || 'project'}_BPMS${rev}.xlsx`);
+  const who = (sheets[0].name || tier).replace(/[^\w.-]+/g, '_');
+  // Excel 97-2003 (.xls), the format BPMS takes. That writer keeps the values,
+  // the merged cells and the column widths; the colours, bold and borders are
+  // an .xlsx thing and do not come across — chosen knowingly.
+  XLSX.writeFile(wb, `${data.projectName || 'project'}_${who}_BPMS${rev}.xls`, { bookType: 'biff8' });
 }
+
+/**
+ * The BPMS report, one switchgear at a time.
+ *
+ * A BPMS sheet belongs to a panel: it is read beside that panel's drawings and
+ * checked against them. So the switchgear is picked and the file holds that
+ * one — LV and MV alike, each with its own layout. The MV sheet is the same
+ * sheet without Position and Size, which are the LV modular frame's own.
+ */
+const BpmsSection: React.FC<{
+  projectData: ProjectData;
+  revisionNumber?: string;
+  downloading: string | null;
+  trigger: (key: string, fn: () => void) => void;
+}> = ({ projectData, revisionNumber, downloading, trigger }) => {
+  const [chosen, setChosen] = useState<Record<BpmsTier, string>>({ LV: '', MV: '' });
+
+  const row = (tier: BpmsTier) => {
+    const equipments = (projectData.equipments ?? []).filter(e => e.type === tier);
+    // One switchgear, and when there is only one it needs no picking.
+    const id = chosen[tier] || (equipments.length === 1 ? equipments[0].id : '');
+    const sheet = id
+      ? buildBpmsSheets(projectData, { tier, equipmentId: id })[0]
+      : undefined;
+    const key = `bpms-${tier}`;
+
+    return (
+      <div
+        key={tier}
+        className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center justify-between gap-4 bg-gray-50"
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <span
+            className="text-xs font-bold px-2 py-0.5 rounded-full text-white"
+            style={{ background: tier === 'LV' ? '#0f766e' : '#b45309' }}
+          >
+            BPMS
+          </span>
+          <div className="min-w-0">
+            <p className="font-medium text-sm text-gray-800">BPMS Report — {tier}</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {equipments.length === 0
+                ? `No ${tier} switchgear yet.`
+                : sheet
+                  ? `${sheet.lineCount} line${sheet.lineCount === 1 ? '' : 's'} · `
+                    + `${sheet.partRowCount} row${sheet.partRowCount === 1 ? '' : 's'} — one row per part.`
+                  : `Pick one of the ${equipments.length} ${tier} switchgears.`}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {equipments.length > 1 && (
+            <select
+              value={id}
+              onChange={e => setChosen(prev => ({ ...prev, [tier]: e.target.value }))}
+              className="border border-gray-300 rounded-lg px-2 py-2 text-sm bg-white max-w-[200px]"
+            >
+              <option value="">Switchgear…</option>
+              {equipments.map(eq => (
+                <option key={eq.id} value={eq.id}>{eq.name}</option>
+              ))}
+            </select>
+          )}
+          <button
+            disabled={!!downloading || !id}
+            onClick={() => trigger(key, () =>
+              exportBpmsExcel(projectData, tier, id, revisionNumber))}
+            className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg disabled:opacity-50 shadow-sm font-medium text-sm whitespace-nowrap ${
+              tier === 'LV' ? 'bg-teal-700 hover:bg-teal-800' : 'bg-amber-700 hover:bg-amber-800'}`}
+            title={id ? `Export the BPMS sheet for this switchgear` : 'Pick a switchgear first'}
+          >
+            {downloading === key
+              ? <span className="animate-spin">⏳</span>
+              : <FileSpreadsheetIcon className="w-4 h-4" />}
+            BPMS Excel
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  return <>{(['LV', 'MV'] as BpmsTier[]).map(row)}</>;
+};
 
 // ─── EPLAN single line ────────────────────────────────────────────────────────
 // The device list EPLAN imports (one sheet per switchgear, one row per device
@@ -236,7 +298,7 @@ function exportExcel(data: ProjectData) {
   const devHeaders = ['#', 'Name', 'Type', ...propKeys.map(k => DEVICE_PROP_LABELS[k])];
   const devRows: any[][] = [devHeaders];
   let idx = 1;
-  for (const tier of ['LV', 'MV', 'HV'] as const) {
+  for (const tier of TIERS) {
     for (const dev of (data.deviceLibrary?.[tier] ?? [])) {
       const p = dev.properties as Record<string, any>;
       devRows.push([
@@ -259,7 +321,7 @@ function exportExcel(data: ProjectData) {
   for (const eq of (data.equipments ?? [])) {
     const libItemId  = eq.properties?.deviceLibraryItemId as string | undefined;
     const libItem    = libItemId
-      ? [...(data.deviceLibrary?.LV ?? []), ...(data.deviceLibrary?.MV ?? []), ...(data.deviceLibrary?.HV ?? [])].find(d => d.id === libItemId)
+      ? TIERS.flatMap(t => data.deviceLibrary?.[t] ?? []).find(d => d.id === libItemId)
       : null;
 
     if (!eq.devices || eq.devices.length === 0) {
@@ -278,11 +340,7 @@ function exportExcel(data: ProjectData) {
   // ── Sheet 5: Template Components Breakdown (only used templates) ──────────
   const usedTemplateIds = new Set<string>();
   (data.equipments ?? []).forEach(eq => eq.devices?.forEach(d => { if (d.templateId) usedTemplateIds.add(d.templateId); }));
-  const usedTemplates = [
-    ...(data.templates?.LV ?? []),
-    ...(data.templates?.MV ?? []),
-    ...(data.templates?.HV ?? []),
-  ].filter(t => usedTemplateIds.has(t.id));
+  const usedTemplates = TIERS.flatMap(t => data.templates?.[t] ?? []).filter(t => usedTemplateIds.has(t.id));
 
   const tmplHeaders = ['Template', 'Type', 'Property', 'Part Number', 'Manufacturer', 'Rating', 'Label', 'Qty', 'Priority', 'Locked'];
   const tmplRows: any[][] = [tmplHeaders];
@@ -329,11 +387,7 @@ function exportExcel(data: ProjectData) {
 // ─────────────────────────────────────────────────────────────────────────────
 function exportPDF(data: ProjectData) {
   const propKeys  = Object.keys(DEVICE_PROP_LABELS);
-  const allDevices = [
-    ...(data.deviceLibrary?.LV ?? []).map(d => ({ ...d, tier: 'LV' })),
-    ...(data.deviceLibrary?.MV ?? []).map(d => ({ ...d, tier: 'MV' })),
-    ...(data.deviceLibrary?.HV ?? []).map(d => ({ ...d, tier: 'HV' })),
-  ];
+  const allDevices = TIERS.flatMap(t => (data.deviceLibrary?.[t] ?? []).map(d => ({ ...d, tier: t })));
 
   const th  = (label: string, bg = '#1e50a2') =>
     `<th style="background:${bg};color:#fff;padding:6px 10px;text-align:left;font-size:11px;white-space:nowrap">${label}</th>`;
@@ -383,7 +437,7 @@ function exportPDF(data: ProjectData) {
 
   // ── Equipment & selections table ──────────────────────────────────────────
   const eqs = data.equipments ?? [];
-  const allLib = [...(data.deviceLibrary?.LV??[]),...(data.deviceLibrary?.MV??[]),...(data.deviceLibrary?.HV??[])];
+  const allLib = TIERS.flatMap(t => data.deviceLibrary?.[t] ?? []);
   const eqTable = eqs.length === 0 ? '<p style="color:#9ca3af;font-size:12px">No equipment defined.</p>' : table(
     `<thead><tr>${['Equipment','Type','Device (Library)','Row','Template','Bus Section','Feeder No','Wiring Type','Rating Power','FLC (A)'].map(h=>th(h,'#b45309')).join('')}</tr></thead><tbody>` +
     eqs.flatMap((eq, eqi) => {
@@ -430,11 +484,7 @@ function exportPDF(data: ProjectData) {
   ${(() => {
     const usedIds = new Set<string>();
     eqs.forEach(eq => eq.devices?.forEach(d => { if (d.templateId) usedIds.add(d.templateId); }));
-    const used = [
-      ...(data.templates?.LV ?? []),
-      ...(data.templates?.MV ?? []),
-      ...(data.templates?.HV ?? []),
-    ].filter(t => usedIds.has(t.id));
+    const used = TIERS.flatMap(t => data.templates?.[t] ?? []).filter(t => usedIds.has(t.id));
     if (used.length === 0) return '';
     let html = '<h3 style="margin:18px 0 6px;font-size:13px;color:#b45309;font-weight:700">Template Components Breakdown</h3>';
     for (const tmpl of used) {
@@ -522,11 +572,7 @@ function exportHTML(data: ProjectData) {
      </div>`;
 
   // Device Library table
-  const allDevices = [
-    ...(data.deviceLibrary?.LV ?? []).map(d => ({ ...d, tier: 'LV' })),
-    ...(data.deviceLibrary?.MV ?? []).map(d => ({ ...d, tier: 'MV' })),
-    ...(data.deviceLibrary?.HV ?? []).map(d => ({ ...d, tier: 'HV' })),
-  ];
+  const allDevices = TIERS.flatMap(t => (data.deviceLibrary?.[t] ?? []).map(d => ({ ...d, tier: t })));
   const propKeys = Object.keys(DEVICE_PROP_LABELS);
   const devLibTable = allDevices.length === 0 ? '<p style="color:#888">No devices defined.</p>' :
     `<div style="overflow-x:auto"><table style="${tableStyle}">
@@ -558,7 +604,7 @@ function exportHTML(data: ProjectData) {
       <tbody>${equipments.flatMap((eq, eqi) => {
         const libItemId = eq.properties?.deviceLibraryItemId as string | undefined;
         const libItem   = libItemId
-          ? [...(data.deviceLibrary?.LV??[]),...(data.deviceLibrary?.MV??[]),...(data.deviceLibrary?.HV??[])].find(d=>d.id===libItemId)
+          ? TIERS.flatMap(t => data.deviceLibrary?.[t] ?? []).find(d=>d.id===libItemId)
           : null;
         if (!eq.devices || eq.devices.length === 0) {
           return [`<tr style="${eqi%2===1?altStyle:''}">
@@ -758,7 +804,7 @@ const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
 // MAIN TAB COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
 export const OutputTypesTab: React.FC = () => {
-  const { projectData, currentRevision } = useProject();
+  const { projectData, currentRevision, isCurrentRevisionEditable } = useProject();
   const [downloading, setDownloading] = useState<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['project', 'tech', 'devices', 'equipment']));
   const [showCompareModal, setShowCompareModal] = useState(false);
@@ -780,11 +826,16 @@ export const OutputTypesTab: React.FC = () => {
       setLoadingRevisions(true);
       const revisionsData = await projectService.getRevisions(projectData._id!);
       setRevisions(revisionsData);
-      if (revisionsData.length > 0) {
-        setCompareBaseRevision(revisionsData[0]._id!);
-        if (revisionsData.length > 1) {
-          setCompareTargetRevision(revisionsData[1]._id!);
-        }
+      // Older → newer: the previous revision is the base and the latest the
+      // target, so what was added reads as added. Latest-first put them the
+      // other way round, and every addition was reported as a removal.
+      // A choice already made is kept as long as it still exists.
+      const exists = (id: string) => revisionsData.some(r => r._id === id);
+      if (revisionsData.length > 1) {
+        setCompareBaseRevision(prev => (prev && exists(prev) ? prev : revisionsData[1]._id!));
+        setCompareTargetRevision(prev => (prev && exists(prev) ? prev : revisionsData[0]._id!));
+      } else if (revisionsData.length === 1) {
+        setCompareBaseRevision(prev => (prev && exists(prev) ? prev : revisionsData[0]._id!));
       }
     } catch (err) {
       console.error('Failed to load revisions:', err);
@@ -807,7 +858,7 @@ export const OutputTypesTab: React.FC = () => {
     });
 
   const lib     = projectData.deviceLibrary;
-  const devices = [...(lib?.LV ?? []), ...(lib?.MV ?? []), ...(lib?.HV ?? [])];
+  const devices = TIERS.flatMap(t => lib?.[t] ?? []);
   const eqs     = projectData.equipments ?? [];
   const rowTotal = eqs.reduce((s, eq) => s + (eq.devices?.length ?? 0), 0);
 
@@ -821,15 +872,29 @@ export const OutputTypesTab: React.FC = () => {
   const runComparison = () => {
     setDiffError('');
     setDiff(null);
-    const base = revisionById(compareBaseRevision);
-    const target = revisionById(compareTargetRevision);
+    let base = revisionById(compareBaseRevision);
+    let target = revisionById(compareTargetRevision);
     if (!base || !target) { setDiffError('Pick two revisions to compare.'); return; }
     if (base._id === target._id) { setDiffError('Pick two different revisions.'); return; }
-    if (!base.projectSnapshot || !target.projectSnapshot) {
+    // Always older → newer, whichever way round they were picked.
+    const num = (r: Revision) => parseInt(r.revisionNumber, 10) || 0;
+    if (num(base) > num(target)) {
+      [base, target] = [target, base];
+      setCompareBaseRevision(base._id!);
+      setCompareTargetRevision(target._id!);
+    }
+    // The revision being worked on is compared as it is on screen. Its stored
+    // snapshot is only as new as the last save, so an edit made a minute ago
+    // was missing from the comparison.
+    const snapshotOf = (r: Revision) =>
+      r._id && currentRevision?._id === r._id && isCurrentRevisionEditable ? projectData : r.projectSnapshot;
+    const from = snapshotOf(base);
+    const to = snapshotOf(target);
+    if (!from || !to) {
       setDiffError('One of these revisions has no snapshot stored, so it cannot be compared.');
       return;
     }
-    setDiff(diffProjectSnapshots(base.projectSnapshot, target.projectSnapshot));
+    setDiff(diffProjectSnapshots(from, to));
   };
 
   const downloadComparison = () => {
@@ -910,13 +975,21 @@ export const OutputTypesTab: React.FC = () => {
           </button>
           <div className="h-8 w-px bg-gray-300 mx-1"></div>
           <button
-            onClick={() => setShowCompareModal(true)}
+            onClick={() => { setShowCompareModal(true); setDiff(null); loadRevisions(); }}
             className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm font-medium text-sm transition-colors"
           >
             🔄 Compare Revisions
           </button>
         </div>
       </div>
+
+      {/* ── BPMS export — one switchgear at a time, LV and MV — at the top ── */}
+      <BpmsSection
+        projectData={projectData}
+        revisionNumber={currentRevision?.revisionNumber}
+        downloading={downloading}
+        trigger={trigger}
+      />
 
       {/* Summary Strip */}
       <div className="grid grid-cols-4 gap-3 mb-6">
@@ -1017,7 +1090,7 @@ export const OutputTypesTab: React.FC = () => {
                 <tbody>
                   {devices.map((dev, i) => {
                     const p = dev.properties as Record<string, any>;
-                    const tierColor = dev.type === 'LV' ? 'bg-green-100 text-green-800' : dev.type === 'MV' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800';
+                    const tierColor = TIER_PILL[dev.type as Tier] ?? TIER_PILL.OTHER;
                     return (
                       <tr key={dev.id} className={i % 2 === 1 ? 'bg-gray-50' : 'bg-white'}>
                         <td className="px-3 py-1.5 border-b border-gray-100">{i + 1}</td>
@@ -1040,51 +1113,16 @@ export const OutputTypesTab: React.FC = () => {
         }
       </Section>
 
-      {/* ── BPMS export (LV only) ─────────────────────────────────────────── */}
-      {(() => {
-        const lvSheets = buildBpmsSheets(projectData);
-        const lvLines = lvSheets.reduce((sum, s) => sum + s.lineCount, 0);
-        const lvPartRows = lvSheets.reduce(
-          (sum, s) => sum + Math.max(0, s.rows.length - 3), 0);
-        return (
-          <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center justify-between gap-4 bg-gray-50">
-            <div className="flex items-center gap-3 min-w-0">
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: '#0f766e' }}>
-                BPMS
-              </span>
-              <div className="min-w-0">
-                <p className="font-medium text-sm text-gray-800">BPMS Report — LV only</p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  {lvSheets.length === 0
-                    ? 'No LV equipment yet.'
-                    : `${lvSheets.length} switchgear${lvSheets.length === 1 ? '' : 's'} · ${lvLines} line${lvLines === 1 ? '' : 's'} · ${lvPartRows} row${lvPartRows === 1 ? '' : 's'} — one sheet each, one row per part.`}
-                </p>
-              </div>
-            </div>
-            <button
-              disabled={!!downloading || lvSheets.length === 0}
-              onClick={() => trigger('bpms', () => exportBpmsExcel(projectData, currentRevision?.revisionNumber))}
-              className="flex items-center gap-2 px-4 py-2 bg-teal-700 text-white rounded-lg hover:bg-teal-800 disabled:opacity-50 shadow-sm font-medium text-sm whitespace-nowrap"
-            >
-              {downloading === 'bpms'
-                ? <span className="animate-spin">⏳</span>
-                : <FileSpreadsheetIcon className="w-4 h-4" />}
-              BPMS Excel
-            </button>
-          </div>
-        );
-      })()}
-
       {/* The single line, the layout and the mechanical items live in their
-          own tab now — Eplanix — where each one is previewed before it is
+          own tab now — Simorgh Draw — where each one is previewed before it is
           downloaded. */}
       <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center gap-3 bg-blue-50/40">
-        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-blue-700">EPLANIX</span>
+        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-blue-700">SIMORGH DRAW</span>
         <p className="text-sm text-gray-700">
-          Single line, panel layout and mechanical items have moved to the <strong>Eplanix</strong> tab.
+          Single line, panel layout and mechanical items have moved to the <strong>Simorgh Draw</strong> tab.
         </p>
         <span className="text-sm text-gray-600 ml-auto" dir="rtl">
-          تک‌خطی، جانمایی و اقلام مکانیکال به تب «Eplanix» منتقل شد.
+          Single line, panel layout and mechanical items have moved to the Simorgh Draw tab.
         </span>
       </div>
 
@@ -1096,7 +1134,7 @@ export const OutputTypesTab: React.FC = () => {
         tier="LV"
         badge="04"
         color="#065f46"
-        equipments={eqs.filter(e => e.type === 'LV')}
+        equipments={eqs.filter(e => LAYOUT_OF[e.type] === 'LV')}
         projectData={projectData}
       />
 
@@ -1105,7 +1143,7 @@ export const OutputTypesTab: React.FC = () => {
         tier="MV"
         badge="05"
         color="#92400e"
-        equipments={eqs.filter(e => e.type === 'MV')}
+        equipments={eqs.filter(e => LAYOUT_OF[e.type] === 'MV')}
         projectData={projectData}
       />
 
@@ -1212,7 +1250,7 @@ export const OutputTypesTab: React.FC = () => {
                     <div key={`${eq.type}-${eq.name}`} className="border rounded">
                       <div className="px-3 py-2 bg-gray-50 border-b text-sm flex items-center gap-2">
                         <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
-                          eq.type === 'LV' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{eq.type}</span>
+                          TIER_PILL[eq.type as Tier] ?? TIER_PILL.OTHER}`}>{eq.type}</span>
                         <span className="font-medium">{eq.name}</span>
                         {eq.kind !== 'changed' && (
                           <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${

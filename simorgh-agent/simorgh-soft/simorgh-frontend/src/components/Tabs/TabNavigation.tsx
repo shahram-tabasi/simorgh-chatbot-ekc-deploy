@@ -45,7 +45,12 @@ const FALLBACK_END = { x: SIZE, y: 33 };
 interface EndPoint { x: number; y: number; }
 
 const StepCircle: React.FC<{ n: number; active: boolean; endPoint: EndPoint }> = ({ n, active, endPoint }) => {
-  const color = active ? '#f97316' /* orange-500 */ : '#1d4ed8' /* blue-700 */;
+  // Read from the theme rather than fixed here. The circle used to be filled
+  // pure white and the idle step drawn in blue-700 — both chosen against a
+  // white page, and both wrong on a dark one, where the white disc glares and
+  // the dark blue sinks into the background. The variables carry a light and
+  // a dark value each (see theme.css); this component just asks for them.
+  const color = active ? 'var(--step-active)' : 'var(--step-idle)';
   return (
     <span className="relative shrink-0" style={{ width: SIZE, height: SIZE }}>
       <svg width={SIZE} height={SIZE} className="block overflow-visible">
@@ -53,8 +58,7 @@ const StepCircle: React.FC<{ n: number; active: boolean; endPoint: EndPoint }> =
           cx={CENTER}
           cy={CENTER}
           r={RADIUS}
-          fill="#ffffff"
-          stroke={color}
+          style={{ fill: 'var(--step-fill)', stroke: color }}
           strokeWidth={STROKE}
           strokeDasharray={RING_DASHARRAY}
           strokeDashoffset={RING_DASHOFFSET}
@@ -67,7 +71,7 @@ const StepCircle: React.FC<{ n: number; active: boolean; endPoint: EndPoint }> =
         <path
           d={`M ${GAP_POINT.x} ${GAP_POINT.y} C ${GAP_POINT.x + GAP_TANGENT.x * 9} ${GAP_POINT.y + GAP_TANGENT.y * 9}, ${endPoint.x - 10} ${endPoint.y}, ${endPoint.x} ${endPoint.y}`}
           fill="none"
-          stroke={color}
+          style={{ stroke: color }}
           strokeWidth={STROKE - 1}
           strokeLinecap="round"
         />
@@ -111,7 +115,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
       {tabs.map((tab, index) => {
         const isActive = index === activeTab;
         const isLast = index === tabs.length - 1;
-        const color = isActive ? '#f97316' : '#1d4ed8';
+        const color = isActive ? 'var(--step-active)' : 'var(--step-idle)';
         return (
           <button
             key={tab.id}

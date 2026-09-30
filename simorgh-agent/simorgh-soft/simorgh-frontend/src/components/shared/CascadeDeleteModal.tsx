@@ -1,6 +1,7 @@
 import React from 'react';
 import { AlertTriangleIcon, XIcon } from 'lucide-react';
 import { UsageReport } from '../../utils/cascadeDelete';
+import { TIER_PILL, type Tier } from '../../utils/tiers';
 
 interface CascadeDeleteModalProps {
   /** What is being deleted, e.g. the device or template name. */
@@ -11,7 +12,6 @@ interface CascadeDeleteModalProps {
   usage: UsageReport;
   /** English + Persian sentence describing what the delete cascades to. */
   cascadeNote: string;
-  cascadeNoteFa: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -20,7 +20,7 @@ interface CascadeDeleteModalProps {
 // sees every place the item is used and exactly what the delete will take
 // with it.
 export const CascadeDeleteModal: React.FC<CascadeDeleteModalProps> = ({
-  itemName, itemKind, usage, cascadeNote, cascadeNoteFa, onConfirm, onCancel,
+  itemName, itemKind, usage, cascadeNote, onConfirm, onCancel,
 }) => {
   const isUsed = usage.equipments.length > 0;
 
@@ -50,7 +50,7 @@ export const CascadeDeleteModal: React.FC<CascadeDeleteModalProps> = ({
                   {usage.totalRows === 1 ? '' : 's'}):
                 </p>
                 <p className="text-sm text-gray-600 mt-1" dir="rtl">
-                  این مورد در {usage.equipments.length} جا و روی {usage.totalRows} ردیف استفاده شده است:
+                  Used in {usage.equipments.length} place(s), across {usage.totalRows} row(s):
                 </p>
               </div>
 
@@ -69,9 +69,7 @@ export const CascadeDeleteModal: React.FC<CascadeDeleteModalProps> = ({
                         <td className="px-3 py-1.5 text-gray-800">{eq.name}</td>
                         <td className="px-3 py-1.5">
                           <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
-                            eq.type === 'LV' ? 'bg-green-100 text-green-700'
-                            : eq.type === 'MV' ? 'bg-orange-100 text-orange-700'
-                            : 'bg-red-100 text-red-700'
+                            TIER_PILL[eq.type as Tier] ?? TIER_PILL.OTHER
                           }`}>{eq.type}</span>
                         </td>
                         <td className="px-3 py-1.5 text-right text-gray-600">{eq.rowCount}</td>
@@ -83,7 +81,6 @@ export const CascadeDeleteModal: React.FC<CascadeDeleteModalProps> = ({
 
               <div className="bg-amber-50 border border-amber-200 rounded px-3 py-2">
                 <p className="text-sm text-amber-900">{cascadeNote}</p>
-                <p className="text-sm text-amber-800 mt-1" dir="rtl">{cascadeNoteFa}</p>
               </div>
             </>
           ) : (
@@ -92,7 +89,7 @@ export const CascadeDeleteModal: React.FC<CascadeDeleteModalProps> = ({
                 This {itemKind.toLowerCase()} is not used anywhere in the project. Deleting it affects nothing else.
               </p>
               <p className="text-sm text-gray-600 mt-1" dir="rtl">
-                این مورد در هیچ جای پروژه استفاده نشده است و حذف آن جای دیگری را تغییر نمی‌دهد.
+                This is not used anywhere in the project, so deleting it changes nothing else.
               </p>
             </div>
           )}

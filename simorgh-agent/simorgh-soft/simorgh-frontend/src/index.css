@@ -1,3 +1,12 @@
+/* The Persian type the suite is set in. Imported before Tailwind's base so
+   preflight's own font rules can be overridden by the stack rather than the
+   other way round. */
+@import './fonts.css';
+
+/* Simorgh Draw's dark theme. Scoped to the editor by an attribute on its own
+   root, so the rest of the suite stays light behind it. */
+@import './components/SimorghDraw/drawing.css';
+
 /* PLEASE NOTE: THESE TAILWIND IMPORTS SHOULD NEVER BE DELETED */
 @import 'tailwindcss/base';
 @import 'tailwindcss/components';

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ProjectData, Revision } from '../../types/project';
 import { projectService, tpmsService, TpmsOption } from '../../services/projectService';
 import { syncProjectFromTpms, findLinkedProject, TpmsSyncResult } from '../../services/tpmsSync';
+import { Starfield, SkyTitle } from './SkyIntro';
 import { TpmsProjectHeader } from '../../utils/tpmsProjectImport';
 import logoMark from '../../assets/logo-mark.png';
 
@@ -57,9 +58,6 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
   // A read that came back with holes in it: shown before opening, so nobody
   // works on a project that is quietly missing a switchgear.
   const [pending, setPending]           = useState<TpmsSyncResult | null>(null);
-  // What TPMS says about the size of a project, for one that will not open.
-  const [stats, setStats]               = useState<any | null>(null);
-  const [statsBusy, setStatsBusy]       = useState(false);
 
   // ── Inline "new revision" form (same dialog, not a nested modal) ─────
   const [newRevOpen, setNewRevOpen]               = useState(false);
@@ -142,7 +140,6 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     setComboOpen(false);
     setSearch('');
     setTpmsHeader(null);
-    setStats(null);
     setPending(null);
     setTpmsBusy(true);
     try {
@@ -151,22 +148,6 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
       setError('Could not read this project from TPMS: ' + (err as Error).message);
     } finally {
       setTpmsBusy(false);
-    }
-  };
-
-  // What TPMS holds for this project and how long each read takes. Used when
-  // a project will not open: it says whether TPMS answers at all, and how big
-  // the thing being read actually is.
-  const handleCheck = async () => {
-    if (!selectedTpms) return;
-    setStatsBusy(true);
-    setStats(null);
-    try {
-      setStats(await tpmsService.getProjectStats(selectedTpms.value));
-    } catch (err) {
-      setStats({ error: (err as Error).message });
-    } finally {
-      setStatsBusy(false);
     }
   };
 
@@ -215,10 +196,29 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
     return (o.text || '').toLowerCase().includes(q);
   });
 
+  // The same rule the database uses (projectNameKey on the server): no case,
+  // no double spaces, no edges. Comparing on case alone let "Sarmad Iron &
+  // Steel CO." and "Sarmad  Iron & Steel CO." both be created, and then there
+  // were two of them in the list with no way to tell which was which.
+  const nameKey = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
+
   const exactMatch =
-    projects.some(p => p.projectName.toLowerCase() === trimmed.toLowerCase()) ||
-    tpmsProjects.some(o => tpmsLabel(o).toLowerCase() === trimmed.toLowerCase());
+    projects.some(p => nameKey(p.projectName) === nameKey(trimmed)) ||
+    tpmsProjects.some(o => nameKey(tpmsLabel(o)) === nameKey(trimmed));
   const canCreate  = trimmed.length > 0 && !exactMatch;
+
+  // Projects that already share a name. They cannot be told apart in a list
+  // that shows only the name, so the ones that clash say so and show when
+  // each was last changed — enough to decide which to keep.
+  const sharedNames = new Set(
+    Object.entries(
+      projects.reduce<Record<string, number>>((n, p) => {
+        const k = nameKey(p.projectName || '');
+        n[k] = (n[k] ?? 0) + 1;
+        return n;
+      }, {}),
+    ).filter(([, n]) => n > 1).map(([k]) => k),
+  );
   const nothingFound = filteredProjects.length === 0 && filteredTpms.length === 0;
 
   const openNewRevisionForm = () => {
@@ -315,8 +315,12 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
 
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center overflow-auto p-6"
-      style={{ background: 'radial-gradient(1200px 800px at 10% 10%, #14335f 0%, #0a1a33 45%, #060e1e 100%)' }}
+      data-sky-scroll
+      className="fixed inset-0 flex items-center justify-center overflow-y-auto overflow-x-hidden p-6"
+      // Night sky: the stars and the meteors are drawn over this by Starfield.
+      // No sideways scroll: the Simorgh flies out past the right edge, and a
+      // transformed element still counts toward the scroll area.
+      style={{ background: 'radial-gradient(1200px 800px at 15% 8%, #0f2a52 0%, #071630 42%, #030814 100%)' }}
     >
       <style>{`
         @keyframes suiteSheen {
@@ -344,17 +348,18 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
         }
       `}</style>
 
-      {/* Faint dot grid, matching the loading screen's texture */}
-      <div
-        className="absolute inset-0 opacity-[0.12] pointer-events-none"
-        style={{ backgroundImage: 'radial-gradient(rgba(255,255,255,0.5) 1px, transparent 1px)', backgroundSize: '22px 22px' }}
-      />
+      {/* Stars and a meteor shower, behind everything — see SkyIntro.tsx. */}
+      <Starfield />
+
+      {/* The title, with the Simorgh over it, and the dialog under it. */}
+      <div className="relative flex flex-col items-center gap-2 my-auto w-full">
+      <SkyTitle />
 
       {/* ── The single dialog ── */}
-      <div className="relative bg-white rounded-2xl shadow-2xl w-[600px] max-w-full flex flex-col my-auto">
+      <div className="relative bg-white rounded-2xl shadow-2xl w-[600px] max-w-full flex flex-col">
         {/* Header */}
         <div className="flex items-center gap-4 px-6 py-5 border-b border-gray-100">
-          <img src={logoMark} alt="Simorgh" className="h-20 w-auto" />
+          <img src={logoMark} alt="Simorgh" data-theme-invert className="h-20 w-auto" />
           <div className="h-14 w-px bg-gray-200" />
           <div>
             <div className="text-2xl font-extrabold tracking-tight text-blue-900 leading-none">Simorgh</div>
@@ -455,6 +460,17 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                           </span>
                         )}
                         {p.projectName}
+                        {sharedNames.has(nameKey(p.projectName || '')) && (
+                          <span
+                            className={`ml-2 text-[10px] ${isSel ? 'text-amber-100' : 'text-amber-700'}`}
+                            title={'Another project has this name. Open each one, rename or delete '
+                              + 'the one you do not want, and the two will stop being confusable.'}
+                          >
+                            ⚠ same name · changed {p.changedOn
+                              ? new Date(p.changedOn).toLocaleDateString()
+                              : '—'}
+                          </span>
+                        )}
                       </li>
                     );
                   })}
@@ -602,31 +618,12 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
           {/* ── A TPMS project: what is about to be read ── */}
           {selectedTpms && (
             <div className="mt-5 border border-purple-200 bg-purple-50/50 rounded p-3 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-semibold">TPMS</span>
-                <span className="text-sm text-gray-700">
-                  The whole project is read from TPMS — the same data Eplanix shows. Nothing is written back.
-                </span>
-              </div>
-
               {tpmsBusy && !tpmsHeader && (
                 <div className="text-sm text-gray-500">Reading the project…</div>
               )}
 
               {tpmsHeader && (
                 <>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                    <div><span className="text-gray-500">OE number:</span> <span className="text-gray-800">{tpmsHeader.project.oeNumber || '—'}</span></div>
-                    <div><span className="text-gray-500">Project:</span> <span className="text-gray-800">{tpmsHeader.project.projectName || '—'}</span></div>
-                    <div><span className="text-gray-500">Switchgears:</span> <span className="text-gray-800">{tpmsHeader.switchgears.length}</span></div>
-                    <div>
-                      <span className="text-gray-500">Revisions:</span>{' '}
-                      <span className="text-gray-800">
-                        {tpmsHeader.revisions.length > 0 ? tpmsHeader.revisions.map(r => `REV ${r}`).join(', ') : '—'}
-                      </span>
-                    </div>
-                  </div>
-
                   {tpmsHeader.switchgears.length > 0 && (
                     <div className="border border-purple-100 rounded bg-white max-h-32 overflow-y-auto divide-y divide-gray-50">
                       {tpmsHeader.switchgears.map(sw => (
@@ -655,56 +652,8 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                           Newest only (REV {tpmsHeader.revisions[tpmsHeader.revisions.length - 1]}) — quickest for a big project
                         </option>
                       </select>
-                      <p className="text-xs text-gray-500 mt-1" dir="rtl">
-                        پروژه‌های سنگین را می‌توانید فقط با آخرین ریویژن باز کنید؛ بقیهٔ ریویژن‌ها دست‌نخورده می‌مانند.
-                      </p>
                     </div>
                   )}
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      className="px-3 py-1.5 border border-purple-300 text-purple-800 rounded text-xs hover:bg-purple-100 disabled:opacity-50"
-                      onClick={handleCheck}
-                      disabled={statsBusy || opening}
-                    >
-                      {statsBusy ? 'Checking…' : 'Check this project'}
-                    </button>
-                    <span className="text-xs text-gray-500">
-                      How much TPMS holds for it, and how long each read takes.
-                    </span>
-                  </div>
-
-                  {stats && (
-                    <div className={`rounded border px-3 py-2 text-xs ${
-                      stats.error ? 'border-red-300 bg-red-50 text-red-800' : 'border-gray-200 bg-white text-gray-700'
-                    }`}>
-                      {stats.error ? (
-                        <>TPMS answered with an error: {stats.error}</>
-                      ) : (
-                        <>
-                          <div className="font-medium text-gray-800">
-                            {stats.switchgears} switchgear(s) · {stats.revisions.length} revision(s) ·
-                            {' '}{stats.drafts} line(s) · {stats.parts} part row(s)
-                          </div>
-                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-gray-600">
-                            {stats.revisions.map((r: any) => (
-                              <span key={r.revision}>REV {r.revision}: {r.drafts}</span>
-                            ))}
-                          </div>
-                          <div className="mt-1 text-gray-500">
-                            reads: {Object.entries(stats.timings || {}).map(([k, v]) => `${k} ${v}ms`).join(' · ')}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )}
-
-                  <p className="text-xs text-gray-500">
-                    Every switchgear lands in Device Selection with its lines and templates, the panel
-                    specifications in Device Library, and each TPMS revision becomes a revision here.
-                    Until a revision is raised in Design Suite the project stays read-only and is refreshed
-                    from TPMS every time it is opened.
-                  </p>
                 </>
               )}
             </div>
@@ -727,7 +676,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                 {pending.problems.length} part{pending.problems.length === 1 ? '' : 's'} of this project could not be read.
               </p>
               <p className="text-xs text-amber-800 mt-1" dir="rtl">
-                بخشی از پروژه خوانده نشد. می‌توانید همین‌طور باز کنید یا دوباره تلاش کنید.
+                Part of the project could not be read. Open it as it is, or try again.
               </p>
               <ul className="mt-2 max-h-28 overflow-y-auto text-xs text-amber-900 list-disc list-inside space-y-0.5">
                 {pending.problems.map((p, i) => <li key={i}>{p}</li>)}
@@ -762,6 +711,11 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
             {projects.length} project{projects.length === 1 ? '' : 's'}
             {tpmsProjects.length > 0 && <> · {tpmsProjects.length} in TPMS</>}
             {tpmsListError && <span className="text-amber-600" title={tpmsListError}> · TPMS unavailable</span>}
+            {/* The build used to be printed here. It is still worth being able
+                to read — every image is tagged :latest, so the version on
+                screen is the only way to tell one from another without the
+                server — but a commit hash is not what the front door of the
+                application should say. It is in Help → About. */}
           </span>
           {selectedTpms ? (
             <button
@@ -781,6 +735,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
             </button>
           )}
         </div>
+      </div>
       </div>
     </div>
   );

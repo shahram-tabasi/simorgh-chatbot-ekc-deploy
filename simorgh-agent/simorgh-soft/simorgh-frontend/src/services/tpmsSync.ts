@@ -13,13 +13,15 @@
 // TPMS revision N becomes REV N on this side, carrying that revision's whole
 // project as its snapshot, so the revision list here is the revision history
 // there — and two of them can be compared in Output Types.
-import { ProjectData, Revision } from '../types/project';
+import { ProjectData, Revision, DeviceLibraryItem } from '../types/project';
 import { projectService, tpmsService } from './projectService';
 import { defaultProjectData } from '../context/ProjectContext';
 import {
   TpmsProjectHeader, TpmsRevisionData, TpmsSnapshotSummary,
   buildTpmsRevisionSnapshot, buildTpmsSyncState,
 } from '../utils/tpmsProjectImport';
+import { mergeOverEdits } from '../utils/tpmsImport';
+import { type Tier, TIERS, emptyTiers } from '../utils/tiers';
 
 export interface TpmsSyncResult {
   project: ProjectData;
@@ -159,7 +161,12 @@ export async function syncProjectFromTpms(
 
   // ── The project document ────────────────────────────────────────────────
   say('Saving the project…', step, total);
-  const { _id, ...body } = projectToSave as any;
+  // `rev` goes with `_id`. It is the database's own version counter, moved by
+  // $inc on the server, and a body that carries it asks Mongo to set and
+  // increment the same field in one update — which it refuses. This is the
+  // call that showed it: opening a TPMS project saves the moment it is read,
+  // and the project it had just read carried the rev it was read at.
+  const { _id, rev, ...body } = projectToSave as any;
   const saved: ProjectData = existing?._id
     ? await projectService.updateProject(existing._id, body)
     : await projectService.createProject(body);
@@ -236,8 +243,15 @@ export async function syncProjectFromTpms(
   const current = out.length > 0 ? out[out.length - 1] : null;
   say('Done.', total, total);
 
+  // The version the project is at *now*, after the save above moved it. The
+  // snapshot was built on the project as it was read, and carries the version
+  // it had then: opened with that, the first autosave was refused as "changed
+  // on another computer" with both sides identical.
+  const savedRev = (saved as { rev?: number }).rev;
   return {
-    project: current?.projectSnapshot ? { ...current.projectSnapshot, _id: projectId } : saved,
+    project: current?.projectSnapshot
+      ? { ...current.projectSnapshot, _id: projectId, ...(savedRev != null ? { rev: savedRev } : {}) }
+      : saved,
     revisions: [...out].reverse(),   // newest first, as the rest of the app expects
     current,
     header,
@@ -260,4 +274,167 @@ export async function resyncIfTpmsMastered(
   const sync = project.tpmsSync;
   if (!sync || sync.master !== 'tpms' || !sync.projectMainId) return null;
   return syncProjectFromTpms(sync.projectMainId, project, onProgress, options);
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Updating the specifications, without touching the engineer's work
+// ──────────────────────────────────────────────────────────────────────────
+
+/** One specification that has moved in TPMS since this project last read it. */
+export interface TpmsSpecChange {
+  /** Where it lives: the project, or the panel it belongs to. */
+  where: string;
+  field: string;
+  from: string;
+  to: string;
+}
+
+export interface TpmsSpecUpdate {
+  /** What to write onto the open project. Empty when nothing has moved. */
+  patch: Partial<ProjectData>;
+  changes: TpmsSpecChange[];
+  /** Panels TPMS has that this project does not — they need a full read. */
+  newSwitchgears: string[];
+  header: TpmsProjectHeader;
+  problems: string[];
+}
+
+const asText = (v: unknown) => (v == null || v === '' ? '—' : String(v));
+
+/**
+ * What TPMS would change about this project's specifications, and nothing else.
+ *
+ * This is the button on Project Definition: the engineer has entered
+ * specifications, defined templates and built up the panels here, and TPMS has
+ * meanwhile corrected a rated voltage or an IP class. Reading the whole project
+ * again would bring that across and take their work with it. This reads only
+ * the descriptions — project master data, technical settings, and each panel's
+ * specification — and merges them over what is here, field by field, against
+ * what TPMS said last time. A field TPMS has changed comes across; a field the
+ * engineer changed stays theirs.
+ *
+ * Nothing is written: the caller shows the list and applies the patch.
+ */
+export async function readSpecUpdateFromTpms(
+  project: ProjectData,
+  onProgress?: TpmsSyncProgress,
+): Promise<TpmsSpecUpdate> {
+  const say = (m: string, d: number, t: number) => { try { onProgress?.(m, d, t); } catch { /* UI only */ } };
+  const projectMainId = project.tpmsSync?.projectMainId;
+  if (!projectMainId) throw new Error('This project is not linked to a TPMS project.');
+
+  const problems: string[] = [];
+  say('Reading the project from TPMS…', 0, 1);
+  const header: TpmsProjectHeader = await tpmsService.getProjectHeader(projectMainId);
+  const switchgears = header.switchgears ?? [];
+
+  // The panel specifications, in the same small batches the full read uses —
+  // the header does not carry them, and one unreadable panel must not cost
+  // the update.
+  for (let i = 0; i < switchgears.length; i += SCOPE_BATCH) {
+    const batch = switchgears.slice(i, i + SCOPE_BATCH);
+    say(`Panel specifications — ${batch[0].scopeName} (${i + 1}/${switchgears.length})`, i, switchgears.length);
+    await Promise.all(batch.map(async sw => {
+      try {
+        const panel = await tpmsService.getProjectPanel(projectMainId, sw.scopeId);
+        sw.device = {
+          ...(sw.device ?? { name: sw.scopeName, type: sw.panelType, properties: {} }),
+          properties: { ...(sw.device?.properties ?? {}), ...(panel.properties ?? {}) },
+        };
+      } catch (err) {
+        problems.push(`Panel specification · ${sw.scopeName}: ${(err as Error).message}`);
+      }
+    }));
+  }
+
+  const changes: TpmsSpecChange[] = [];
+  const patch: Partial<ProjectData> = {};
+  const baseline = project.tpmsSync?.baseline;
+
+  // ── Project master data ─────────────────────────────────────────────────
+  // TPMS names the project and numbers it; those are its identity, so a change
+  // there is a change here. Each one is listed so nothing lands unseen.
+  const master: [keyof ProjectData, string, string][] = [
+    ['projectName', header.project.projectName, 'Project name'],
+    ['projectNumber', header.project.oeNumber, 'OE number'],
+    ['projectId', header.project.projectMainId != null ? String(header.project.projectMainId) : '', 'Project ID (PID)'],
+    ['planner', header.project.projectExpert, 'Project expert'],
+    ['designOffice', header.project.technicalSupervisor, 'Technical supervisor'],
+    ['projectDescription', header.project.projectNameFa, 'Description'],
+  ];
+  for (const [field, incoming, label] of master) {
+    const current = (project as any)[field] ?? '';
+    if (incoming && incoming !== current) {
+      (patch as any)[field] = incoming;
+      changes.push({ where: 'Project', field: label, from: asText(current), to: asText(incoming) });
+    }
+  }
+
+  // ── Technical settings ──────────────────────────────────────────────────
+  const incomingSettings = (header.techSettings ?? {}) as Record<string, Record<string, any>>;
+  const currentSettings = (project.techSettings ?? {}) as any;
+  const mergedSettings: any = { ...currentSettings };
+  for (const section of Object.keys(incomingSettings)) {
+    const mine = (currentSettings?.[section] ?? {}) as Record<string, any>;
+    const theirs = incomingSettings[section] ?? {};
+    const base = baseline?.techSettings?.[section] as Record<string, any> | undefined;
+    const merged = mergeOverEdits(mine, theirs, base);
+    mergedSettings[section] = merged;
+    for (const key of Object.keys(merged)) {
+      if (asText(merged[key]) !== asText(mine[key])) {
+        changes.push({
+          where: `Technical settings · ${section}`, field: key,
+          from: asText(mine[key]), to: asText(merged[key]),
+        });
+      }
+    }
+  }
+  if (changes.some(c => c.where.startsWith('Technical settings'))) patch.techSettings = mergedSettings;
+
+  // ── Each panel's specification, in the Device Library ───────────────────
+  const library = project.deviceLibrary ?? emptyTiers();
+  const nextLibrary = Object.fromEntries(
+    TIERS.map(t => [t, [...(library[t] ?? [])]])) as Record<Tier, DeviceLibraryItem[]>;
+  const newSwitchgears: string[] = [];
+  let libraryTouched = false;
+
+  for (const sw of switchgears) {
+    // Looked for in every group, not only the one TPMS files it under: an
+    // engineer who moved a panel to GIS or OTHER still has the same panel.
+    const matches = (d: DeviceLibraryItem) =>
+      (sw.scopeId != null && d.tpmsScopeId === sw.scopeId) || d.name === sw.scopeName;
+    const tier = TIERS.find(t => nextLibrary[t].some(matches)) ?? (sw.panelType as Tier);
+    const index = (nextLibrary[tier] ?? []).findIndex(matches);
+    if (index < 0) { newSwitchgears.push(sw.scopeName); continue; }
+
+    const existing = nextLibrary[tier][index];
+    const merged = mergeOverEdits(
+      (existing.properties ?? {}) as Record<string, any>,
+      (sw.device?.properties ?? {}) as Record<string, any>,
+      baseline?.devices?.[String(sw.scopeId)] as Record<string, any> | undefined,
+    );
+    let moved = false;
+    for (const key of Object.keys(merged)) {
+      if (asText(merged[key]) !== asText((existing.properties as any)?.[key])) {
+        moved = true;
+        changes.push({
+          where: sw.scopeName, field: key,
+          from: asText((existing.properties as any)?.[key]), to: asText(merged[key]),
+        });
+      }
+    }
+    if (moved) {
+      libraryTouched = true;
+      nextLibrary[tier][index] = { ...existing, properties: merged as typeof existing.properties };
+    }
+  }
+  if (libraryTouched) patch.deviceLibrary = nextLibrary;
+
+  // The link records what TPMS says today, so the next update can tell a field
+  // TPMS moved from a field the engineer moved. It is written whether or not
+  // anything changed — an update that found nothing still read TPMS.
+  patch.tpmsSync = buildTpmsSyncState(header, project.tpmsSync?.master ?? 'suite', project.tpmsSync);
+
+  say('Done.', 1, 1);
+  return { patch, changes, newSwitchgears, header, problems };
 }

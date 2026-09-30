@@ -3,7 +3,11 @@
 # =============================================================================
 services:
   simorgh-soft-mongo:
-    image: mongo:7
+    # mongo:7 with the backup script inside it — see simorgh-soft/mongo/.
+    # Built and published beside the application so both come from one
+    # registry: on this server the image that has to come from Docker Hub is
+    # the one that fails on the day the link is bad, and it is the database.
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-soft-mongo:${IMAGE_TAG:-latest}
     container_name: simorgh-soft-mongo
     expose:
       - "27017"
@@ -17,6 +21,43 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+    restart: unless-stopped
+
+  # ── A dump of the whole database, every night ──────────────────────────────
+  #
+  # The application keeps sixty versions of every project, which answers "it
+  # was there this morning". This answers the other question: what if the
+  # database itself is lost — the volume, the disk, the machine. The history
+  # lives inside the database it is protecting, so it cannot be the answer to
+  # that one.
+  #
+  # Same image as the database, so mongodump is the matching version and there
+  # is nothing extra to pull onto a server with a poor link to the outside.
+  # The dumps land on a bind mount rather than a named volume, so they are on
+  # the host filesystem where they can be copied off — a backup only a docker
+  # command can reach is one nobody takes.
+  simorgh-soft-mongo-backup:
+    # The same image. It carries mongodump of the matching version and the
+    # script; only the command differs.
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-soft-mongo:${IMAGE_TAG:-latest}
+    container_name: simorgh-soft-mongo-backup
+    depends_on:
+      - simorgh-soft-mongo
+    networks:
+      - app_net
+    volumes:
+      - ${SOFT_BACKUP_DIR:-./backups/simorgh-soft-mongo}:/backups
+    environment:
+      # 02:30 by default. Nothing is being edited then, and it is early enough
+      # that a dump which goes wrong is noticed the same working day.
+      BACKUP_AT: ${SOFT_BACKUP_AT:-02:30}
+      KEEP_DAYS: ${SOFT_BACKUP_KEEP_DAYS:-30}
+      MONGO_URI: ${SOFT_BACKUP_URI:-mongodb://simorgh-soft-mongo:27017}
+    # It was thirty lines of bash inlined here, with every `$` doubled so
+    # compose would not interpolate it. A stray one was a silent substitution
+    # rather than an error, and none of it could be run without bringing the
+    # stack up. It is a script in the image now.
+    entrypoint: ["/usr/local/bin/backup.sh"]
     restart: unless-stopped
 
 networks:

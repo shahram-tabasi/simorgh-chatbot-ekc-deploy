@@ -10,10 +10,8 @@
 # =============================================================================
 services:
   chat-history-mcp:
-    image: simorgh-chat-history-mcp:local
-    build:
-      context: ..
-      dockerfile: chat-history-mcp-service/Dockerfile
+    image: ${IMAGE_PREFIX:-ghcr.io/shahram-tabasi/}simorgh-chat-history-mcp:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-missing}
     container_name: chat-history-mcp
     expose:
       - "8054"

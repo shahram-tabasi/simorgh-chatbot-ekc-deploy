@@ -1,0 +1,19 @@
+End User License Agreement (EULA)
+
+Please read the following license agreement carefully before installing or using the Simorgh Design Suite software.
+
+By installing this software, you agree to be bound by the terms and conditions of this End User License Agreement. If you do not agree to these terms, do not install or use the software.
+
+1. License Grant
+Simorgh Technology grants you a non-exclusive, non-transferable license to use the Simorgh Design Suite software for your internal business purposes, subject to the terms of this agreement.
+
+2. Ownership
+The software, and every copy of it, remains the property of Simorgh Technology. All rights not expressly granted in this agreement are reserved.
+
+3. Restrictions
+You may not sell, rent, lend, sublicense or distribute the software, and you may not modify, reverse engineer, decompile or disassemble it, except as the law expressly permits.
+
+4. Data
+The software is a client for your organisation's Simorgh Design Suite server. Project data is stored on that server, not on this computer.
+
+Simorgh Technology  |  All rights reserved.

@@ -32,13 +32,7 @@ export const RevisionLockedModal: React.FC<RevisionLockedModalProps> = ({ notice
           </div>
 
           <div className="px-6 py-4 space-y-3">
-            <p className="text-sm text-gray-700" dir="rtl">
-              این پروژه{notice.tpmsProject ? ` (${notice.tpmsProject})` : ''} از TPMS خوانده می‌شود و هر بار
-              که باز شود دوباره از TPMS به‌روزرسانی می‌گردد؛ برای همین فعلاً فقط خواندنی است.
-              برای اینکه مرجع اصلی، سیمرغ دیزاین سوییت شود و بتوانید تغییر بدهید، یک ریویژن جدید
-              {next ? ` (REV ${next})` : ''} بسازید. از آن به بعد دیگر از TPMS به‌روزرسانی نمی‌شود.
-            </p>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-gray-700">
               TPMS is the master of this project: it is read again on every open, so edits made here
               would be overwritten. Raise a revision{next ? ` (REV ${next})` : ''} — Design Suite then owns
               the project, syncing stops, and it becomes editable.
@@ -60,9 +54,6 @@ export const RevisionLockedModal: React.FC<RevisionLockedModalProps> = ({ notice
   }
 
   const blocking = notice.blockingRevisionNumbers;
-  const blockingLabel = blocking.length > 0
-    ? blocking.map(n => `REV ${n}`).join('، ')
-    : 'بالاتر';
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]">
@@ -83,12 +74,7 @@ export const RevisionLockedModal: React.FC<RevisionLockedModalProps> = ({ notice
         </div>
 
         <div className="px-6 py-4 space-y-3">
-          <p className="text-sm text-gray-700" dir="rtl">
-            ریویژن بالاتر ({blockingLabel}) ساخته شده است و امکان اعمال تغییرات روی
-            {' '}REV {notice.currentRevisionNumber} وجود ندارد. برای ویرایش دوباره این ریویژن،
-            ابتدا باید ریویژن‌های بالاتر را حذف کنید.
-          </p>
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-gray-700">
             {blocking.length > 0
               ? `A newer revision (${blocking.map(n => `REV ${n}`).join(', ')}) already exists, so REV ${notice.currentRevisionNumber} is read-only. Delete the newer revision(s) first to edit it again.`
               : `A newer revision already exists, so REV ${notice.currentRevisionNumber} is read-only. Delete the newer revision(s) first to edit it again.`}
