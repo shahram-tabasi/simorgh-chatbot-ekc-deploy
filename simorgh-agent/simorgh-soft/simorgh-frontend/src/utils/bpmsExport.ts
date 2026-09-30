@@ -281,8 +281,10 @@ export function sheetName(name: string, taken: Set<string>): string {
 // Every number below is read off the .xls files BPMS was given (widths in
 // 1/256 of a character, heights in twips, colours from Excel's palette):
 // Arial 10; a bold title with a double rule under it; bold headings on
-// lavender (46), the one past the table on gold (51); centred, wrapped,
-// thin-bordered cells, the part block on white; the top three rows frozen.
+// lavender (46); centred, wrapped, thin-bordered cells, the part block on
+// white; the top three rows frozen. The table ends at column T: EPLAN's files
+// had a gold column U after it, which the software reading this sheet takes
+// for data, so it is left out.
 
 /** Sheet names EPLAN used. */
 export const BPMS_SHEET_NAME: Record<BpmsTier, string> = { LV: 'D.L', MV: 'D.M' };
@@ -291,8 +293,6 @@ const WIDTHS = [
   1316, 1462, 1462, 1865, 1792, 2486, 2669, 2157, 1901, 4864, 7131, 3584,
   7387, 7241, 7241, 7241, 4022, 1609, 4608, 5229,
 ];
-/** The column after the table: narrow on the LV sheet, wider on the MV one. */
-const LAST_COL_WIDTH: Record<BpmsTier, number> = { LV: 512, MV: 2377 };
 
 const ALL: [number, number, number, number] = [LINE.thin, LINE.thin, LINE.thin, LINE.thin];
 const NO_RIGHT: [number, number, number, number] = [LINE.thin, LINE.none, LINE.thin, LINE.thin];
@@ -301,47 +301,41 @@ export const BPMS_XLS_STYLES: XlsStyle[] = [
   /* 0 title, A1 */ { bold: true, h: 1, v: 1, border: [LINE.thin, 0, 0, LINE.double], fill: 9, text: true },
   /* 1 title    */ { bold: true, h: 1, v: 1, border: [0, 0, 0, LINE.double], fill: 9, text: true },
   /* 2 gap row  */ { bold: true, fontColor: 10, h: 1, v: 1, fill: 9, text: true },
-  /* 3 outside  */ { v: 1 },
-  /* 4 heading, wrapped */ { bold: true, fontColor: 8, h: 2, v: 1, wrap: true, border: NO_RIGHT, fill: 46, text: true },
-  /* 5 heading  */ { bold: true, fontColor: 8, h: 2, v: 1, border: ALL, fill: 46, text: true },
-  /* 6 heading past the table */ { bold: true, fontColor: 8, h: 1, v: 1, wrap: true, border: NO_RIGHT, fill: 51, text: true },
-  /* 7 cell, boxed */ { h: 2, v: 1, wrap: true, border: ALL, text: true },
-  /* 8 line cell */ { h: 2, v: 1, wrap: true, border: NO_RIGHT },
-  /* 9 part cell */ { h: 2, v: 1, wrap: true, border: ALL, fill: 9, text: true },
+  /* 3 heading, wrapped */ { bold: true, fontColor: 8, h: 2, v: 1, wrap: true, border: NO_RIGHT, fill: 46, text: true },
+  /* 4 heading  */ { bold: true, fontColor: 8, h: 2, v: 1, border: ALL, fill: 46, text: true },
+  /* 5 cell, boxed */ { h: 2, v: 1, wrap: true, border: ALL, text: true },
+  /* 6 line cell */ { h: 2, v: 1, wrap: true, border: NO_RIGHT },
+  /* 7 part cell */ { h: 2, v: 1, wrap: true, border: ALL, fill: 9, text: true },
 ];
 
 /** The BPMS sheet as the .xls writer takes it. */
 export function bpmsXlsSheet(sheet: BpmsSheet): XlsSheet {
-  const cols = BPMS_HEADERS.length;      // 20; column U (index 20) closes the table
+  const cols = BPMS_HEADERS.length;      // 20: A–T, and nothing after T
   const cells: XlsCell[] = [];
   const put = (r: number, c: number, v: string | number | undefined, s: number) =>
     cells.push({ r, c, v: v === undefined || v === '' ? undefined : String(v), s });
 
-  // Title across A–T, and U beside it.
+  // Title across A–T.
   for (let c = 0; c < cols; c++) put(0, c, c === 0 ? sheet.rows[0][0] : undefined, c === 0 ? 0 : 1);
-  put(0, cols, undefined, 3);
   for (let c = 0; c < cols; c++) put(1, c, undefined, 2);
-  put(1, cols, undefined, 3);
 
   const wrappedHeading = new Set([0, 1, 2, 4, 5, 6, 7, 8, 9, 10]);
-  for (let c = 0; c < cols; c++) put(2, c, BPMS_HEADERS[c], wrappedHeading.has(c) ? 4 : 5);
-  put(2, cols, undefined, 6);
+  for (let c = 0; c < cols; c++) put(2, c, BPMS_HEADERS[c], wrappedHeading.has(c) ? 3 : 4);
 
   const rowHeights: Record<number, number> = { 0: 600, 1: 180, 2: 1185 };
   for (let r = BPMS_HEADER_ROW + 1; r < sheet.rows.length; r++) {
     const values = sheet.rows[r];
     for (let c = 0; c < cols; c++) {
-      const style = c >= BPMS_FIRST_PART_COL ? 9 : (c === 0 || c === 3) ? 7 : 8;
+      const style = c >= BPMS_FIRST_PART_COL ? 7 : (c === 0 || c === 3) ? 5 : 6;
       put(r, c, values[c], style);
     }
-    put(r, cols, undefined, 9);
     rowHeights[r] = 1020;
   }
 
   return {
     name: BPMS_SHEET_NAME[sheet.tier],
     cells,
-    colWidths: [...WIDTHS, LAST_COL_WIDTH[sheet.tier]],
+    colWidths: WIDTHS,
     restWidth: 2925,
     rowHeights,
     merges: sheet.merges.map(m => [m.s.r, m.e.r, m.s.c, m.e.c] as [number, number, number, number]),
