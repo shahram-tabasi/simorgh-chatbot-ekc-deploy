@@ -7,14 +7,12 @@
 // included. The spreadsheet library in this app writes .xls, but writes it
 // plain: every style is dropped. This writes the records that sheet needs and
 // nothing else — fonts, cell formats, shared strings, column widths, row
-// heights, text and blank cells, merged cells, frozen panes and zoom — and
-// packs them into the compound file an .xls is, with the compound-file writer
-// that library already ships.
+// heights, text and blank cells, merged cells, frozen panes and zoom, with the
+// row index and page setup Excel writes — and packs them into the compound
+// file an .xls is.
 //
 // Cells are text (or blank): every value in the BPMS sheet is text, and that
 // is all this has to write.
-
-import * as XLSX from 'xlsx-js-style';
 
 /** Line styles, as BIFF8 numbers them. */
 export const LINE = { none: 0, thin: 1, double: 6 } as const;
@@ -228,57 +226,119 @@ function globals(styles: XlsStyle[], sheets: XlsSheet[], strings: string[], tota
 /** First style index a sheet's own XFs get. */
 const FIRST_XF = 16;
 
-function worksheet(sheet: XlsSheet, sst: Map<string, number>): Uint8Array {
-  const out = new Bytes();
-  record(out, 0x0809, new Bytes().u16(0x0600).u16(0x0010).u16(0x0dbb).u16(0x07cc).u32(0).u32(6));
-  record(out, 0x000d, new Bytes().u16(1));                       // CALCMODE
-  record(out, 0x000c, new Bytes().u16(100));                     // CALCCOUNT
-  record(out, 0x000f, new Bytes().u16(1));                       // REFMODE
-  record(out, 0x0011, new Bytes().u16(0));                       // ITERATION
-  record(out, 0x0010, new Bytes().f64(0.001));                   // DELTA
-  record(out, 0x005f, new Bytes().u16(1));                       // SAVERECALC
-  record(out, 0x002a, new Bytes().u16(0));                       // PRINTHEADERS
-  record(out, 0x002b, new Bytes().u16(0));                       // PRINTGRIDLINES
-  record(out, 0x0082, new Bytes().u16(1));                       // GRIDSET
-  record(out, 0x0080, new Bytes().u16(0).u16(0).u16(0).u16(0));  // GUTS
-  record(out, 0x0225, new Bytes().u16(0).u16(255));              // DEFAULTROWHEIGHT
-  record(out, 0x0081, new Bytes().u16(0x04c1));                  // WSBOOL
-  record(out, 0x0055, new Bytes().u16(8));                       // DEFCOLWIDTH
-
-  sheet.colWidths.forEach((w, c) =>
-    record(out, 0x007d, new Bytes().u16(c).u16(c).u16(w).u16(15).u16(0).u16(0)));
-  if (sheet.restWidth && sheet.colWidths.length < 256) {
-    record(out, 0x007d, new Bytes().u16(sheet.colWidths.length).u16(255)
-      .u16(sheet.restWidth).u16(15).u16(0).u16(0));
-  }
+/**
+ * A worksheet, laid out the way Excel lays one out.
+ *
+ * Excel itself reads a sheet without most of what follows, but stricter
+ * readers — BPMS among them — do not: they want the row index (INDEX, and a
+ * DBCELL after every block of up to 32 rows) and the page setup Excel always
+ * writes. Without them BPMS turned the file down until it had been opened in
+ * Excel and saved again. `base` is where the sheet starts in the Workbook
+ * stream; INDEX holds absolute positions.
+ */
+function worksheet(sheet: XlsSheet, sst: Map<string, number>, base: number): Uint8Array {
+  const head = new Bytes();
+  record(head, 0x0809, new Bytes().u16(0x0600).u16(0x0010).u16(0x4f5a).u16(0x07cd).u32(0x000200c9).u32(0x0806));
 
   const cells = [...sheet.cells].sort((a, b) => a.r - b.r || a.c - b.c);
-  const lastRow = Math.max(0, ...cells.map(c => c.r), ...Object.keys(sheet.rowHeights).map(Number));
-  const lastCol = Math.max(0, ...cells.map(c => c.c));
-  record(out, 0x0200, new Bytes().u32(0).u32(lastRow + 1).u16(0).u16(lastCol + 1).u16(0)); // DIMENSIONS
-
   const byRow = new Map<number, XlsCell[]>();
   for (const cell of cells) {
     if (!byRow.has(cell.r)) byRow.set(cell.r, []);
     byRow.get(cell.r)!.push(cell);
   }
   const rows = [...new Set([...byRow.keys(), ...Object.keys(sheet.rowHeights).map(Number)])].sort((a, b) => a - b);
-  for (const r of rows) {
-    const inRow = byRow.get(r) ?? [];
-    const height = sheet.rowHeights[r];
-    record(out, 0x0208, new Bytes().u16(r)
-      .u16(inRow.length ? inRow[0].c : 0).u16(inRow.length ? inRow[inRow.length - 1].c + 1 : 0)
-      .u16(height ?? 255).u16(0).u16(0)
-      .u32(0x00000100 | (height !== undefined ? 0x40 : 0)));
+  const blocks: number[][] = [];
+  for (let i = 0; i < rows.length; i += 32) blocks.push(rows.slice(i, i + 32));
+
+  const mid = new Bytes();
+  record(mid, 0x000d, new Bytes().u16(1));                       // CALCMODE
+  record(mid, 0x000c, new Bytes().u16(100));                     // CALCCOUNT
+  record(mid, 0x000f, new Bytes().u16(1));                       // REFMODE
+  record(mid, 0x0011, new Bytes().u16(0));                       // ITERATION
+  record(mid, 0x0010, new Bytes().f64(0.001));                   // DELTA
+  record(mid, 0x005f, new Bytes().u16(1));                       // SAVERECALC
+  record(mid, 0x002a, new Bytes().u16(0));                       // PRINTHEADERS
+  record(mid, 0x002b, new Bytes().u16(0));                       // PRINTGRIDLINES
+  record(mid, 0x0082, new Bytes().u16(1));                       // GRIDSET
+  record(mid, 0x0080, new Bytes().u16(0).u16(0).u16(0).u16(0));  // GUTS
+  record(mid, 0x0225, new Bytes().u16(0).u16(255));              // DEFAULTROWHEIGHT
+  record(mid, 0x0081, new Bytes().u16(0x04c1));                  // WSBOOL
+  record(mid, 0x0014, new Bytes());                              // HEADER
+  record(mid, 0x0015, new Bytes());                              // FOOTER
+  record(mid, 0x0083, new Bytes().u16(1));                       // HCENTER
+  record(mid, 0x0084, new Bytes().u16(0));                       // VCENTER
+  for (const id of [0x0026, 0x0027, 0x0028, 0x0029]) {
+    record(mid, id, new Bytes().f64(0.25));                      // LEFT/RIGHT/TOP/BOTTOMMARGIN
   }
-  for (const cell of cells) {
-    const xf = FIRST_XF + cell.s;
-    if (cell.v !== undefined && cell.v !== '') {
-      record(out, 0x00fd, new Bytes().u16(cell.r).u16(cell.c).u16(xf).u32(sst.get(cell.v)!));
-    } else {
-      record(out, 0x0201, new Bytes().u16(cell.r).u16(cell.c).u16(xf));
+  // SETUP: A4, 70 %, landscape, 600 dpi, header and footer 0.25" — as EPLAN's.
+  record(mid, 0x00a1, new Bytes().u16(9).u16(70).u16(1).u16(1).u16(1).u16(0)
+    .u16(600).u16(600).f64(0.25).f64(0.25).u16(1));
+
+  const indexLength = 4 + 16 + 4 * blocks.length;
+  const bodyStart = base + head.length + indexLength + mid.length;
+  const body = new Bytes();
+  const at = () => bodyStart + body.length;
+
+  const defColWidthAt = at();
+  record(body, 0x0055, new Bytes().u16(8));                      // DEFCOLWIDTH
+  sheet.colWidths.forEach((w, c) =>
+    record(body, 0x007d, new Bytes().u16(c).u16(c).u16(w).u16(15).u16(0).u16(0)));
+  if (sheet.restWidth && sheet.colWidths.length < 256) {
+    record(body, 0x007d, new Bytes().u16(sheet.colWidths.length).u16(255)
+      .u16(sheet.restWidth).u16(15).u16(0).u16(0));
+  }
+
+  // Folded, not spread: a big project has more cells than a call has room for.
+  const lastRow = rows.reduce((m, r) => Math.max(m, r), 0);
+  const lastCol = cells.reduce((m, c) => Math.max(m, c.c), 0);
+  record(body, 0x0200, new Bytes().u32(0).u32(lastRow + 1).u16(0).u16(lastCol + 1).u16(0)); // DIMENSIONS
+
+  const dbCells: number[] = [];
+  for (const block of blocks) {
+    const rowAt: number[] = [];
+    for (const r of block) {
+      const inRow = byRow.get(r) ?? [];
+      const height = sheet.rowHeights[r];
+      rowAt.push(at());
+      record(body, 0x0208, new Bytes().u16(r)
+        .u16(inRow.length ? inRow[0].c : 0).u16(inRow.length ? inRow[inRow.length - 1].c + 1 : 0)
+        .u16(height ?? 255).u16(0).u16(0)
+        .u32(0x00000100 | (height !== undefined ? 0x40 : 0)));  // ROW
     }
+    // Each row's first cell, the first measured from the second ROW record
+    // and the rest from the row before — as DBCELL counts them.
+    const offsets: number[] = [];
+    let from = rowAt.length > 1 ? rowAt[1] : at();
+    for (const r of block) {
+      const inRow = byRow.get(r) ?? [];
+      if (inRow.length === 0) { offsets.push(0); continue; }
+      const first = at();
+      offsets.push(first - from);
+      from = first;
+      for (const cell of inRow) {
+        const xf = FIRST_XF + cell.s;
+        if (cell.v !== undefined && cell.v !== '') {
+          record(body, 0x00fd, new Bytes().u16(cell.r).u16(cell.c).u16(xf).u32(sst.get(cell.v)!)); // LABELSST
+        } else {
+          record(body, 0x0201, new Bytes().u16(cell.r).u16(cell.c).u16(xf));                        // BLANK
+        }
+      }
+    }
+    const dbCellAt = at();
+    dbCells.push(dbCellAt);
+    const db = new Bytes().u32(dbCellAt - rowAt[0]);
+    offsets.forEach(o => db.u16(o));
+    record(body, 0x00d7, db);                                    // DBCELL
   }
+
+  const index = new Bytes().u32(0).u32(rows.length ? rows[0] : 0).u32(rows.length ? lastRow + 1 : 0)
+    .u32(defColWidthAt);
+  dbCells.forEach(p => index.u32(p));
+  const out = new Bytes();
+  out.bytes(head.array());
+  record(out, 0x020b, index);                                    // INDEX
+  out.bytes(mid.array());
+  out.bytes(body.array());
 
   const frozen = (sheet.freezeRows ?? 0) > 0;
   record(out, 0x023e, new Bytes()
@@ -290,6 +350,8 @@ function worksheet(sheet: XlsSheet, sst: Map<string, number>): Uint8Array {
   if (frozen) {
     const n = sheet.freezeRows!;
     record(out, 0x0041, new Bytes().u16(0).u16(n).u16(n).u16(0).u8(2).u8(0)); // PANE
+    record(out, 0x001d, new Bytes().u8(3).u16(0).u16(0).u16(0).u16(1)
+      .u16(0).u16(0).u8(0).u8(0));                                            // SELECTION, top
     record(out, 0x001d, new Bytes().u8(2).u16(n).u16(0).u16(0).u16(1)
       .u16(n).u16(n).u8(0).u8(0));                                            // SELECTION
   } else {
@@ -317,26 +379,124 @@ export function writeXls(styles: XlsStyle[], sheets: XlsSheet[]): Uint8Array {
     }
   }
   const strings = [...sst.keys()];
-  const bodies = sheets.map(sheet => worksheet(sheet, sst));
-
   // The globals hold each sheet's offset, and their own length decides it:
-  // written once to measure, then again with the offsets in place.
+  // written once to measure, then again with the offsets in place. A sheet's
+  // length does not depend on where it starts, only its INDEX does.
   const measure = globals(styles, sheets, strings, total, sheets.map(() => 0)).length;
   const offsets: number[] = [];
   let at = measure;
-  for (const body of bodies) { offsets.push(at); at += body.length; }
+  for (const sheet of sheets) { offsets.push(at); at += worksheet(sheet, sst, 0).length; }
   const head = globals(styles, sheets, strings, total, offsets);
+  const bodies = sheets.map((sheet, i) => worksheet(sheet, sst, offsets[i]));
 
-  const stream = new Uint8Array(head.length + bodies.reduce((n, b) => n + b.length, 0));
+  // Excel never keeps the Workbook stream in the compound file's mini stream:
+  // one shorter than 4096 bytes is padded out to it.
+  const length = head.length + bodies.reduce((n, b) => n + b.length, 0);
+  const stream = new Uint8Array(Math.max(length, 4096));
   stream.set(head, 0);
   let pos = head.length;
   for (const body of bodies) { stream.set(body, pos); pos += body.length; }
+  return compoundFile(stream);
+}
 
-  const CFB = (XLSX as unknown as { CFB: any }).CFB;
-  const doc = CFB.utils.cfb_new();
-  CFB.utils.cfb_add(doc, 'Workbook', stream);
-  // The writer also adds a tiny placeholder entry of its own beside the
-  // Workbook stream, as it does in every .xls this library writes; readers,
-  // Excel included, ignore it.
-  return new Uint8Array(CFB.write(doc, { fileType: 'cfb', type: 'array' }));
+// ── Compound file ────────────────────────────────────────────────────────────
+
+const FREESECT = 0xffffffff;
+const ENDOFCHAIN = 0xfffffffe;
+const FATSECT = 0xfffffffd;
+const DIFSECT = 0xfffffffc;
+const NOSTREAM = 0xffffffff;
+/** Excel's class id, 00020820-0000-0000-C000-000000000046, as stored. */
+const EXCEL_CLSID = [0x20, 0x08, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0, 0, 0, 0, 0, 0, 0x46];
+
+/**
+ * The compound file (version 3, 512-byte sectors) around the Workbook stream,
+ * as Excel writes it: a root entry carrying Excel's class id and the one
+ * stream, kept in ordinary sectors. The library's writer added a placeholder
+ * entry of its own and left the root without a class id.
+ */
+function compoundFile(workbook: Uint8Array): Uint8Array {
+  const SECTOR = 512;
+  const dataSectors = Math.ceil(workbook.length / SECTOR);
+  const dirSectors = 1;
+  let fatSectors = 1;
+  let difatSectors = 0;
+  for (;;) {
+    const total = dataSectors + dirSectors + fatSectors + difatSectors;
+    const needFat = Math.ceil(total / 128);
+    const needDifat = needFat > 109 ? Math.ceil((needFat - 109) / 127) : 0;
+    if (needFat === fatSectors && needDifat === difatSectors) break;
+    fatSectors = needFat;
+    difatSectors = needDifat;
+  }
+  const dirStart = dataSectors;
+  const fatStart = dirStart + dirSectors;
+  const difatStart = fatStart + fatSectors;
+  const sectors = difatStart + difatSectors;
+
+  const file = new Uint8Array(SECTOR * (1 + sectors));
+  const view = new DataView(file.buffer);
+  const sectorAt = (n: number) => SECTOR * (1 + n);
+
+  // Header.
+  file.set([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1], 0);
+  view.setUint16(0x18, 0x003e, true);          // minor version
+  view.setUint16(0x1a, 0x0003, true);          // major version 3
+  view.setUint16(0x1c, 0xfffe, true);          // little-endian
+  view.setUint16(0x1e, 9, true);               // 512-byte sectors
+  view.setUint16(0x20, 6, true);               // 64-byte mini sectors
+  view.setUint32(0x2c, fatSectors, true);
+  view.setUint32(0x30, dirStart, true);
+  view.setUint32(0x38, 4096, true);            // mini stream cutoff
+  view.setUint32(0x3c, ENDOFCHAIN, true);      // no mini FAT
+  view.setUint32(0x40, 0, true);
+  view.setUint32(0x44, difatSectors ? difatStart : ENDOFCHAIN, true);
+  view.setUint32(0x48, difatSectors, true);
+  for (let i = 0; i < 109; i++) {
+    view.setUint32(0x4c + 4 * i, i < fatSectors ? fatStart + i : FREESECT, true);
+  }
+
+  // The rest of the FAT sector list, 127 to a DIFAT sector and a link on.
+  for (let d = 0; d < difatSectors; d++) {
+    const base = sectorAt(difatStart + d);
+    for (let k = 0; k < 127; k++) {
+      const i = 109 + d * 127 + k;
+      view.setUint32(base + 4 * k, i < fatSectors ? fatStart + i : FREESECT, true);
+    }
+    view.setUint32(base + 508, d + 1 < difatSectors ? difatStart + d + 1 : ENDOFCHAIN, true);
+  }
+
+  // FAT.
+  const fat = new Uint32Array(fatSectors * 128).fill(FREESECT);
+  for (let i = 0; i < dataSectors; i++) fat[i] = i + 1 < dataSectors ? i + 1 : ENDOFCHAIN;
+  fat[dirStart] = ENDOFCHAIN;
+  for (let i = 0; i < fatSectors; i++) fat[fatStart + i] = FATSECT;
+  for (let i = 0; i < difatSectors; i++) fat[difatStart + i] = DIFSECT;
+  fat.forEach((v, i) => view.setUint32(sectorAt(fatStart) + 4 * i, v, true));
+
+  // Directory: the root, then the Workbook stream as its only child.
+  const entry = (n: number, name: string, type: number, child: number, start: number, size: number, clsid?: number[]) => {
+    const at = sectorAt(dirStart) + 128 * n;
+    for (let i = 0; i < name.length; i++) view.setUint16(at + 2 * i, name.charCodeAt(i), true);
+    view.setUint16(at + 0x40, 2 * (name.length + 1), true);
+    file[at + 0x42] = type;
+    file[at + 0x43] = 1;                        // black
+    view.setUint32(at + 0x44, NOSTREAM, true);  // left sibling
+    view.setUint32(at + 0x48, NOSTREAM, true);  // right sibling
+    view.setUint32(at + 0x4c, child, true);
+    if (clsid) file.set(clsid, at + 0x50);
+    view.setUint32(at + 0x74, start, true);
+    view.setUint32(at + 0x78, size, true);
+  };
+  entry(0, 'Root Entry', 5, 1, ENDOFCHAIN, 0, EXCEL_CLSID);
+  entry(1, 'Workbook', 2, NOSTREAM, 0, workbook.length);
+  for (const n of [2, 3]) {
+    const at = sectorAt(dirStart) + 128 * n;
+    view.setUint32(at + 0x44, NOSTREAM, true);
+    view.setUint32(at + 0x48, NOSTREAM, true);
+    view.setUint32(at + 0x4c, NOSTREAM, true);
+  }
+
+  file.set(workbook, sectorAt(0));
+  return file;
 }
