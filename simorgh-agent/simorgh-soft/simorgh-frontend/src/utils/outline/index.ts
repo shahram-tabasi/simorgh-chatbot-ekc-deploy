@@ -30,6 +30,7 @@ import {
   hasEarthSwitch, hasDampingResistor, ptStatus, ronisLabels, equipmentLabels,
   determineRonis,
 } from './parts';
+import { TEMPLATE_FAMILIES } from '../templateFamilies';
 import { decodePoleCenter, PoleCenter } from './poleCenter';
 import { selectWorldPanel, PanelConfig } from './simoprimeWorld';
 import {
@@ -116,11 +117,16 @@ export function panelFacts(data: ProjectData, equipment: Equipment): PanelFacts 
  * the template's own hierarchy answers, since a bare count is not a cell type
  * and reading it as one would select no basket at all.
  */
+const MV_FAMILY_NODES = TEMPLATE_FAMILIES.MV.map(f => f.id.toUpperCase());
+
 export function cellTypeOf(row: DeviceTableRow, template: TemplateItem | undefined): string {
   const size = text(row?.size);
   if (size && !/^\d+(\.\d+)?\s*[MC]?$/i.test(size)) return size;
 
-  const path = template?.hierarchy?.path ?? [];
+  // An MV path starts with its switchgear family (SIMOPRIME-A4 / Feeder Truck
+  // / w VT); the cell type is the node after it.
+  const full = template?.hierarchy?.path ?? [];
+  const path = MV_FAMILY_NODES.includes(text(full[0]).toUpperCase()) ? full.slice(1) : full;
   const head = text(path[0]);
   if (!head) return '';
   const sub = text(path[1]);

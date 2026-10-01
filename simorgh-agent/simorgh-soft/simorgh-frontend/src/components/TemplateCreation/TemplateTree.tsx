@@ -466,7 +466,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                               : <ChevronRightIcon className="w-4 h-4 mr-1" />}
                             <span className="text-sm font-medium">{group.family.label}</span>
                             <span className="ml-1.5 text-[10px] text-gray-400">
-                              {group.family.note} · {group.templates.length}
+                              {group.family.note ? `${group.family.note} · ` : ''}{group.templates.length}
                             </span>
                             {/* Made from inside the section it belongs to, so the
                                 wizard has nothing to ask about which one. */}

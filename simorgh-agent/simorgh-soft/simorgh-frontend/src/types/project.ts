@@ -296,13 +296,14 @@ export interface TpmsSyncState {
 // UI) propose similar templates that already exist at the same path.
 //
 // LV path example (root always first, OFW and FIX both carry one):
-//   ['S8', 'FCB1', 'OUTGOING']   ← top → leaf, OFW family
+//   ['S8', 'FCB1', 'OUTGOING']   ← top → leaf, FIX family (FCB1-3, FCB-CAP)
 //   ['8PT', 'CCS']               ← FIX family
-//   ['S8', 'SFD']                ← OFW family
+//   ['S8', 'MOTOR']              ← OFW family
 //
-// MV path is a cell type, plus a sub-type for the two that have one:
-//   ['Feeder Truck', 'Circuit Breaker'] | ['Feeder Truck', 'Contactor Fuse Combination']
-//   ['Disconnector Link', 'With Fuse'] | ['Incoming VT Cell'] | ['Metering'] | …
+// MV path is the switchgear family, a cell type, and VT for the two feeders:
+//   ['EK36', 'Feeder Truck', 'w VT'] | ['SIMOPRIME-A4', 'Metering'] | …
+// (MV templates made before that, and GIS, have no family:
+//   ['Feeder Truck', 'Circuit Breaker'] | ['Disconnector Link', 'With Fuse'] | …)
 //
 // `leafKind` describes what equipment family this template is for, so the
 // suggestion engine can short-list templates with matching power/current.

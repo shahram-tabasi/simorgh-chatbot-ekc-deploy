@@ -7,27 +7,26 @@
 // LV taxonomy (top → leaf):
 //   family    : OFW | FIX
 //   root      : S8 | 8PT   (both families — same options either way)
-//   OFW  switch  : MOTOR | FEEDER | FCB1 | FCB2 | FCB3 | MODULLAR | FCB-CAP
-//   OFW  feeder  : (only under FCB1/2/3) INCOMING | OUTGOING | COUPLING
-//   FIX  group   : CCS | OFF | MARSHALING | SWING
-//   FIX  feeder  : (all but MARSHALING) INCOMING | COUPLING | METERING |
+//   OFW  switch  : MOTOR | FEEDER | MODULLAR
+//   FIX  group   : CCS | OFF | MARSHALING | SWING | FCB1 | FCB2 | FCB3 | FCB-CAP
+//   FIX  feeder  : FCB1/2/3 → INCOMING | OUTGOING | COUPLING
+//                  CCS/OFF/SWING → INCOMING | COUPLING | METERING |
 //                  RISER | MET&RISER | OUTGOING
+//                  (MARSHALING and FCB-CAP have none)
 //   leafKind  : OFW MOTOR/FEEDER → answered by the switch step itself
-//               OFW FCB Outgoing → motor | transformer
+//               FCB Outgoing → motor | transformer
 //               FIX Outgoing → motor | transformer | capacitor
 //               everything else under LV → none (nothing further to ask)
 //   params    : kW + currentA
 //
 // MV taxonomy:
-//   cellType  : Feeder Truck | Incoming VT Cell | Disconnector Link |
-//               Coupling Truck | Riser Connection | Metering Riser
-//               Connection | Metering | Dummy | Support Instead of CT
-//   cellSub   : (Feeder Truck) Circuit Breaker | Contactor Fuse Combination
-//               (Disconnector Link) With Fuse | Without Fuse
-//   leafKind  : (Feeder Truck → Circuit Breaker only) motor | transformer |
-//               capacitor — Contactor Fuse Combination is fixed to motor,
-//               with no chip step shown for it; everything else has none.
+//   family    : SIMOPRIME-WORLD | SIMOPRIME-A4 | EK36 (the section)
+//   cellType  : the office's list of MV cell types (MV_CELL_TYPES)
+//   VT        : (Feeder Truck, Feeder Wda) w VT | wo VT
+//   leafKind  : (Feeder Truck, Feeder Wda) motor | transformer | capacitor
 //   params    : kW + currentA
+//
+// GIS keeps the list MV had before the split (GIS_CELL_TYPES).
 //
 // The wizard never blocks creation — if a step doesn't apply for the tier
 // or branch (e.g. MV has no root), it's skipped. Suggested templates are
@@ -48,35 +47,75 @@ const LV_ROOTS       = ['S8', '8PT'] as const;
 // levels to say one thing. They are gone, and the question that was under them
 // has moved up into their place: MOTOR and FEEDER are picked here directly.
 const LV_OFW_PROMOTED = ['MOTOR', 'FEEDER'] as const;
-const LV_OFW_SWITCHES = [...LV_OFW_PROMOTED, 'FCB1', 'FCB2', 'FCB3', 'MODULLAR', 'FCB-CAP'] as const;
+const LV_OFW_SWITCHES = [...LV_OFW_PROMOTED, 'MODULLAR'] as const;
 
 /** The leaf kind a promoted switch node already answers, if it is one. */
 const promotedKind = (node: string | null): TemplateLeafKind | null =>
   node === 'MOTOR' ? 'motor' : node === 'FEEDER' ? 'feeder' : null;
-// Of the OFW switches, only these three get an Incoming/Outgoing/Coupling
-// sub-step — MODULLAR and FCB-CAP already say what they are.
-const LV_OFW_FEEDER_SWITCHES = ['FCB1', 'FCB2', 'FCB3'];
-const LV_FIX_GROUPS  = ['CCS', 'OFF', 'MARSHALING', 'SWING'] as const;
+// FCB1-3 and FCB-CAP were OFW switches; the office moved them to FIX. They
+// keep the questions they had: FCB1-3 get Incoming/Outgoing/Coupling, FCB-CAP
+// already says what it is.
+const LV_FCB_SWITCHES = ['FCB1', 'FCB2', 'FCB3'];
+const LV_FIX_GROUPS  = ['CCS', 'OFF', 'MARSHALING', 'SWING', 'FCB1', 'FCB2', 'FCB3', 'FCB-CAP'] as const;
+/** FIX groups with nothing below them. */
+const LV_FIX_NO_FEEDER = ['MARSHALING', 'FCB-CAP'];
 const LV_FCB_FEEDERS = ['INCOMING', 'OUTGOING', 'COUPLING'] as const;
 const LV_FIX_FEEDERS = ['INCOMING', 'COUPLING', 'METERING', 'RISER', 'MET&RISER', 'OUTGOING'] as const;
 
-const MV_CELL_TYPES = [
+/**
+ * The MV cell types, as the office lists them, with the line that says what
+ * each one is. The line is shown on hover and under the chips for the one
+ * picked — not on every chip, which would bury the list.
+ *
+ * Feeder Wda came as two types, "w VT" and "wo VT"; it is one type here, and
+ * the VT question after it says which. Feeder Truck, which is either, asks
+ * the same question. Riser / Metering Riser and the two Riser Connections stay
+ * apart: the estimate sheets treat them as different cells.
+ */
+const MV_CELL_TYPES: { name: string; note: string }[] = [
+  { name: 'Feeder Truck', note: 'Truck Type Circuit Breaker Panel w or wo VT' },
+  { name: 'Feeder Wda', note: 'Withdrawable Type Circuit Breaker Panel. With VT, the withdrawable voltage transformers lie in a separate compartment under the switching device compartment' },
+  { name: 'Coupling Truck', note: 'Truck Type Circuit Breaker Panel - Bus Sectionalizer' },
+  { name: 'Coupling Wda', note: 'Withdrawable Type Circuit Breaker Panel - Bus Sectionalizer' },
+  { name: 'Metering', note: 'Metering Panel w VT' },
+  { name: 'Metering Riser', note: 'Bus Riser Panel w VT' },
+  { name: 'Riser', note: 'Bus Riser Panel wo VT' },
+  { name: 'Riser Connection', note: 'Bus Cable Connection Panel wo VT' },
+  { name: 'Metering Riser Connection', note: 'Bus Cable Connection Panel w VT' },
+  { name: 'Adaptor', note: 'Only the copper bar is inside the panel, connected to another panel of the site (special design)' },
+  { name: 'Busduct', note: 'Busduct' },
+  { name: 'Dummy', note: 'Empty Cell' },
+  { name: 'Cap Bank', note: 'Capacitor Panel' },
+  { name: 'Neutral Panel', note: 'Neutral Panel' },
+  { name: 'Incoming VT Cell', note: 'Incoming Metering Panel w VT & Cable Connection' },
+  { name: 'Disconnector Link w Fuse', note: 'Truck Type Fuse-Linked Panel' },
+  { name: 'Disconnector Link wo Fuse', note: 'Truck Type Bar-Linked Panel' },
+];
+const MV_VT = ['w VT', 'wo VT'] as const;
+const MV_ASKS_VT = ['Feeder Truck', 'Feeder Wda'];
+
+// GIS cells were filed exactly as MV's before MV was split by switchgear
+// family, and still are: the same cell types, the same sub-types.
+const GIS_CELL_TYPES = [
   'Feeder Truck', 'Incoming VT Cell', 'Disconnector Link', 'Coupling Truck',
   'Riser Connection', 'Metering Riser Connection', 'Metering', 'Dummy',
   'Support Instead of CT',
 ] as const;
-const MV_FEEDER_TRUCK_SUB = ['Circuit Breaker', 'Contactor Fuse Combination'] as const;
-const MV_DISCONNECTOR_SUB = ['With Fuse', 'Without Fuse'] as const;
+const GIS_FEEDER_TRUCK_SUB = ['Circuit Breaker', 'Contactor Fuse Combination'] as const;
+const GIS_DISCONNECTOR_SUB = ['With Fuse', 'Without Fuse'] as const;
 
-const needsCellSub = (cellType: string | null) =>
-  cellType === 'Feeder Truck' || cellType === 'Disconnector Link';
-const cellSubOptions = (cellType: string | null): readonly string[] =>
-  cellType === 'Feeder Truck' ? MV_FEEDER_TRUCK_SUB
-  : cellType === 'Disconnector Link' ? MV_DISCONNECTOR_SUB
-  : [];
+const cellTypesFor = (tier: Tier): readonly string[] =>
+  tier === 'MV' ? MV_CELL_TYPES.map(c => c.name) : GIS_CELL_TYPES;
+const cellNote = (tier: Tier, cellType: string | null) =>
+  tier === 'MV' ? MV_CELL_TYPES.find(c => c.name === cellType)?.note ?? '' : '';
+const cellSubOptions = (tier: Tier, cellType: string | null): readonly string[] =>
+  tier === 'MV'
+    ? (cellType && MV_ASKS_VT.includes(cellType) ? MV_VT : [])
+    : cellType === 'Feeder Truck' ? GIS_FEEDER_TRUCK_SUB
+    : cellType === 'Disconnector Link' ? GIS_DISCONNECTOR_SUB
+    : [];
+const needsCellSub = (tier: Tier, cellType: string | null) => cellSubOptions(tier, cellType).length > 0;
 
-// GIS cells are MV cells in a different enclosure — the same cell types, the
-// same sub-types — so a GIS template is filed exactly as a MV one is.
 const mvLike = (tier: Tier) => tier === 'MV' || tier === 'GIS';
 
 // Which leaf kinds are valid for the path drilled into so far — empty means
@@ -88,6 +127,12 @@ function allowedLeafKinds(
     feeder: string | null; cellType: string | null; cellSub: string | null;
   },
 ): TemplateLeafKind[] {
+  if (tier === 'MV') {
+    // The two circuit-breaker feeders, once VT is answered — what Feeder Truck
+    // / Circuit Breaker asked before the split.
+    return ctx.cellType && MV_ASKS_VT.includes(ctx.cellType) && ctx.cellSub
+      ? ['motor', 'transformer', 'capacitor'] : [];
+  }
   if (mvLike(tier)) {
     if (ctx.cellType === 'Feeder Truck' && ctx.cellSub === 'Circuit Breaker') {
       return ['motor', 'transformer', 'capacitor'];
@@ -101,14 +146,13 @@ function allowedLeafKinds(
       // to ask. (SFD and HFD themselves can no longer be reached; templates
       // filed under one before the fold keep working, they just cannot be
       // made any more.)
-      if (promotedKind(ctx.switchNode)) return [];
-      if (ctx.switchNode && LV_OFW_FEEDER_SWITCHES.includes(ctx.switchNode)) {
-        return ctx.feeder === 'OUTGOING' ? ['motor', 'transformer'] : [];
-      }
-      return []; // MODULLAR, FCB-CAP
+      return []; // MOTOR, FEEDER (answered by the switch itself), MODULLAR
     }
     if (ctx.family === 'FIX') {
-      if (ctx.group === 'MARSHALING') return [];
+      if (ctx.group && LV_FIX_NO_FEEDER.includes(ctx.group)) return [];
+      if (ctx.group && LV_FCB_SWITCHES.includes(ctx.group)) {
+        return ctx.feeder === 'OUTGOING' ? ['motor', 'transformer'] : [];
+      }
       return ctx.feeder === 'OUTGOING' ? ['motor', 'transformer', 'capacitor'] : [];
     }
   }
@@ -142,14 +186,7 @@ function seedPath(
 
   if (tier === 'LV') {
     if (family === 'OFW') {
-      const switchNode = pick(at(1), LV_OFW_SWITCHES);
-      return {
-        ...empty,
-        root: pick(at(0), LV_ROOTS),
-        switchNode,
-        feeder: switchNode && LV_OFW_FEEDER_SWITCHES.includes(switchNode)
-          ? pick(at(2), LV_FCB_FEEDERS) : null,
-      };
+      return { ...empty, root: pick(at(0), LV_ROOTS), switchNode: pick(at(1), LV_OFW_SWITCHES) };
     }
     if (family === 'FIX') {
       const group = pick(at(1), LV_FIX_GROUPS);
@@ -157,17 +194,35 @@ function seedPath(
         ...empty,
         root: pick(at(0), LV_ROOTS),
         group,
-        feeder: group && group !== 'MARSHALING' ? pick(at(2), LV_FIX_FEEDERS) : null,
+        feeder: !group || LV_FIX_NO_FEEDER.includes(group) ? null
+          : pick(at(2), LV_FCB_SWITCHES.includes(group) ? LV_FCB_FEEDERS : LV_FIX_FEEDERS),
       };
     }
     return empty;
   }
-  if (mvLike(tier)) {
-    const cellType = pick(at(0), MV_CELL_TYPES);
+  if (tier === 'MV') {
+    // A path made before the split has no family at its head; the cell type
+    // is then the first node. The old "Disconnector Link / With Fuse" is one
+    // type now.
+    const offset = TEMPLATE_FAMILIES.MV.some(f => f.id === at(0)) ? 1 : 0;
+    const head = at(offset);
+    const sub = at(offset + 1);
+    const legacy = head === 'DISCONNECTOR LINK'
+      ? (sub === 'WITH FUSE' ? 'DISCONNECTOR LINK W FUSE' : sub === 'WITHOUT FUSE' ? 'DISCONNECTOR LINK WO FUSE' : '')
+      : head;
+    const cellType = pick(legacy, cellTypesFor('MV'));
     return {
       ...empty,
       cellType,
-      cellSub: cellType ? pick(at(1), cellSubOptions(cellType)) : null,
+      cellSub: cellType ? pick(sub, cellSubOptions('MV', cellType)) : null,
+    };
+  }
+  if (mvLike(tier)) {
+    const cellType = pick(at(0), cellTypesFor(tier));
+    return {
+      ...empty,
+      cellType,
+      cellSub: cellType ? pick(at(1), cellSubOptions(tier, cellType)) : null,
     };
   }
   return empty;
@@ -257,13 +312,13 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
       : [],
   );
   // Path nodes — present iff the tier exposes that step.
-  const [family,  setFamily]  = useState<string | null>(givenFamily); // OFW | FIX (LV only)
-  const askFamily = tier === 'LV' && !givenFamily;
+  const [family,  setFamily]  = useState<string | null>(givenFamily); // OFW | FIX (LV), switchgear family (MV)
+  const askFamily = (TEMPLATE_FAMILIES[tier] ?? []).length > 0 && !givenFamily;
   const section = TEMPLATE_FAMILIES[tier]?.find(f => f.id === family) ?? null;
   const [root,    setRoot]    = useState<string | null>(seed.root);       // S8 | 8PT (LV only, both families)
   const [switch_, setSwitch]  = useState<string | null>(seed.switchNode); // OFW only
   const [group,   setGroup]   = useState<string | null>(seed.group);      // FIX only
-  const [feeder,  setFeeder]  = useState<string | null>(seed.feeder);     // OFW/FCBn or FIX non-Marshaling
+  const [feeder,  setFeeder]  = useState<string | null>(seed.feeder);     // FIX, but Marshaling and FCB-CAP
   const [cellType, setCellType] = useState<string | null>(seed.cellType); // MV only
   const [cellSub,  setCellSub]  = useState<string | null>(seed.cellSub);  // MV only
   const [leafKind, setLeafKind] = useState<TemplateLeafKind | null>(
@@ -297,11 +352,11 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   const [mechanical, setMechanical] = useState<TemplateMechanical>(
     { ...(startFrom?.mechanical ?? {}) });
 
-  const feederApplies = tier === 'LV' && (
-    (family === 'OFW' && !!switch_ && LV_OFW_FEEDER_SWITCHES.includes(switch_)) ||
-    (family === 'FIX' && !!group && group !== 'MARSHALING')
-  );
-  const feederOptions: readonly string[] = family === 'OFW' ? LV_FCB_FEEDERS : LV_FIX_FEEDERS;
+  const feederApplies = tier === 'LV' && family === 'FIX' && !!group && !LV_FIX_NO_FEEDER.includes(group);
+  const feederOptions: readonly string[] =
+    group && LV_FCB_SWITCHES.includes(group) ? LV_FCB_FEEDERS : LV_FIX_FEEDERS;
+  // MV needs its section (the switchgear family) before anything else.
+  const mvReady = tier !== 'MV' || !!family;
 
   // Build the path array as the user descends.
   const path = useMemo(() => {
@@ -315,6 +370,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
       }
       if (feeder) p.push(feeder);
     } else if (mvLike(tier)) {
+      if (tier === 'MV' && family) p.push(family);
       if (cellType) p.push(cellType);
       if (cellSub) p.push(cellSub);
     }
@@ -326,7 +382,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   // True once every structural step this branch requires has an answer —
   // independent of leafKind, which may legitimately be "nothing to ask".
   const structuralPathComplete = mvLike(tier)
-    ? !!cellType && (!needsCellSub(cellType) || !!cellSub)
+    ? mvReady && !!cellType && (!needsCellSub(tier, cellType) || !!cellSub)
     // A group with no path steps of its own (HV, OTHER) is complete as soon
     // as it is opened — there is nothing to drill into, only a name to give.
     : tier !== 'LV' ? true
@@ -346,8 +402,9 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
       if (feederApplies && !feeder) return 'feeder';
     }
     if (mvLike(tier)) {
+      if (!mvReady) return 'family';
       if (!cellType) return 'cellType';
-      if (needsCellSub(cellType) && !cellSub) return 'cellSub';
+      if (needsCellSub(tier, cellType) && !cellSub) return 'cellSub';
     }
     if (candidateLeafKinds.length > 0 && !leafKind) return 'kind';
     if (!kw && !currentA) return 'params';
@@ -397,8 +454,8 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     tier === 'LV' && family === 'OFW' && 'switch',
     tier === 'LV' && family === 'FIX' && 'group',
     feederApplies && 'feeder',
-    mvLike(tier) && 'cellType',
-    mvLike(tier) && needsCellSub(cellType) && 'cellSub',
+    mvLike(tier) && mvReady && 'cellType',
+    mvLike(tier) && mvReady && needsCellSub(tier, cellType) && 'cellSub',
     candidateLeafKinds.length > 0 && 'kind',
     structuralPathComplete && 'params',
     structuralPathComplete && 'mechanical',
@@ -436,7 +493,8 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           </span>
         </>
       )}
-      {path.map((p, i) => (
+      {/* An MV path starts with its section, which is already shown. */}
+      {(section && path[0] === section.id ? path.slice(1) : path).map((p, i) => (
         <React.Fragment key={i}>
           <ChevronRightIcon className="w-3 h-3 text-gray-400" />
           <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium">{p}</span>
@@ -451,9 +509,10 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
     </div>
   );
 
-  const Chip: React.FC<{ value: string; selected: boolean; onClick: () => void }> = ({ value, selected, onClick }) => (
+  const Chip: React.FC<{ value: string; selected: boolean; onClick: () => void; title?: string }> = ({ value, selected, onClick, title }) => (
     <button
       onClick={onClick}
+      title={title}
       className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${
         selected
           ? 'bg-blue-600 text-white border-blue-700'
@@ -467,6 +526,9 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   // Reset deeper choices when an ancestor step is changed.
   const pickFamily = (f: string) => {
     setFamily(f);
+    // The three MV switchgear families offer the same cell types, so on MV the
+    // cell type already picked (or read from the template being edited) stays.
+    if (tier === 'MV') return;
     setRoot(null); setSwitch(null); setGroup(null); setFeeder(null); setLeafKind(null);
   };
   // The root is the only step nothing below it depends on: S8 and 8PT offer
@@ -490,7 +552,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   const pickCellType = (c: string) => { setCellType(c); setCellSub(null); setLeafKind(null); };
   const pickCellSub = (s: string) => {
     setCellSub(s);
-    // Contactor Fuse Combination is fixed to motor — no chip step for it.
+    // (GIS) Contactor Fuse Combination is fixed to motor — no chip step for it.
     setLeafKind(cellType === 'Feeder Truck' && s === 'Contactor Fuse Combination' ? 'motor' : null);
   };
 
@@ -563,7 +625,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             {many ? null : pasteMode === 'edit'
               ? ' — its parts stay as they are; the path, the leaf and the parameters below are what is being changed.'
               : ' — its parts, parameters and mechanical answers come with it.'}
-            {tier === 'LV' && !seed.root && (
+            {(tier === 'LV' ? !seed.root : tier === 'MV' && !seed.cellType) && (
               <span className="block text-indigo-700">
                 Its path is not one this section files, so pick the new one below.
               </span>
@@ -576,15 +638,17 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           {/* Step — System (only when the caller had none to give) */}
           {askFamily && (
             <div>
-              <StepHeader n={stepNumber('family')} label="System" active={activeStep === 'family'} done={!!family} />
+              <StepHeader n={stepNumber('family')} label={tier === 'MV' ? 'Switchgear' : 'System'} active={activeStep === 'family'} done={!!family} />
               <div className="mt-2 flex flex-wrap gap-2">
-                {TEMPLATE_FAMILIES.LV.map(f => (
+                {(TEMPLATE_FAMILIES[tier] ?? []).map(f => (
                   <Chip key={f.id} value={f.label} selected={family === f.id} onClick={() => pickFamily(f.id)} />
                 ))}
               </div>
-              <p className="mt-1 text-[10px] text-gray-400 italic">
-                {TEMPLATE_FAMILIES.LV.map(f => `${f.label} — ${f.note}`).join(' · ')}
-              </p>
+              {tier === 'LV' && (
+                <p className="mt-1 text-[10px] text-gray-400 italic">
+                  {TEMPLATE_FAMILIES.LV.map(f => `${f.label} — ${f.note}`).join(' · ')}
+                </p>
+              )}
             </div>
           )}
 
@@ -637,23 +701,30 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           )}
 
           {/* Step — Cell type (MV) */}
-          {mvLike(tier) && (
+          {mvLike(tier) && mvReady && (
             <div>
               <StepHeader n={stepNumber('cellType')} label="Cell Type" active={activeStep === 'cellType'} done={!!cellType} />
               <div className="mt-2 flex flex-wrap gap-2">
-                {MV_CELL_TYPES.map(c => (
-                  <Chip key={c} value={c} selected={cellType === c} onClick={() => pickCellType(c)} />
+                {cellTypesFor(tier).map(c => (
+                  <Chip key={c} value={c} title={cellNote(tier, c) || undefined}
+                    selected={cellType === c} onClick={() => pickCellType(c)} />
                 ))}
               </div>
+              {/* What the picked one is, in a line — the rest say it on hover. */}
+              {cellNote(tier, cellType) && (
+                <p className="mt-1 text-[10px] text-gray-500 italic">{cellType}: {cellNote(tier, cellType)}</p>
+              )}
             </div>
           )}
 
-          {/* Step — Cell sub-type (Feeder Truck / Disconnector Link) */}
-          {mvLike(tier) && needsCellSub(cellType) && (
+          {/* Step — Cell sub-type: VT on MV; Feeder Truck / Disconnector Link on GIS */}
+          {mvLike(tier) && mvReady && needsCellSub(tier, cellType) && (
             <div>
-              <StepHeader n={stepNumber('cellSub')} label={cellType === 'Feeder Truck' ? 'Feeder Truck type' : 'Disconnector Link'} active={activeStep === 'cellSub'} done={!!cellSub} />
+              <StepHeader n={stepNumber('cellSub')}
+                label={tier === 'MV' ? 'Voltage transformer (VT)' : cellType === 'Feeder Truck' ? 'Feeder Truck type' : 'Disconnector Link'}
+                active={activeStep === 'cellSub'} done={!!cellSub} />
               <div className="mt-2 flex flex-wrap gap-2">
-                {cellSubOptions(cellType).map(s => (
+                {cellSubOptions(tier, cellType).map(s => (
                   <Chip key={s} value={s} selected={cellSub === s} onClick={() => pickCellSub(s)} />
                 ))}
               </div>

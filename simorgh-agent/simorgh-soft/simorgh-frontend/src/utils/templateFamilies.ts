@@ -3,9 +3,10 @@
 // The families a tier's templates fall into, above the path they already carry.
 //
 // LV templates are filed under a path — S8 / FCB1 / OUTGOING — and the office
-// reads the top of that path as two different things: OFW (motor, feeder, the
-// FCB switches, MODULLAR, FCB-CAP) and FIX (CCS, OFF, Marshaling, Swing). This
-// says which is which so the tree can show them apart.
+// reads the top of that path as two different things: OFW (motor, feeder,
+// MODULLAR) and FIX (CCS, OFF, Marshaling, Swing, the FCB switches, FCB-CAP).
+// This says which is which so the tree can show them apart. MV is split by
+// switchgear family: SIMOPRIME-WORLD, SIMOPRIME-A4 and EK36.
 //
 // SFD and HFD are still listed under OFW although the wizard no longer offers
 // them: templates filed under one before the level was folded away are still
@@ -38,13 +39,23 @@ export interface TemplateFamily {
 
 export const TEMPLATE_FAMILIES: Record<Tier, TemplateFamily[]> = {
   LV: [
-    { id: 'OFW', label: 'OFW', note: 'Motor, Feeder, FCB1-3, MODULLAR, FCB-CAP', nodes: ['MOTOR', 'FEEDER', 'SFD', 'HFD', 'FCB1', 'FCB2', 'FCB3', 'MODULLAR', 'FCB-CAP'] },
-    { id: 'FIX', label: 'FIX', note: 'CCS, OFF, Marshaling, Swing', nodes: ['CCS', 'OFF', 'MARSHALING', 'SWING'] },
+    { id: 'OFW', label: 'OFW', note: 'Motor, Feeder, MODULLAR', nodes: ['MOTOR', 'FEEDER', 'SFD', 'HFD', 'MODULLAR'] },
+    // FCB1-3 and FCB-CAP are FIX switches (they were listed under OFW until
+    // the office moved them). A template already filed under one moves with
+    // them, since the family is read from the path.
+    { id: 'FIX', label: 'FIX', note: 'CCS, OFF, Marshaling, Swing, FCB1-3, FCB-CAP', nodes: ['CCS', 'OFF', 'MARSHALING', 'SWING', 'FCB1', 'FCB2', 'FCB3', 'FCB-CAP'] },
   ],
-  // MV and HV have no families yet. An empty list is not a special case
+  // MV is filed by the switchgear family first; the path starts with it
+  // (SIMOPRIME-WORLD / Feeder Truck / w VT). MV templates made before the
+  // split have no family in their path and are listed apart, as before.
+  MV: [
+    { id: 'SIMOPRIME-WORLD', label: 'SIMOPRIME-WORLD', note: '', nodes: ['SIMOPRIME-WORLD'] },
+    { id: 'SIMOPRIME-A4', label: 'SIMOPRIME-A4', note: '', nodes: ['SIMOPRIME-A4'] },
+    { id: 'EK36', label: 'EK36', note: '', nodes: ['EK36'] },
+  ],
+  // HV and the rest have no families yet. An empty list is not a special case
   // anywhere — those tiers simply list their templates the way they always
   // have, and adding families later is adding rows here.
-  MV: [],
   HV: [],
   GIS: [],
   OTHER: [],
