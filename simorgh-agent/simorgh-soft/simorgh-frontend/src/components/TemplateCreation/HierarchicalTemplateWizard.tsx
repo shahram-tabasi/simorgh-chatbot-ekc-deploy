@@ -23,6 +23,7 @@
 //   family    : SIMOPRIME-WORLD | SIMOPRIME-A4 | EK36 (the section)
 //   cellType  : the office's list of MV cell types (MV_CELL_TYPES)
 //   VT        : (Feeder Truck, Feeder Wda) w VT | wo VT
+//   Fuse      : (Disconnector Link) With Fuse | Without Fuse
 //   leafKind  : (Feeder Truck, Feeder Wda) motor | transformer | capacitor
 //   params    : kW + currentA
 //
@@ -69,7 +70,8 @@ const LV_FIX_FEEDERS = ['INCOMING', 'COUPLING', 'METERING', 'RISER', 'MET&RISER'
  *
  * Feeder Wda came as two types, "w VT" and "wo VT"; it is one type here, and
  * the VT question after it says which. Feeder Truck, which is either, asks
- * the same question. Riser / Metering Riser and the two Riser Connections stay
+ * the same question; Disconnector Link w / wo Fuse is likewise one type with a
+ * Fuse question. Riser / Metering Riser and the two Riser Connections stay
  * apart: the estimate sheets treat them as different cells.
  */
 const MV_CELL_TYPES: { name: string; note: string }[] = [
@@ -88,11 +90,13 @@ const MV_CELL_TYPES: { name: string; note: string }[] = [
   { name: 'Cap Bank', note: 'Capacitor Panel' },
   { name: 'Neutral Panel', note: 'Neutral Panel' },
   { name: 'Incoming VT Cell', note: 'Incoming Metering Panel w VT & Cable Connection' },
-  { name: 'Disconnector Link w Fuse', note: 'Truck Type Fuse-Linked Panel' },
-  { name: 'Disconnector Link wo Fuse', note: 'Truck Type Bar-Linked Panel' },
+  { name: 'Disconnector Link', note: 'With fuse: Truck Type Fuse-Linked Panel. Without fuse: Truck Type Bar-Linked Panel' },
 ];
 const MV_VT = ['w VT', 'wo VT'] as const;
 const MV_ASKS_VT = ['Feeder Truck', 'Feeder Wda'];
+// Disconnector Link w Fuse / wo Fuse is one type too, and the question after
+// it says which — the same sub-type it had before the split.
+const MV_FUSE = ['With Fuse', 'Without Fuse'] as const;
 
 // GIS cells were filed exactly as MV's before MV was split by switchgear
 // family, and still are: the same cell types, the same sub-types.
@@ -110,7 +114,8 @@ const cellNote = (tier: Tier, cellType: string | null) =>
   tier === 'MV' ? MV_CELL_TYPES.find(c => c.name === cellType)?.note ?? '' : '';
 const cellSubOptions = (tier: Tier, cellType: string | null): readonly string[] =>
   tier === 'MV'
-    ? (cellType && MV_ASKS_VT.includes(cellType) ? MV_VT : [])
+    ? (cellType && MV_ASKS_VT.includes(cellType) ? MV_VT
+      : cellType === 'Disconnector Link' ? MV_FUSE : [])
     : cellType === 'Feeder Truck' ? GIS_FEEDER_TRUCK_SUB
     : cellType === 'Disconnector Link' ? GIS_DISCONNECTOR_SUB
     : [];
@@ -202,15 +207,14 @@ function seedPath(
   }
   if (tier === 'MV') {
     // A path made before the split has no family at its head; the cell type
-    // is then the first node. The old "Disconnector Link / With Fuse" is one
-    // type now.
+    // is then the first node.
     const offset = TEMPLATE_FAMILIES.MV.some(f => f.id === at(0)) ? 1 : 0;
-    const head = at(offset);
-    const sub = at(offset + 1);
-    const legacy = head === 'DISCONNECTOR LINK'
-      ? (sub === 'WITH FUSE' ? 'DISCONNECTOR LINK W FUSE' : sub === 'WITHOUT FUSE' ? 'DISCONNECTOR LINK WO FUSE' : '')
-      : head;
-    const cellType = pick(legacy, cellTypesFor('MV'));
+    let head = at(offset);
+    let sub = at(offset + 1);
+    // Briefly the fuse was part of the type's name.
+    if (head === 'DISCONNECTOR LINK W FUSE') { head = 'DISCONNECTOR LINK'; sub = 'WITH FUSE'; }
+    if (head === 'DISCONNECTOR LINK WO FUSE') { head = 'DISCONNECTOR LINK'; sub = 'WITHOUT FUSE'; }
+    const cellType = pick(head, cellTypesFor('MV'));
     return {
       ...empty,
       cellType,
@@ -721,7 +725,8 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
           {mvLike(tier) && mvReady && needsCellSub(tier, cellType) && (
             <div>
               <StepHeader n={stepNumber('cellSub')}
-                label={tier === 'MV' ? 'Voltage transformer (VT)' : cellType === 'Feeder Truck' ? 'Feeder Truck type' : 'Disconnector Link'}
+                label={tier === 'MV' && cellType !== 'Disconnector Link' ? 'Voltage transformer (VT)'
+                  : cellType === 'Feeder Truck' ? 'Feeder Truck type' : 'Fuse'}
                 active={activeStep === 'cellSub'} done={!!cellSub} />
               <div className="mt-2 flex flex-wrap gap-2">
                 {cellSubOptions(tier, cellType).map(s => (
