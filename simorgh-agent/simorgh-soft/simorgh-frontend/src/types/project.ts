@@ -224,6 +224,17 @@ export interface SymbolArtOverride {
    * those fall back to the two the library would have given it.
    */
   terminals?: SymbolPin[];
+  /**
+   * Drawn lying on its side — the conductor across, current in on the left
+   * and out on the right.
+   *
+   * The drawing above is still kept upright, turned a quarter back, so every
+   * place that hangs a symbol on a vertical branch (the single-line sheets,
+   * replacing a redrawn symbol on them) reads it exactly as before. This only
+   * tells the symbol page to show it lying down and the library to place it
+   * that way — what EPLAN calls the symbol's variant.
+   */
+  orientation?: 'horizontal';
   editedAt: string;
 }
 

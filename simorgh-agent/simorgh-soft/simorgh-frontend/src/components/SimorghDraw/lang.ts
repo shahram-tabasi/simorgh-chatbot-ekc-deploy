@@ -90,6 +90,8 @@ export interface Strings {
   dxfEmpty: string; dxfUnreadable: string;
   dxfPlaced: (shapes: number, pins: number) => string;
   wireNumber: string; wireNumberTip: string; wireNumbered: string;
+  connName: string; connNameTip: string; connPickWire: string;
+  promptConnName: string; promptConnDesc: string; connNamed: (name: string) => string;
   wireAllNumbered: string; wireNoneFound: string;
   tagDevices: string; tagDevicesTip: string; tagged: string; tagAllTagged: string;
   checks: string; checksTip: string; checksClean: string;
@@ -174,6 +176,11 @@ export interface Strings {
   symPins: string; symPinAdd: string; symPinRemove: string; symPinName: string;
   symPinDir: (d: 'up' | 'down' | 'left' | 'right') => string;
   symPinAdded: (name: string) => string;
+  symVertical: string;
+  symHorizontal: string;
+  symOrientationTip: string;
+  symLaidDown: string;
+  symStoodUp: string;
   symPinsRestore: string; symPinsRestored: string; symPinsNone: string;
   symPinsHelp: string;
   symFooter: string;
@@ -284,6 +291,12 @@ const EN: Strings = {
     pins ? `, ${pins} of them connection points` : ''} — they are picked, so drag them where they go`,
   xlsxUnreadable: 'Could not read that file — it should be .xlsx, .xls or .csv.',
   xlsxGone: 'Could not read the file again — it may have been moved or renamed.',
+  connName: 'Name connection',
+  connNameTip: 'Pick a wire, then give its connection a name and a description, written on the wire. Numbering wires afterwards leaves named connections alone.',
+  connPickWire: 'Pick a wire first — any leg of the connection you want to name.',
+  promptConnName: 'Connection name (designation):',
+  promptConnDesc: 'Description (optional — leave empty for none):',
+  connNamed: name => `Connection named ${name}.`,
   wireNumber: 'Number wires',
   wireNumberTip: 'Give every net a number and write it on the wire. Wires already numbered are left alone.',
   wireNumbered: '{n} wire(s) numbered.',
@@ -422,9 +435,9 @@ const EN: Strings = {
   libSaved: name => `${name} is in the library`,
   libPoints: n => `${n} connection point${n === 1 ? '' : 's'}`,
   libVariants: n => `${n} variants`,
-  libOnCursor: name => `${name} is on the cursor — click where it goes. Esc lets go.`,
+  libOnCursor: name => `${name} is on the cursor — click where it goes, R turns it a quarter, Esc lets go.`,
   libOnCursorTab: (name, of) =>
-    `${name} is on the cursor — click where it goes, Tab turns between its ${of} variants, Esc lets go.`,
+    `${name} is on the cursor — click where it goes, Tab turns between its ${of} variants, R turns it a quarter, Esc lets go.`,
   libPlacedAgain: name => `${name} placed — still on the cursor for the next one. Esc lets go.`,
   libDeleteAsk: name => `Delete ${name} from the office library? Drawings that already use it keep their copy.`,
   libNeedsName: 'It needs a name.',
@@ -477,6 +490,11 @@ const EN: Strings = {
     right: 'The wire leaves to the right',
   })[d],
   symPinAdded: name => `Connection point ${name} added at the middle of the conductor — drag it where it goes.`,
+  symVertical: 'Vertical',
+  symHorizontal: 'Horizontal',
+  symOrientationTip: 'Which way the conductor runs: down the symbol, or across it from left to right',
+  symLaidDown: 'Laid on its side — the conductor runs left to right, and each connection point turned with it. Save keeps it this way.',
+  symStoodUp: 'Stood upright — the conductor runs top to bottom again, and each connection point turned with it.',
   symPinsRestore: 'Put the two default points back',
   symPinsRestored: 'Back to one point at each end of the conductor.',
   symPinsNone: 'No connection points. A symbol without them can be placed and cannot be wired: it will never appear in a connection list.',
@@ -637,6 +655,12 @@ const FA: Strings = {
     pins ? `، ${pins} تای آن نقطهٔ اتصال` : ''} — انتخاب‌شده‌اند، پس همین‌جا به جای خود بکشیدشان`,
   xlsxUnreadable: 'فایل خوانده نشد — باید .xlsx یا .xls یا .csv باشد.',
   xlsxGone: 'فایل دوباره خوانده نشد — شاید جابه‌جا یا تغییر نام داده شده باشد.',
+  connName: 'نام‌گذاری کانکشن',
+  connNameTip: 'یک سیم را انتخاب کنید، بعد برای کانکشنش نام و توضیح بنویسید تا روی سیم نوشته شود. شماره‌گذاری سیم بعد از آن به کانکشن‌های نام‌دار دست نمی‌زند.',
+  connPickWire: 'اول یک سیم را انتخاب کنید — هر تکه از کانکشنی که می‌خواهید نام بگذارید.',
+  promptConnName: 'نام کانکشن (designation):',
+  promptConnDesc: 'توضیح (اختیاری — برای هیچ، خالی بگذارید):',
+  connNamed: name => `کانکشن ${name} نام‌گذاری شد.`,
   wireNumber: 'شماره‌گذاری سیم',
   wireNumberTip: 'به هر شبکه یک شماره می‌دهد و روی سیم می‌نویسد. سیم‌هایی که از قبل شماره دارند دست‌نخورده می‌مانند.',
   wireNumbered: '{n} سیم شماره‌گذاری شد.',
@@ -775,9 +799,9 @@ const FA: Strings = {
   libSaved: name => `${name} در کتابخانه ثبت شد`,
   libPoints: n => `${n} نقطه‌ی اتصال`,
   libVariants: n => `${n} وریانت`,
-  libOnCursor: name => `${name} روی مکان‌نماست — هرجا که می‌خواهید کلیک کنید. Esc رهایش می‌کند.`,
+  libOnCursor: name => `${name} روی مکان‌نماست — هرجا که می‌خواهید کلیک کنید، R آن را ۹۰ درجه می‌چرخاند، Esc رهایش می‌کند.`,
   libOnCursorTab: (name, of) =>
-    `${name} روی مکان‌نماست — هرجا می‌خواهید کلیک کنید، Tab بین ${of} وریانتش می‌چرخد، Esc رهایش می‌کند.`,
+    `${name} روی مکان‌نماست — هرجا می‌خواهید کلیک کنید، Tab بین ${of} وریانتش می‌چرخد، R آن را ۹۰ درجه می‌چرخاند، Esc رهایش می‌کند.`,
   libPlacedAgain: name => `${name} گذاشته شد — هنوز روی مکان‌نماست برای بعدی. Esc رهایش می‌کند.`,
   libDeleteAsk: name => `${name} از کتابخانه‌ی شرکت حذف شود؟ نقشه‌هایی که از آن استفاده کرده‌اند نسخه‌ی خودشان را نگه می‌دارند.`,
   libNeedsName: 'نام لازم دارد.',
@@ -830,6 +854,11 @@ const FA: Strings = {
     right: 'سیم به راست بیرون می‌رود',
   })[d],
   symPinAdded: name => `نقطهٔ اتصال ${name} وسط هادی گذاشته شد — با ماوس ببریدش سر جایش.`,
+  symVertical: 'عمودی',
+  symHorizontal: 'افقی',
+  symOrientationTip: 'هادی از کدام طرف می‌گذرد: از بالا به پایین سمبل، یا از چپ به راست',
+  symLaidDown: 'سمبل افقی شد — هادی از چپ به راست می‌رود و جهت هر نقطهٔ اتصال هم با آن چرخید. ذخیره همین‌طور نگهش می‌دارد.',
+  symStoodUp: 'سمبل عمودی شد — هادی دوباره از بالا به پایین است و جهت هر نقطهٔ اتصال هم با آن چرخید.',
   symPinsRestore: 'دو نقطهٔ پیش‌فرض را برگردان',
   symPinsRestored: 'برگشت به یک نقطه در هر سرِ هادی.',
   symPinsNone: 'هیچ نقطهٔ اتصالی نیست. سیمبلی که نقطهٔ اتصال ندارد می‌نشیند اما سیم‌کشی نمی‌شود: هرگز در فهرست اتصال‌ها نمی‌آید.',
@@ -991,6 +1020,12 @@ const TR: Strings = {
     pins ? `, ${pins} tanesi bağlantı noktası` : ''} — seçili durumdalar, yerlerine sürükleyin`,
   xlsxUnreadable: 'Dosya okunamadı — .xlsx, .xls veya .csv olmalı.',
   xlsxGone: 'Dosya yeniden okunamadı — taşınmış veya adı değişmiş olabilir.',
+  connName: 'Bağlantıyı adlandır',
+  connNameTip: 'Bir kablo seçin, sonra bağlantısına kablonun üzerine yazılacak bir ad ve açıklama verin. Sonradan kablo numaralama adlı bağlantılara dokunmaz.',
+  connPickWire: 'Önce bir kablo seçin — adlandırmak istediğiniz bağlantının herhangi bir parçası.',
+  promptConnName: 'Bağlantı adı (tanım):',
+  promptConnDesc: 'Açıklama (isteğe bağlı — yoksa boş bırakın):',
+  connNamed: name => `Bağlantı ${name} olarak adlandırıldı.`,
   wireNumber: 'Kablo numarala',
   wireNumberTip: 'Her şebekeye numara verir ve kabloya yazar. Zaten numaralı olanlara dokunulmaz.',
   wireNumbered: '{n} kablo numaralandı.',
@@ -1130,9 +1165,9 @@ const TR: Strings = {
   libSaved: name => `${name} kitaplıkta`,
   libPoints: n => `${n} bağlantı noktası`,
   libVariants: n => `${n} çeşit`,
-  libOnCursor: name => `${name} imleçte — nereye gidecekse tıklayın. Esc bırakır.`,
+  libOnCursor: name => `${name} imleçte — nereye gidecekse tıklayın, R çeyrek döndürür, Esc bırakır.`,
   libOnCursorTab: (name, of) =>
-    `${name} imleçte — nereye gidecekse tıklayın, Tab ${of} çeşidi arasında döner, Esc bırakır.`,
+    `${name} imleçte — nereye gidecekse tıklayın, Tab ${of} çeşidi arasında döner, R çeyrek döndürür, Esc bırakır.`,
   libPlacedAgain: name => `${name} kondu — bir sonraki için hâlâ imleçte. Esc bırakır.`,
   libDeleteAsk: name => `${name} ofis kitaplığından silinsin mi? Onu kullanan çizimler kendi kopyasını korur.`,
   libNeedsName: 'Bir ada ihtiyacı var.',
@@ -1185,6 +1220,11 @@ const TR: Strings = {
     right: 'Kablo sağa gider',
   })[d],
   symPinAdded: name => `${name} bağlantı noktası iletkenin ortasına eklendi — sürükleyip yerine koyun.`,
+  symVertical: 'Dikey',
+  symHorizontal: 'Yatay',
+  symOrientationTip: 'İletken hangi yönde geçer: sembolün yukarıdan aşağıya mı, soldan sağa mı',
+  symLaidDown: 'Yatay yapıldı — iletken soldan sağa gidiyor ve her bağlantı noktası onunla döndü. Kaydet böyle tutar.',
+  symStoodUp: 'Dikey yapıldı — iletken yine yukarıdan aşağıya ve her bağlantı noktası onunla döndü.',
   symPinsRestore: 'İki varsayılan noktayı geri koy',
   symPinsRestored: 'İletkenin her ucunda birer noktaya dönüldü.',
   symPinsNone: 'Bağlantı noktası yok. Noktası olmayan bir sembol yerleştirilebilir ama kablolanamaz: bağlantı listesinde hiç görünmez.',

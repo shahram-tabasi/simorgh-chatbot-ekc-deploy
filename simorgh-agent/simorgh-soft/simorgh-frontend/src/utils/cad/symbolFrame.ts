@@ -34,7 +34,7 @@
 
 import { Pt, Shape } from './shapes';
 import { boundsOfAll } from './edit';
-import { mapShape, scaling, translation } from './geom';
+import { mapShape, rotation, scaling, translation } from './geom';
 import { CELL, SymbolId, symbolHeight, symbolLeft, symbolRight } from '../iecSymbols';
 
 /** Which way a wire leaves a terminal. */
@@ -104,6 +104,24 @@ export function symbolFrame(
     end: [pinX, height],
   };
 }
+
+// ── Lying on its side ──────────────────────────────────────────────────────
+//
+// A horizontal symbol is the upright one turned a quarter anticlockwise: the
+// conductor runs left to right, current in on the left and out on the right.
+// The project keeps the upright drawing (see `SymbolArtOverride.orientation`),
+// so the page turns it down to edit and back up to save, through these two —
+// one the exact inverse of the other, so nothing creeps on a round trip.
+//
+// `w` is the upright frame's width, which is the lying frame's height.
+
+/** Upright → lying: (x, y) → (y, w − x). */
+export const toHorizontal = (run: Shape[], w: number): Shape[] =>
+  run.map(sh => mapShape(mapShape(sh, rotation(0, 0, -90)), translation(0, w)));
+
+/** Lying → upright: (x, y) → (w − y, x). */
+export const toVertical = (run: Shape[], w: number): Shape[] =>
+  run.map(sh => mapShape(mapShape(sh, rotation(0, 0, 90)), translation(w, 0)));
 
 /** The two terminals a single-line symbol has when nobody has said otherwise. */
 export const defaultPins = (f: SymbolFrame): SymbolPin[] => [

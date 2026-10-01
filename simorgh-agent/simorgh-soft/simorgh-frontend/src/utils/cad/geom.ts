@@ -109,8 +109,32 @@ type Anchor = NonNullable<Extract<Shape, { t: 'text' }>['anchor']>;
 const swapAnchorOf = (a: Anchor): Anchor =>
   (a === 'start' ? 'end' : a === 'end' ? 'start' : a);
 
+type PinDir = NonNullable<Shape['pinDir']>;
+const DIR_VEC: Record<PinDir, Pt> = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+
+/**
+ * Which way a terminal's wire leaves once the device is turned or mirrored.
+ *
+ * The direction is a vector, so it goes through the same transform as the
+ * points do — what EPLAN calls a symbol variant. Left as it was, a breaker
+ * turned on its side kept saying its wire leaves "up", and the connect tool
+ * and autoconnect drew that wire back through the middle of the device.
+ */
+export function mapPinDir(dir: PinDir, m: Mapping): PinDir {
+  const o = m.pt([0, 0]);
+  const t = m.pt(DIR_VEC[dir]);
+  const dx = t[0] - o[0], dy = t[1] - o[1];
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left';
+  return dy >= 0 ? 'down' : 'up';
+}
+
 /** One shape through one transform. */
 export function mapShape(s: Shape, m: Mapping): Shape {
+  const out = mapShapeGeometry(s, m);
+  return s.pinDir ? { ...out, pinDir: mapPinDir(s.pinDir, m) } as Shape : out;
+}
+
+function mapShapeGeometry(s: Shape, m: Mapping): Shape {
   const P = (x: number, y: number) => m.pt([x, y]);
   switch (s.t) {
     case 'line': {

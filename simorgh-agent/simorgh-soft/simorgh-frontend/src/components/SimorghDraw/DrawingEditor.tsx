@@ -3,7 +3,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tableShapes, replaceTable, tableOrigin, tableIdOf } from '../../utils/cad/table';
 import { checkSheet, Message } from '../../utils/cad/schematic';
 import { MARK_R, checkTerminals, terminalMarks } from '../../utils/cad/terminals';
-import { numberWires, autoTagDevices, crossReferences } from '../../utils/cad/annotate';
+import {
+  numberWires, autoTagDevices, crossReferences, nameConnection, connectionText,
+} from '../../utils/cad/annotate';
+import { refreshAutoconnect } from '../../utils/cad/autoconnect';
+import { pinLabels } from '../../utils/cad/pinLabels';
 import { HeaderFields, drawingAreas, hasHeader, sheetHeader, stripHeader } from '../../utils/cad/header';
 import {
   ZoomInIcon, ZoomOutIcon, MaximizeIcon, MousePointer2Icon, HandIcon,
@@ -14,7 +18,7 @@ import {
   CircleDashedIcon, RulerIcon, ScissorsIcon, ArrowRightToLineIcon,
   CornerDownRightIcon, RotateCwIcon, FlipHorizontalIcon, FlipVerticalIcon,
   ScalingIcon, BringToFrontIcon, SendToBackIcon, TableIcon, RefreshCwIcon,
-  HashIcon, TagIcon, ShieldCheckIcon, XIcon, LinkIcon, PaletteIcon,
+  HashIcon, TextCursorInputIcon, TagIcon, ShieldCheckIcon, XIcon, LinkIcon, PaletteIcon,
   AlignStartVerticalIcon, AlignEndVerticalIcon, AlignCenterVerticalIcon,
   AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
@@ -39,7 +43,7 @@ import {
 import {
   AlignTo, EditResult, alignShapes, centreOf, cornerLines, distributeShapes,
   blocksOf, extendLine, groupShapes, lineFrom, lineMetrics, mirrorX, mirrorY,
-  moveGrip, norm360, placeAsBlock, reorderShapes, rotation, scaling,
+  mapShape, moveGrip, norm360, placeAsBlock, reorderShapes, rotation, scaling,
   transformShapes, translation, trimLine, ungroupShapes,
 } from '../../utils/cad/geom';
 import { downloadBlob, downloadText, fileSafe } from '../../utils/download';
@@ -709,6 +713,16 @@ export const DrawingEditor: React.FC<Props> = ({
   }, [key, shapes, onSheetChange]);
   const [selection, setSelection] = useState<Set<number>>(new Set());
   const [hidden, setHidden] = useState<Set<Layer>>(new Set());
+  /**
+   * What the canvas draws under the sheet: the host's guides, and each
+   * connection point's designation beside it while the PIN layer is shown.
+   * Worked out from the points, so a renamed or moved point is labelled
+   * right the moment it is — see `cad/pinLabels`.
+   */
+  const sheetGuides = useMemo(() => [
+    ...(guides ?? []),
+    ...(hidden.has('PIN') ? [] : pinLabels(shapes)),
+  ], [guides, hidden, shapes]);
   const [locked, setLocked] = useState<Set<Layer>>(new Set());
   const [tool, setTool] = useState<Tool>('select');
   // How new geometry is drawn. A drawing office thinks in layer, weight and
@@ -761,8 +775,18 @@ export const DrawingEditor: React.FC<Props> = ({
   /** Replace the shapes, recording the step that got us here. */
   const commit = useCallback((next: Shape[], nextSelection?: Set<number>) => {
     historyFor(index).push(shapes);
-    setEdits(e => ({ ...e, [index]: next }));
-    if (nextSelection) setSelection(nextSelection);
+    // Every change re-draws the autoconnecting lines, the way EPLAN does: a
+    // device moved into line with another is joined, one moved out of line is
+    // not any more. See `cad/autoconnect`.
+    const settled = refreshAutoconnect(next);
+    setEdits(e => ({ ...e, [index]: settled.shapes }));
+    // The lines are taken off and put back on the end, so what is picked is
+    // followed to where it now sits — left alone, the numbers would point at
+    // whatever moved into their place.
+    const follow = (picked: Iterable<number>) =>
+      new Set([...picked].map(settled.index).filter(i => i >= 0));
+    if (nextSelection) setSelection(follow(nextSelection));
+    else if (settled.changed) setSelection(prev => follow(prev));
     touch(index);
     forceRender(n => n + 1);
   }, [index, shapes]);
@@ -949,6 +973,30 @@ export const DrawingEditor: React.FC<Props> = ({
     setNotice(T.wireNumbered.replace('{n}', String(r.numbered)));
   }, [shapes, textSize, commit, T]);
 
+  /**
+   * Name the picked connection, and describe it — EPLAN's connection
+   * definition point. The name is written where a wire number goes and is
+   * one: "Number wires" afterwards numbers only the connections still
+   * without one.
+   */
+  const doNameConnection = useCallback(async () => {
+    const wire = [...selection].find(i => {
+      const sh = shapes[i];
+      return sh && (sh.t === 'line' || sh.t === 'poly') && !sh.pin
+        && (sh.layer === 'WIRE' || sh.layer === 'BUS');
+    });
+    if (wire === undefined) { setNotice(T.connPickWire); return; }
+    const was = connectionText(shapes, wire, textSize);
+    const name = await appPrompt(T.promptConnName, was.name);
+    if (name == null || !name.trim()) return;
+    const description = await appPrompt(T.promptConnDesc, was.description);
+    if (description == null) return;
+    const next = nameConnection(shapes, wire, name.trim(), description, textSize);
+    if (!next) { setNotice(T.connPickWire); return; }
+    commit(next);
+    setNotice(T.connNamed(name.trim()));
+  }, [selection, shapes, textSize, commit, T]);
+
   const doTagDevices = useCallback(() => {
     const r = autoTagDevices(shapes, { textSize });
     if (r.tagged === 0) { setNotice(T.tagAllTagged); return; }
@@ -1113,9 +1161,9 @@ export const DrawingEditor: React.FC<Props> = ({
   const draw = useCallback((run: Shape[]) => {
     if (run.length === 0) return;
     historyFor(index).push(shapes);
-    const next = [...shapes, ...run];
-    setEdits(e => ({ ...e, [index]: next }));
-    setSelection(new Set(run.map((_, k) => shapes.length + k)));
+    const settled = refreshAutoconnect([...shapes, ...run]);
+    setEdits(e => ({ ...e, [index]: settled.shapes }));
+    setSelection(new Set(run.map((_, k) => settled.index(shapes.length + k)).filter(i => i >= 0)));
     touch(index);
     forceRender(n => n + 1);
   }, [index, shapes]);
@@ -1564,12 +1612,32 @@ export const DrawingEditor: React.FC<Props> = ({
     setNotice(family.length > 1 ? T.libOnCursorTab(name, family.length) : T.libOnCursor(name));
   };
 
-  /** The symbol on the cursor, moved so its top-left sits at the origin. */
+  /**
+   * Where the symbol on the cursor is held: its first connection point, or
+   * its top-left corner when it has none.
+   *
+   * Held by a connection point, the snap puts that point on the grid — which
+   * is what EPLAN does, and what lets two devices be lined up so their points
+   * face each other exactly and autoconnect. Held by a corner, a point sat
+   * wherever the drawing happened to put it inside its box, and two devices
+   * could look in line and be a fraction apart.
+   */
+  const holdOf = (run: Shape[]): Pt => {
+    const pin = run.find(sh => sh.pin);
+    if (pin) {
+      const c = pin.t === 'circle' ? [pin.cx, pin.cy] : null;
+      if (c) return [c[0], c[1]];
+    }
+    const box = boundsOfAll(run);
+    return box ? [box.x, box.y] : [0, 0];
+  };
+
+  /** The symbol on the cursor, moved so the point it is held by is the origin. */
   const ghost = useMemo(() => {
     if (!placing) return null;
     const run = placing.variants[placing.at]?.shapes ?? [];
-    const box = boundsOfAll(run);
-    return box ? run.map(sh => translateShape(sh, -box.x, -box.y)) : run;
+    const [hx, hy] = holdOf(run);
+    return run.map(sh => translateShape(sh, -hx, -hy));
   }, [placing]);
 
   /** The face on the cursor, put down here as one block. */
@@ -1577,10 +1645,13 @@ export const DrawingEditor: React.FC<Props> = ({
     if (!placing) return;
     const face = placing.variants[placing.at];
     if (!face) return;
-    const placed = placeAsBlock(face.shapes, at, face.name, 1, face.id);
+    const box = boundsOfAll(face.shapes);
+    const [hx, hy] = holdOf(face.shapes);
+    const corner: Pt = box ? [at[0] - (hx - box.x), at[1] - (hy - box.y)] : at;
+    const placed = placeAsBlock(face.shapes, corner, face.name, 1, face.id);
     if (placed.length === 0) return;
     historyFor(index).push(shapes);
-    const next = [...shapes, ...placed];
+    const next = refreshAutoconnect([...shapes, ...placed]).shapes;
     setEdits(e => ({ ...e, [index]: next }));
     touch(index);
     forceRender(n => n + 1);
@@ -1588,6 +1659,21 @@ export const DrawingEditor: React.FC<Props> = ({
     // because a symbol that will not let go is alarming when it is a surprise.
     setNotice(T.libPlacedAgain(face.name));
   };
+
+  /**
+   * The symbol on the cursor, turned a quarter (R) — EPLAN's variants.
+   *
+   * Every face turns together, so Tab still walks the faces of a symbol lying
+   * on its side. The connection points' directions turn with the drawing (see
+   * `mapPinDir`), so a turned device autoconnects the way it now faces.
+   */
+  const turnOnCursor = () => setPlacing(p => (p
+    ? { ...p, variants: p.variants.map(v => ({
+      // Anticlockwise, so an upright device lies down fed from the left —
+      // current left to right, the way the symbol page lays one down.
+      ...v, shapes: v.shapes.map(sh => mapShape(sh, rotation(0, 0, -90))),
+    })) }
+    : p));
 
   /** The next face of the symbol on the cursor — Tab forward, Shift+Tab back. */
   const turnVariant = (by: number) => setPlacing(p => (p && p.variants.length > 1
@@ -1855,6 +1941,11 @@ export const DrawingEditor: React.FC<Props> = ({
           turnVariant(e.shiftKey ? -1 : 1);
           return;
         }
+        if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          turnOnCursor();
+          return;
+        }
         if (e.key === 'Escape') {
           e.preventDefault();
           setPlacing(null);
@@ -1924,8 +2015,12 @@ export const DrawingEditor: React.FC<Props> = ({
   // Every sheet goes out with its own edits applied, not just the one on show.
   const editedDrawing = (i: number) => {
     const s = sheets[i];
-    const current = edits[i];
-    return current ? withShapes(s.drawing, current) : s.drawing;
+    const current = edits[i] ?? s.drawing.shapes;
+    // The connection point designations go out with the sheet, as they are
+    // seen on it — only while the PIN layer is shown.
+    const labels = hidden.has('PIN') ? [] : pinLabels(current);
+    if (!edits[i] && labels.length === 0) return s.drawing;
+    return withShapes(s.drawing, [...current, ...labels]);
   };
 
   const exportDxf = () => {
@@ -2445,6 +2540,9 @@ export const DrawingEditor: React.FC<Props> = ({
                 <Tool label title={`${T.wireNumber} — ${T.wireNumberTip}`} on={() => doNumberWires(false)}>
                   <HashIcon className="w-5 h-5" />
                 </Tool>
+                <Tool label title={`${T.connName} — ${T.connNameTip}`} on={doNameConnection}>
+                  <TextCursorInputIcon className="w-5 h-5" />
+                </Tool>
                 <Tool label title={`${T.tagDevices} — ${T.tagDevicesTip}`} on={doTagDevices}>
                   <TagIcon className="w-5 h-5" />
                 </Tool>
@@ -2751,7 +2849,7 @@ export const DrawingEditor: React.FC<Props> = ({
             objectSnap={objectSnap}
             mmPerUnit={mmPerUnit}
             theme={themeId}
-            guides={guides}
+            guides={sheetGuides}
             onView={setView}
             onSelection={setSelection}
             onMove={(dx, dy) => nudge(dx, dy)}

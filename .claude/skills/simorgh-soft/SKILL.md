@@ -229,6 +229,27 @@ axis guess. Carry `dir` wherever terminals are carried — `SymbolArtOverride`,
 `SymbolOverride`, `LibraryItem`, `OfficeSymbol` — or a redrawn symbol gets two
 invented points on its conductor and a wire drawn to a side tap joins nothing.
 
+**Autoconnecting lines are derived, never edited** (`utils/cad/autoconnect.ts`).
+EPLAN's rule: two connection points of different devices that face each other
+on one line are joined. They are WIRE-layer lines carrying `Pen.auto` (the pair
+they join), so exports, nets, numbering and the connection list read them like
+any wire — but every change to a sheet (`commit`, `draw`, placing) takes them
+off and works them out again with `refreshAutoconnect`. Anything new that
+writes a sheet's shapes from an edit goes through it, and remaps the selection
+with the `index` it returns. A point with a hand-drawn wire on it is left
+alone, so generated sheets are never doubled.
+
+**A terminal's direction turns with its device** (`mapPinDir` in `geom.ts`):
+rotate or mirror a block and each `pinDir` goes through the same transform.
+A horizontal symbol is stored upright with `orientation: 'horizontal'` and is
+laid down only on its symbol page and when the library places it — every
+single-line consumer keeps reading the upright drawing.
+
+**Connection point designations are worked out, not kept** (`pinLabels.ts`):
+drawn beside each placed point while the PIN layer is shown, and printed in
+the exports the same way. A connection's name and description are wire labels
+(`nameConnection`), so "Number wires" skips a named connection.
+
 Comments here explain *why*, in prose, and are worth keeping — match that.
 
 ## The PLC page

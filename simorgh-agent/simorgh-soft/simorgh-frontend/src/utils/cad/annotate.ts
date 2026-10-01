@@ -26,9 +26,20 @@ export interface NumberOptions {
 }
 
 /** Marks a label this tool placed, so it can be found and replaced later. */
-const WIRE_LABEL = 'WIRE-NO';
-const isWireLabel = (s: Shape) =>
+export const WIRE_LABEL = 'WIRE-NO';
+export const isWireLabel = (s: Shape) =>
   s.t === 'text' && (s as { blockName?: string }).blockName === WIRE_LABEL;
+
+/**
+ * A connection's description, written under its name — EPLAN's connection
+ * definition point carries both. Its own mark, so renumbering the wires
+ * (which replaces names) never takes a description with it.
+ */
+export const WIRE_DESC = 'WIRE-DESC';
+const isWireDesc = (s: Shape) =>
+  s.t === 'text' && (s as { blockName?: string }).blockName === WIRE_DESC;
+/** A name or a description written on a connection. */
+export const isConnectionText = (s: Shape) => isWireLabel(s) || isWireDesc(s);
 
 export interface NumberResult {
   shapes: Shape[];
@@ -84,6 +95,70 @@ export function numberWires(shapes: Shape[], options: NumberOptions): NumberResu
   }
 
   return { shapes: [...cleared, ...added], numbered, kept: existing.size };
+}
+
+/**
+ * Name a connection, and describe it — EPLAN's connection definition point.
+ *
+ * The connection is the whole net the picked wire belongs to, so a name
+ * given on one leg of a run is the run's name. It is written the way the wire
+ * numbers are, which makes the two one system: numbering skips a connection
+ * that has a name, and a name written here replaces the number that was on
+ * it rather than sitting beside it. An empty description takes the old one
+ * off; an empty name leaves the connection as it was.
+ */
+export function nameConnection(
+  shapes: Shape[], wireIndex: number, name: string, description: string, textSize: number,
+): Shape[] | null {
+  const all = nets(shapes);
+  const net = all.find(n => n.segments.some(seg => seg.index === wireIndex));
+  if (!net) return null;
+  const reach = textSize * 4;
+  const onNet = (s: Shape) => s.t === 'text' && nearestNet(all, [s.x, s.y], reach) === net;
+
+  const out = [...shapes];
+  let at = out.findIndex(s => isWireLabel(s) && onNet(s));
+  if (at >= 0) {
+    out[at] = { ...out[at], s: name } as Shape;
+  } else {
+    const p = labelPoint(net);
+    if (!p) return null;
+    out.push({
+      t: 'text', x: p[0], y: p[1], s: name, size: textSize,
+      layer: 'TAG' as Layer, blockName: WIRE_LABEL,
+    });
+    at = out.length - 1;
+  }
+  const label = out[at];
+  if (label.t !== 'text') return null;
+
+  const descAt = out.findIndex(s => isWireDesc(s) && onNet(s));
+  const text = description.trim();
+  if (!text) {
+    return descAt >= 0 ? out.filter((_, i) => i !== descAt) : out;
+  }
+  const desc: Shape = {
+    t: 'text', x: label.x, y: label.y + textSize * 1.1, s: text, size: textSize * 0.75,
+    anchor: label.anchor, layer: 'TAG' as Layer, blockName: WIRE_DESC,
+  };
+  if (descAt >= 0) out[descAt] = { ...out[descAt], s: text } as Shape;
+  else out.push(desc);
+  return out;
+}
+
+/** The name and description a connection carries now, for the prompts. */
+export function connectionText(
+  shapes: Shape[], wireIndex: number, textSize: number,
+): { name: string; description: string } {
+  const all = nets(shapes);
+  const net = all.find(n => n.segments.some(seg => seg.index === wireIndex));
+  if (!net) return { name: '', description: '' };
+  const reach = textSize * 4;
+  const find = (is: (s: Shape) => boolean) => {
+    const hit = shapes.find(s => is(s) && s.t === 'text' && nearestNet(all, [s.x, s.y], reach) === net);
+    return hit && hit.t === 'text' ? hit.s : '';
+  };
+  return { name: find(isWireLabel), description: find(isWireDesc) };
 }
 
 /** The net whose conductor passes nearest `p`, within `reach`. */

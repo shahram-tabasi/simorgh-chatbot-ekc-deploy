@@ -14,7 +14,9 @@ import { readDxf } from '../../utils/cad/readDxf';
 import { terminalMarks } from '../../utils/cad/terminals';
 import {
   PinDir, SymbolPin, cellsOf, defaultPins, fitIntoFrame, frameGuides, symbolFrame,
+  toHorizontal, toVertical,
 } from '../../utils/cad/symbolFrame';
+import { mapShape, rotation } from '../../utils/cad/geom';
 import { DrawingEditor, EditorSheet } from './DrawingEditor';
 import { Strings, dirOf, Lang } from './lang';
 
@@ -121,6 +123,25 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
   }), [symbolId, drawing.width, drawing.height, pinX]);
 
   /**
+   * Drawn lying on its side — conductor across, current in on the left.
+   *
+   * `frame` stays the upright one: it is what is saved and what every sheet
+   * hangs the symbol by. Lying down, the page shows the same frame turned a
+   * quarter (`toHorizontal`), and the drawing is turned back upright when it
+   * is saved, with `orientation` saying how it was drawn.
+   */
+  const [horizontal, setHorizontal] = useState(override?.orientation === 'horizontal');
+  /** The frame as the page shows it. */
+  const shown = horizontal
+    ? { width: frame.height, height: frame.width }
+    : { width: frame.width, height: frame.height };
+  const lay = (run: Shape[]) => (horizontal ? toHorizontal(run, frame.width) : run);
+  /** The library's two points, as the page shows them. */
+  const shownDefaultPins = (): SymbolPin[] => (horizontal
+    ? pinsOf(toHorizontal(terminalMarks(defaultPins(frame)), frame.width))
+    : defaultPins(frame));
+
+  /**
    * Two views of the same sheet, and they are not the same job.
    *
    * `seed` is what the canvas is *started* from. It changes only when the
@@ -136,15 +157,20 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
    * seed would restart the editor under the pencil and throw away its undo
    * stack on each line drawn.
    */
-  const [seed, setSeed] = useState<Shape[]>(() => [
-    ...inkOf(drawing.shapes),
-    ...terminalMarks(
-      override?.terminals?.length
-        ? override.terminals
-        : defaultPins(symbolFrame(symbolId, override && {
-          width: override.width, height: override.height, pinX: override.pinX,
-        }))),
-  ]);
+  const [seed, setSeed] = useState<Shape[]>(() => {
+    const upright = [
+      ...inkOf(drawing.shapes),
+      ...terminalMarks(
+        override?.terminals?.length
+          ? override.terminals
+          : defaultPins(symbolFrame(symbolId, override && {
+            width: override.width, height: override.height, pinX: override.pinX,
+          }))),
+    ];
+    return override?.orientation === 'horizontal'
+      ? toHorizontal(upright, drawing.width)
+      : upright;
+  });
   const [live, setLive] = useState<Shape[]>(seed);
   const [rev, setRev] = useState(0);
   /**
@@ -210,14 +236,17 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
     const used = new Set(run.map(s => s.pin).filter(Boolean) as string[]);
     let n = 1;
     while (used.has(String(n))) n += 1;
-    replace([...run, ...terminalMarks([{
-      x: frame.pinX, y: frame.height / 2, name: String(n), dir: 'right',
-    }])], t.symPinAdded(String(n)));
+    // Half way along the conductor, leaving to the side of it.
+    const at = horizontal
+      ? { x: frame.height / 2, y: frame.width - frame.pinX, dir: 'down' as PinDir }
+      : { x: frame.pinX, y: frame.height / 2, dir: 'right' as PinDir };
+    replace([...run, ...terminalMarks([{ ...at, name: String(n) }])],
+      t.symPinAdded(String(n)));
   };
 
   /** The two the library would give it, back — for a symbol whose points went. */
   const restorePins = () => {
-    replace([...inkOf(live), ...terminalMarks(defaultPins(frame))],
+    replace([...inkOf(live), ...terminalMarks(shownDefaultPins())],
       t.symPinsRestored);
   };
 
@@ -271,10 +300,18 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
       const declared = found.map(([x, y], i) => ({
         x, y, name: String(i + 1), dir: 'down' as PinDir,
       }));
-      const fitted = fitIntoFrame([...ink, ...terminalMarks(declared)], frame);
+      // Lying down, the file is drawn lying down: it is stood up to be fitted
+      // to the upright frame and laid back down to be shown, so the same
+      // fitting serves both.
+      const incoming = [...ink, ...terminalMarks(declared)];
+      const upright = horizontal
+        ? incoming.map(sh => mapShape(sh, rotation(0, 0, 90)))
+        : incoming;
+      const fittedUpright = fitIntoFrame(upright, frame);
+      const fitted = { ...fittedUpright, shapes: lay(fittedUpright.shapes) };
       const kept = declared.length
         ? pinsOf(fitted.shapes)
-        : pins.length ? pins : defaultPins(frame);
+        : pins.length ? pins : shownDefaultPins();
 
       replace(
         [...inkOf(fitted.shapes), ...terminalMarks(kept)],
@@ -295,7 +332,27 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
   // draughtsman has since placed: it is the page saying where the branch
   // enters and leaves, which stays true however the terminals are moved.
   const guides = useMemo(
-    () => frameGuides(frame, defaultPins(frame)), [frame]);
+    () => {
+      const g = frameGuides(frame, defaultPins(frame));
+      // The frame turns; its numbers stay readable.
+      return horizontal
+        ? toHorizontal(g, frame.width).map(sh => (sh.t === 'text' ? { ...sh, rot: undefined } : sh))
+        : g;
+    }, [frame, horizontal]);
+
+  /**
+   * Stand the symbol up, or lay it down.
+   *
+   * What is drawn turns with the frame — ink, points, and the way each point's
+   * wire leaves — so a breaker drawn upright is the same breaker lying down,
+   * fed from the left instead of from above. Nothing is redrawn.
+   */
+  const setOrientation = (lying: boolean) => {
+    if (lying === horizontal) return;
+    const run = lying ? toHorizontal(live, frame.width) : toVertical(live, frame.width);
+    setHorizontal(lying);
+    replace(run, lying ? t.symLaidDown : t.symStoodUp);
+  };
 
   // **Only `rev`.** The sheet is rebuilt when the page replaces the drawing and
   // at no other time: rebuilding it re-seeds the canvas, which throws away
@@ -303,7 +360,7 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
   // the markup in here that alone would wipe the canvas the moment Save was
   // pressed.
   const sheets = useMemo<EditorSheet[]>(() => {
-    const d = new Drawing(frame.width, frame.height, 'symbol');
+    const d = new Drawing(shown.width, shown.height, 'symbol');
     for (const s of seed) d.add(s);
     return [{
       name: IEC_SYMBOLS[symbolId]?.title ?? symbolId,
@@ -326,9 +383,9 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
     const box = boundsOfAll(inkOf(live));
     if (!box) return false;
     return box.x < -0.5 || box.y < -0.5
-      || box.x + box.w > frame.width + 0.5
-      || box.y + box.h > frame.height + 0.5;
-  }, [live, frame]);
+      || box.x + box.w > shown.width + 0.5
+      || box.y + box.h > shown.height + 0.5;
+  }, [live, shown.width, shown.height]);
 
   const dir = dirOf(lang);
 
@@ -444,6 +501,19 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
           </div>
 
           <div className="ms-auto flex items-center gap-2 shrink-0">
+            {/* Upright or lying on its side — EPLAN's variants of one symbol. */}
+            <div className="flex rounded overflow-hidden border border-white/25" title={t.symOrientationTip}>
+              {([false, true] as const).map(lying => (
+                <button
+                  key={String(lying)}
+                  onClick={() => setOrientation(lying)}
+                  className={`px-2.5 py-1.5 text-xs font-medium ${horizontal === lying
+                    ? 'bg-white text-slate-800' : 'bg-white/10 text-white hover:bg-white/25'}`}
+                >
+                  {lying ? t.symHorizontal : t.symVertical}
+                </button>
+              ))}
+            </div>
             <button
               onClick={() => file.current?.click()}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-white/15 text-white text-xs font-medium hover:bg-white/25"
@@ -521,7 +591,9 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
                 // to nothing"; it is the page's own change, and `live` is it.
                 const edited = next.symbol?.shapes;
                 if (!edited && rev === 0) { onReset(); return; }
-                const run = edited ?? live;
+                const shownRun = edited ?? live;
+                // Kept upright whichever way it was drawn — see `horizontal`.
+                const run = horizontal ? toVertical(shownRun, frame.width) : shownRun;
                 const shaped = withShapes(drawing, inkOf(run));
                 onSave({
                   art: renderFragment(shaped),
@@ -535,11 +607,12 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
                   pinX: frame.pinX,
                   cells: cellsOf(frame.height),
                   terminals: pinsOf(run),
+                  ...(horizontal ? { orientation: 'horizontal' as const } : {}),
                   editedAt: new Date().toISOString(),
                 });
                 // What is on the canvas is now what was saved, so the sheet
                 // does not have to be rebuilt to agree with it.
-                setSeed(run);
+                setSeed(shownRun);
                 setSavedRev(rev);
               }}
             />

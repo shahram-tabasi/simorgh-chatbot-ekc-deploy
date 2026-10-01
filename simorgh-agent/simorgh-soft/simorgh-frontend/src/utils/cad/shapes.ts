@@ -153,6 +153,19 @@ export interface Pen {
    * those, which is what it always did.
    */
   pinDir?: 'up' | 'down' | 'left' | 'right';
+  /**
+   * This wire is an autoconnecting line, and this is the pair of connection
+   * points it joins (`block:pin|block:pin`).
+   *
+   * EPLAN's rule: two connection points of different devices that face each
+   * other on one line are joined without anybody drawing the wire, and the
+   * wire belongs to the pair, not to the sheet — move a device and it is
+   * drawn again, move it out of line and it is gone. So it is never edited:
+   * every change to a sheet takes the old ones away and works them out again
+   * (`refreshAutoconnect`). The key is what carries a connection's name onto
+   * the line that replaces it.
+   */
+  auto?: string;
 }
 
 export type Pt = [number, number];

@@ -151,7 +151,15 @@ interface Props {
 
 type Drag =
   | { kind: 'pan'; startX: number; startY: number; view: Viewport }
-  | { kind: 'move'; startX: number; startY: number; dx: number; dy: number }
+  /**
+   * `cx`/`cy` are where the pointer went down on the screen. The move is
+   * measured from there in screen pixels, not in drawing units: picking a
+   * device grows the ribbon a row and shifts the canvas under a pointer that
+   * has not moved, and measured in drawing units that shift was a move — a
+   * device dragged straight down landed half a grid step to one side, off
+   * the line it was being kept on, and its autoconnecting wires let go.
+   */
+  | { kind: 'move'; startX: number; startY: number; cx: number; cy: number; dx: number; dy: number }
   | { kind: 'band'; startX: number; startY: number; x: number; y: number; additive: boolean }
   /** One point of one shape, taken hold of by its grip. */
   | { kind: 'grip'; index: number; grip: string; at: Pt }
@@ -543,7 +551,7 @@ export const DrawingCanvas: React.FC<Props> = ({
       return;
     }
     if (!next.has(hit)) onSelection(whole);
-    setDrag({ kind: 'move', startX: p.x, startY: p.y, dx: 0, dy: 0 });
+    setDrag({ kind: 'move', startX: p.x, startY: p.y, cx: e.clientX, cy: e.clientY, dx: 0, dy: 0 });
   };
 
   const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
@@ -575,7 +583,12 @@ export const DrawingCanvas: React.FC<Props> = ({
     }
     if (drag.kind === 'move') {
       const snap = (v: number) => (grid > 0 ? Math.round(v / grid) * grid : v);
-      setDrag({ ...drag, dx: snap(p.x - drag.startX), dy: snap(p.y - drag.startY) });
+      const { scale } = mapping(view);
+      setDrag({
+        ...drag,
+        dx: snap((e.clientX - drag.cx) / scale),
+        dy: snap((e.clientY - drag.cy) / scale),
+      });
       return;
     }
     if (drag.kind === 'grip') {

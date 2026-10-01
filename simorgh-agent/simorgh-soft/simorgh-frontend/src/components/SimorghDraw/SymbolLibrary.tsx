@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 
 import { Shape } from '../../utils/cad/shapes';
+import { terminalMarks } from '../../utils/cad/terminals';
+import { mapShape, rotation } from '../../utils/cad/geom';
 import { drawingFromSvg } from '../../utils/cad/fromSvg';
 import { renderFragment } from '../../utils/cad/svg';
 import { readDxf } from '../../utils/cad/readDxf';
@@ -327,9 +329,33 @@ export const SymbolLibrary: React.FC<Props> = ({
     if (file.current) file.current.value = '';
   };
 
+  /**
+   * A symbol as it goes onto a sheet: its drawing, its connection points, and
+   * lying on its side when it was drawn that way.
+   *
+   * The points used to stay behind — only the assistant's placements carried
+   * them — so a device put down by hand was ink with nothing a wire could be
+   * landed on, nothing to label and nothing to autoconnect. A symbol whose own
+   * drawing already holds its points keeps those.
+   *
+   * A symbol drawn horizontal on its page is kept upright in the project (the
+   * single-line sheets hang it on a vertical branch) and turned back here, so
+   * it is placed the way it was drawn.
+   */
+  const placedShapes = (v: LibraryItem): Shape[] => {
+    let run = v.shapes ?? shapesOf(v);
+    if (v.terminals?.length && !run.some(sh => sh.pin)) {
+      run = [...run, ...terminalMarks(v.terminals)];
+    }
+    if (v.id && projectData.symbolOverrides?.[v.id]?.orientation === 'horizontal') {
+      run = run.map(sh => mapShape(sh, rotation(0, 0, -90)));
+    }
+    return run;
+  };
+
   /** Every face of one symbol, each with its geometry, for the cursor. */
   const family = (item: LibraryItem) => variantsOf(item, items)
-    .map(v => ({ name: v.name, shapes: v.shapes ?? shapesOf(v), id: v.id }))
+    .map(v => ({ name: v.name, shapes: placedShapes(v), id: v.id }))
     .filter(v => v.shapes.length > 0);
 
   /** The whole office library, to a file on this computer. */
@@ -382,7 +408,7 @@ export const SymbolLibrary: React.FC<Props> = ({
   ];
 
   const place = (item: LibraryItem) => {
-    const shapes = item.shapes ?? shapesOf(item);
+    const shapes = placedShapes(item);
     if (shapes.length === 0) { setNote(t.libNothingIn(item.name)); return; }
     onImport(shapes, item.name, family(item));
   };
