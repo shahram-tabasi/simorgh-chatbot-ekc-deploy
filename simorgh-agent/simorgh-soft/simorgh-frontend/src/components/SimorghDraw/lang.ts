@@ -113,6 +113,8 @@ export interface Strings {
   tabHome: string; tabElectrical: string; tabOutput: string; tabView: string;
   panDraw: string; panModify: string; panArrange: string; panProps: string;
   panBlock: string; panAnnotate: string; panCheck: string; panTable: string;
+  panConnectors: string; connAngle: string; connAngleTip: string; connTee: string; connTeeTip: string;
+  connBreak: string; connBreakTip: string; connPoles: string; promptBreakName: string;
   panSheet: string; panExport: string; panKeep: string;
   panZoom: string; panAids: string; panApp: string;
 
@@ -380,6 +382,15 @@ const EN: Strings = {
   tabHome: 'Home', tabElectrical: 'Electrical', tabOutput: 'Output', tabView: 'View',
   panDraw: 'Draw', panModify: 'Modify', panArrange: 'Arrange', panProps: 'Properties',
   panBlock: 'Block', panAnnotate: 'Annotate', panCheck: 'Check', panTable: 'Bring in',
+  panConnectors: 'Connections',
+  connAngle: 'Angle',
+  connAngleTip: 'A corner a wire turns through. Put it where the row of one device meets the column of another and both legs autoconnect to it. Tab turns it, poles sets how many wires turn together.',
+  connTee: 'T-node',
+  connTeeTip: 'A branch off a run. Put it on the run and the branch autoconnects from it. Tab turns it.',
+  connBreak: 'Interruption',
+  connBreakTip: 'Where a wire stops on this page and carries on elsewhere, by name — the connection list shows it as ⇢name. Tab turns it.',
+  connPoles: 'Poles',
+  promptBreakName: 'Name of the interruption point (several poles: separate with commas, e.g. L1,L2,L3):',
   panSheet: 'Sheet', panExport: 'Export', panKeep: 'Keep',
   panZoom: 'Zoom', panAids: 'Aids', panApp: 'App',
 
@@ -744,6 +755,15 @@ const FA: Strings = {
   tabHome: 'خانه', tabElectrical: 'برق', tabOutput: 'خروجی', tabView: 'نما',
   panDraw: 'رسم', panModify: 'ویرایش', panArrange: 'چیدمان', panProps: 'ویژگی‌ها',
   panBlock: 'بلوک', panAnnotate: 'شماره‌گذاری', panCheck: 'بازبینی', panTable: 'وارد کردن',
+  panConnectors: 'کانکشن‌ها',
+  connAngle: 'زاویه',
+  connAngleTip: 'گوشه‌ای که سیم از آن می‌پیچد. جایی بگذارید که ردیف یک تجهیز به ستون تجهیز دیگر می‌رسد تا هر دو طرف خودکار وصل شوند. Tab آن را می‌چرخاند و «قطب» تعداد سیم‌هایی را که با هم می‌پیچند تعیین می‌کند.',
+  connTee: 'انشعاب T',
+  connTeeTip: 'انشعابی از یک مسیر. روی مسیر بگذارید تا شاخه از آن خودکار وصل شود. Tab آن را می‌چرخاند.',
+  connBreak: 'نقطهٔ قطع',
+  connBreakTip: 'جایی که سیم در این صفحه تمام می‌شود و جای دیگری با همین نام ادامه دارد — در لیست اتصالات به‌صورت ⇢نام می‌آید. Tab آن را می‌چرخاند.',
+  connPoles: 'قطب',
+  promptBreakName: 'نام نقطهٔ قطع (چندقطبی: با کاما جدا کنید، مثلاً L1,L2,L3):',
   panSheet: 'برگه', panExport: 'خروجی گرفتن', panKeep: 'نگهداری',
   panZoom: 'بزرگ‌نمایی', panAids: 'کمک‌ها', panApp: 'برنامه',
 
@@ -1110,6 +1130,15 @@ const TR: Strings = {
   tabHome: 'Giriş', tabElectrical: 'Elektrik', tabOutput: 'Çıktı', tabView: 'Görünüm',
   panDraw: 'Çiz', panModify: 'Değiştir', panArrange: 'Diz', panProps: 'Özellikler',
   panBlock: 'Blok', panAnnotate: 'Etiketle', panCheck: 'Denetle', panTable: 'İçe aktar',
+  panConnectors: 'Bağlantılar',
+  connAngle: 'Köşe',
+  connAngleTip: 'Kablonun döndüğü köşe. Bir cihazın satırının diğerinin sütunuyla buluştuğu yere koyun, iki kol da otomatik bağlanır. Tab döndürür, kutup sayısı birlikte dönen kablo sayısını belirler.',
+  connTee: 'T-düğüm',
+  connTeeTip: 'Bir hattan dal. Hattın üzerine koyun, dal ondan otomatik bağlanır. Tab döndürür.',
+  connBreak: 'Kesme noktası',
+  connBreakTip: 'Kablonun bu sayfada bitip aynı adla başka yerde devam ettiği yer — bağlantı listesinde ⇢ad olarak görünür. Tab döndürür.',
+  connPoles: 'Kutup',
+  promptBreakName: 'Kesme noktasının adı (çok kutuplu: virgülle ayırın, ör. L1,L2,L3):',
   panSheet: 'Sayfa', panExport: 'Dışa aktar', panKeep: 'Sakla',
   panZoom: 'Yakınlaştır', panAids: 'Yardımcılar', panApp: 'Uygulama',
 

@@ -115,7 +115,7 @@ export function autoconnectLines(shapes: Shape[], width = 0.5): Shape[] {
   }
   for (const [block, run] of byBlock) ink.set(block, boundsOfAll(run));
 
-  const all = terminals(drawn).filter(t => t.block);
+  const all = terminals(drawn, true).filter(t => t.block);
   const points: Point[] = [];
   for (const t of all) {
     const dir = t.dir ?? inferDir(t, all.filter(o => o.block === t.block), ink);
@@ -126,7 +126,14 @@ export function autoconnectLines(shapes: Shape[], width = 0.5): Shape[] {
   const seen = new Set<string>();
   for (const a of points) {
     // The nearest point straight out along the way this one's wire leaves.
+    // A connector has several points on one spot, facing different ways, so
+    // at the nearest distance the one facing back is the one meant.
     let best: { p: Point; d: number } | null = null;
+    const better = (b: Point, d: number) => {
+      if (!best || d < best.d - TOL) return true;
+      return Math.abs(d - best.d) <= TOL && best.p.dir !== OPPOSITE[a.dir]
+        && b.dir === OPPOSITE[a.dir];
+    };
     for (const b of points) {
       if (b === a) continue;
       const dx = b.at[0] - a.at[0], dy = b.at[1] - a.at[1];
@@ -137,7 +144,7 @@ export function autoconnectLines(shapes: Shape[], width = 0.5): Shape[] {
         case 'left': if (Math.abs(dy) > TOL || dx >= -TOL) continue; d = -dx; break;
         case 'right': if (Math.abs(dy) > TOL || dx <= TOL) continue; d = dx; break;
       }
-      if (!best || d < best.d) best = { p: b, d };
+      if (better(b, d)) best = { p: b, d };
     }
     if (!best) continue;
     const b = best.p;

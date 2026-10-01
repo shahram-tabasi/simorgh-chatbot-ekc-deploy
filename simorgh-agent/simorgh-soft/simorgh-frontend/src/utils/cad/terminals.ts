@@ -48,12 +48,25 @@ export interface Terminal {
   blockName: string;
 }
 
-/** Every connection point on the sheet. */
-export function terminals(shapes: Shape[]): Terminal[] {
+/** An angle's or a T-node's point — see `cad/connectors`. Spelt out here
+ *  rather than imported, because connectors.ts draws with this file. */
+const passThrough = (s: Shape) => s.symbol === 'conn:angle' || s.symbol === 'conn:tee';
+
+/**
+ * Every connection point on the sheet.
+ *
+ * Without the points of angles and T-nodes unless asked: those are where a
+ * wire turns or branches, not where it ends, so every list and check that
+ * reads terminals walks straight through them — the connection list says
+ * -K1:14 → -X1:3 across a corner, not -K1:14 → angle. Autoconnect and the
+ * connect tool, which have to land on them, ask for them.
+ */
+export function terminals(shapes: Shape[], withConnectors = false): Terminal[] {
   const out: Terminal[] = [];
   shapes.forEach((s, index) => {
     const name = String(s.pin ?? '').trim();
     if (!name) return;
+    if (!withConnectors && passThrough(s)) return;
     out.push({
       index,
       at: centreOf(s),

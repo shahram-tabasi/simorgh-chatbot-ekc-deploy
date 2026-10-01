@@ -164,8 +164,11 @@ const TAG_REACH = 28;
 export function devices(shapes: Shape[]): Device[] {
   const byBlock = new Map<string, { name: string; idx: number[]; xs: number[]; ys: number[] }>();
   shapes.forEach((s, i) => {
-    const p = s as { block?: string; blockName?: string; layer?: Layer };
+    const p = s as { block?: string; blockName?: string; layer?: Layer; symbol?: string };
     if (!p.block || p.layer === 'TABLE') return;
+    // A connector — angle, T-node, interruption point — is not a device: it
+    // takes no designation and belongs in no device list (see cad/connectors).
+    if (p.symbol?.startsWith('conn:')) return;
     if (!byBlock.has(p.block)) {
       byBlock.set(p.block, { name: p.blockName ?? '', idx: [], xs: [], ys: [] });
     }

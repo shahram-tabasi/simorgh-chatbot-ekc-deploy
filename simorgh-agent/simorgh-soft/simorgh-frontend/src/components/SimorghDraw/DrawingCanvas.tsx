@@ -283,7 +283,7 @@ export const DrawingCanvas: React.FC<Props> = ({
   // the reports find out about later. So under the connect tool the terminal
   // is looked for first, and with more reach than an ordinary snap.
   const pins = useMemo(
-    () => (tool === 'connect' && !hidden.has('PIN') ? terminals(shapes) : []),
+    () => (tool === 'connect' && !hidden.has('PIN') ? terminals(shapes, true) : []),
     [tool, shapes, hidden]);
 
   /** The shapes a click is allowed to find. */

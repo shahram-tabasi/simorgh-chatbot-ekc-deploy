@@ -8,6 +8,7 @@ import {
 } from '../../utils/cad/annotate';
 import { refreshAutoconnect } from '../../utils/cad/autoconnect';
 import { pinLabels } from '../../utils/cad/pinLabels';
+import { ConnectorKind, connectorVariants } from '../../utils/cad/connectors';
 import { HeaderFields, drawingAreas, hasHeader, sheetHeader, stripHeader } from '../../utils/cad/header';
 import {
   ZoomInIcon, ZoomOutIcon, MaximizeIcon, MousePointer2Icon, HandIcon,
@@ -18,7 +19,7 @@ import {
   CircleDashedIcon, RulerIcon, ScissorsIcon, ArrowRightToLineIcon,
   CornerDownRightIcon, RotateCwIcon, FlipHorizontalIcon, FlipVerticalIcon,
   ScalingIcon, BringToFrontIcon, SendToBackIcon, TableIcon, RefreshCwIcon,
-  HashIcon, TextCursorInputIcon, TagIcon, ShieldCheckIcon, XIcon, LinkIcon, PaletteIcon,
+  HashIcon, TextCursorInputIcon, GitForkIcon, TagIcon, ShieldCheckIcon, XIcon, LinkIcon, PaletteIcon,
   AlignStartVerticalIcon, AlignEndVerticalIcon, AlignCenterVerticalIcon,
   AlignStartHorizontalIcon, AlignEndHorizontalIcon, AlignCenterHorizontalIcon,
   AlignHorizontalDistributeCenterIcon, AlignVerticalDistributeCenterIcon,
@@ -996,6 +997,26 @@ export const DrawingEditor: React.FC<Props> = ({
     commit(next);
     setNotice(T.connNamed(name.trim()));
   }, [selection, shapes, textSize, commit, T]);
+
+  /** How many wires a connector carries — a multi-line diagram turns three or four together. */
+  const [poles, setPoles] = useState(1);
+
+  /**
+   * A connector on the cursor — angle, T-node or interruption point, in its
+   * four faces (Tab walks them, R turns them). See `cad/connectors`.
+   */
+  const placeConnector = async (kind: ConnectorKind) => {
+    let names: string[] = [];
+    if (kind === 'break') {
+      const answer = await appPrompt(T.promptBreakName, poles > 1
+        ? Array.from({ length: poles }, (_, i) => `L${i + 1}`).join(',') : '');
+      if (answer == null || !answer.trim()) return;
+      names = answer.split(',').map(n => n.trim()).filter(Boolean);
+      while (names.length < poles) names.push(`${names[0]}.${names.length + 1}`);
+    }
+    const variants = connectorVariants(kind, poles, names, Math.max(3, textSize * 0.5));
+    importSymbol(variants[0].shapes, variants[0].name, variants);
+  };
 
   const doTagDevices = useCallback(() => {
     const r = autoTagDevices(shapes, { textSize });
@@ -2546,6 +2567,32 @@ export const DrawingEditor: React.FC<Props> = ({
                 <Tool label title={`${T.tagDevices} — ${T.tagDevicesTip}`} on={doTagDevices}>
                   <TagIcon className="w-5 h-5" />
                 </Tool>
+              </RibbonPanel>
+
+              {/* EPLAN's connectors: what a wire turns, branches and breaks at.
+                  Each autoconnects, so a horizontal device and a vertical one
+                  are joined by putting an angle where they meet. */}
+              <RibbonPanel name={T.panConnectors}>
+                <Tool label title={`${T.connAngle} — ${T.connAngleTip}`} on={() => placeConnector('angle')}>
+                  <CornerDownRightIcon className="w-5 h-5" />
+                </Tool>
+                <Tool label title={`${T.connTee} — ${T.connTeeTip}`} on={() => placeConnector('tee')}>
+                  <GitForkIcon className="w-5 h-5" />
+                </Tool>
+                <Tool label title={`${T.connBreak} — ${T.connBreakTip}`} on={() => placeConnector('break')}>
+                  <ArrowRightToLineIcon className="w-5 h-5" />
+                </Tool>
+                <label className="flex flex-col items-center justify-center text-[10px] text-gray-500 px-1 gap-0.5">
+                  {T.connPoles}
+                  <select
+                    value={poles}
+                    onChange={e => setPoles(Number(e.target.value))}
+                    className="text-xs border border-gray-300 rounded px-1 py-0.5 bg-white"
+                    data-conn-poles
+                  >
+                    {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
               </RibbonPanel>
 
               <RibbonPanel name={T.panCheck}>
