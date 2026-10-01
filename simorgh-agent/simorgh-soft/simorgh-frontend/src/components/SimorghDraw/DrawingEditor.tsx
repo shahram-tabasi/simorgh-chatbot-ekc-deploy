@@ -58,7 +58,7 @@ import {
 import {
   IEC_SYMBOLS, SymbolId, packSymbolOverride, redrawnSymbolIds,
 } from '../../utils/iecSymbols';
-import { SymbolArtOverride } from '../../types/project';
+import { SymbolArtOverride, TitleBlockSettings } from '../../types/project';
 import { LibraryKind } from '../../utils/cad/symbolLibraries';
 import { CpuIcon, PencilRulerIcon } from 'lucide-react';
 import { LadderAsk, LadderAskResult } from '../SimorghLogic/LadderAsk';
@@ -107,6 +107,11 @@ interface Props {
   fileBase: string;
   /** Lines for the title block on exported sheets. */
   titleBlock: string[];
+  /**
+   * The set's sign-off — company, logo, and who drew, checked and approved
+   * it, with their signatures. Put into every title block this editor draws.
+   */
+  signoff?: TitleBlockSettings;
   mmPerUnit?: number;
   /** The sheet exports are put on; 'auto' keeps `mmPerUnit` and grows the sheet. */
   paper?: PaperChoice;
@@ -614,7 +619,7 @@ const AskPanel: React.FC<{
 export const DrawingEditor: React.FC<Props> = ({
   sheets, startAt = 0, fileBase, titleBlock, mmPerUnit = 0.5, paper: initialPaper = 'auto',
   savedEdits, onSaveEdits, canEdit = true, pages, pageGroups = [], onPages,
-  embedded = false, lean = false, saveHandle, onDirty, guides, ownDxfImport = false,
+  embedded = false, lean = false, saveHandle, onDirty, guides, ownDxfImport = false, signoff,
   fitPad,
   onSheetChange,
 }) => {
@@ -1054,7 +1059,16 @@ export const DrawingEditor: React.FC<Props> = ({
     // a layout drawing that is to scale can have this retyped.
     scale: 'NTS',
     date: new Date().toISOString().slice(0, 10),
-  }), [sheet, titleBlock, sheets.length, index, paper]);
+    // The set's sign-off, where the project has one.
+    ...(signoff?.drawn?.name ? { drawnBy: signoff.drawn.name } : {}),
+    ...(signoff?.drawn?.sign ? { drawnSign: signoff.drawn.sign } : {}),
+    ...(signoff?.checked?.name ? { checkedBy: signoff.checked.name } : {}),
+    ...(signoff?.checked?.sign ? { checkedSign: signoff.checked.sign } : {}),
+    ...(signoff?.approved?.name ? { approvedBy: signoff.approved.name } : {}),
+    ...(signoff?.approved?.sign ? { approvedSign: signoff.approved.sign } : {}),
+    ...(signoff?.company ? { owner: signoff.company } : {}),
+    ...(signoff?.logo ? { logo: signoff.logo } : {}),
+  }), [sheet, titleBlock, sheets.length, index, paper, signoff]);
 
   /**
    * The part of the sheet a drawing may use — the frame's inside, less the

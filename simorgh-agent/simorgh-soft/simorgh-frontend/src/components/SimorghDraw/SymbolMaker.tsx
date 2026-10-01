@@ -635,7 +635,7 @@ function pointOf(s: Shape): [number, number] {
     case 'circle':
     case 'ellipse':
     case 'arc': return [s.cx, s.cy];
-    case 'rect': return [s.x + s.w / 2, s.y + s.h / 2];
+    case 'rect': case 'image': return [s.x + s.w / 2, s.y + s.h / 2];
     case 'line': return [(s.x1 + s.x2) / 2, (s.y1 + s.y2) / 2];
     case 'curve': return [(s.x1 + s.x2) / 2, (s.y1 + s.y2) / 2];
     case 'text': return [s.x, s.y];

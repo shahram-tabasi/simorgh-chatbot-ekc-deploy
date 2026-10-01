@@ -211,6 +211,17 @@ function mapShapeGeometry(s: Shape, m: Mapping): Shape {
     case 'poly':
       return { ...s, pts: s.pts.map(p => m.pt(p)) };
 
+    case 'image': {
+      // A picture stays upright and unmirrored — a signature turned on its
+      // side is not a signature. Its box goes where the transform sends it.
+      const c = [[s.x, s.y], [s.x + s.w, s.y + s.h]].map(p => m.pt(p as Pt));
+      return {
+        ...s,
+        x: Math.min(c[0][0], c[1][0]), y: Math.min(c[0][1], c[1][1]),
+        w: Math.abs(c[1][0] - c[0][0]), h: Math.abs(c[1][1] - c[0][1]),
+      };
+    }
+
     case 'text': {
       const [x, y] = P(s.x, s.y);
       const rot = norm360((s.rot ?? 0) + m.textRot);
@@ -357,6 +368,8 @@ function segmentsOf(s: Shape): [Pt, Pt][] {
       }
       return pts.slice(1).map((p, i) => seg(pts[i], p));
     }
+    case 'image':
+      return [];
     case 'circle': case 'ellipse': case 'arc': {
       // Walked finely enough that a cut lands where the eye says it should.
       const STEPS = 96;
@@ -724,7 +737,7 @@ export function gripsOf(s: Shape): Grip[] {
         { id: 'mid', at: [(s.x1 + s.x2) / 2, (s.y1 + s.y2) / 2], kind: 'whole' },
       ];
 
-    case 'rect':
+    case 'rect': case 'image':
       return [
         { id: 'nw', at: [s.x, s.y], kind: 'end' },
         { id: 'ne', at: [s.x + s.w, s.y], kind: 'end' },
@@ -791,7 +804,7 @@ export function moveGrip(s: Shape, id: string, to: Pt): Shape {
       if (id === 'b') return { ...s, x2: x, y2: y };
       return s;
 
-    case 'rect': {
+    case 'rect': case 'image': {
       // The corner opposite the one being dragged stays put, so the rectangle
       // follows the pointer the way every drawing package does it.
       const corners: Record<string, [Pt, Pt]> = {

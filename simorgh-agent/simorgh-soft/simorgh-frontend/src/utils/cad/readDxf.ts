@@ -449,6 +449,7 @@ function toSheet(s: Shape, minX: number, maxY: number): Shape {
     case 'curve':   return { ...s, x1: X(s.x1), y1: Y(s.y1), cx: X(s.cx), cy: Y(s.cy), x2: X(s.x2), y2: Y(s.y2) };
     case 'poly':    return { ...s, pts: s.pts.map(p => [X(p[0]), Y(p[1])] as Pt) };
     case 'text':    return { ...s, x: X(s.x), y: Y(s.y) };
+    case 'image':   return { ...s, x: X(s.x), y: Y(s.y + s.h) };
   }
 }
 

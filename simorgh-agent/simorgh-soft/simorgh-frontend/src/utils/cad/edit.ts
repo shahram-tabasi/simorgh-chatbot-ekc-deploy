@@ -59,6 +59,7 @@ export function boundsOf(s: Shape): Box {
     case 'curve':   return box([s.x1, s.cx, s.x2], [s.y1, s.cy, s.y2]);
     case 'poly':    return box(s.pts.map(p => p[0]), s.pts.map(p => p[1]));
     case 'text':    return textBox(s);
+    case 'image':   return { x: s.x, y: s.y, w: s.w, h: s.h };
   }
 }
 
@@ -146,6 +147,8 @@ export function distanceTo(s: Shape, x: number, y: number): number {
     }
     case 'text':
       return inBox(textBox(s), x, y) ? 0 : Infinity;
+    case 'image':
+      return inBox(boundsOf(s), x, y) ? 0 : Infinity;
   }
 }
 

@@ -250,6 +250,20 @@ drawn beside each placed point while the PIN layer is shown, and printed in
 the exports the same way. A connection's name and description are wire labels
 (`nameConnection`), so "Number wires" skips a named connection.
 
+**Connectors join, they are not devices** (`utils/cad/connectors.ts`). Angle,
+T-node and interruption point carry `symbol: 'conn:…'`. `terminals()` leaves
+the angle's and T-node's points out unless asked (`withConnectors`), so every
+list reads straight through them; `devices()` leaves all connectors out.
+Autoconnect and the connect tool ask for them.
+
+**Reports are pages worked out, never kept** (`utils/cad/reportPages.ts`).
+The set's chosen reports (`drawingDocs.reports`) are generated after its own
+pages every time the set opens, in A3 at one unit to the millimetre, with the
+same `sheetHeader` the pages use. The sign-off (`drawingDocs.titleBlock`) goes
+into every title block: an `image` shape for the logo and each signature — a
+data URL, drawn on screen, in SVG and in the PDF (jsPDF `addImage`), left out
+of DXF. A new place that draws a shape type must handle `image`.
+
 Comments here explain *why*, in prose, and are worth keeping — match that.
 
 ## The PLC page

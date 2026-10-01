@@ -23,7 +23,7 @@ export const onArc = (cx: number, cy: number, r: number, deg: number): [number, 
 
 /** One shape as the SVG element that draws it. */
 export interface SvgNode {
-  tag: 'line' | 'rect' | 'circle' | 'ellipse' | 'path' | 'text';
+  tag: 'line' | 'rect' | 'circle' | 'ellipse' | 'path' | 'text' | 'image';
   attrs: Record<string, string | number>;
   /** Text content, for `text` nodes. */
   body?: string;
@@ -71,6 +71,15 @@ export function shapeToNode(s: Shape): SvgNode | null {
       return {
         tag: 'path',
         attrs: { d: `M ${n(s.x1)} ${n(s.y1)} Q ${n(s.cx)} ${n(s.cy)} ${n(s.x2)} ${n(s.y2)}`, ...paint(s, '#111') },
+      };
+
+    case 'image':
+      return {
+        tag: 'image',
+        attrs: {
+          x: n(s.x), y: n(s.y), width: n(s.w), height: n(s.h),
+          href: s.href, preserveAspectRatio: 'xMidYMid meet',
+        },
       };
 
     case 'poly': {

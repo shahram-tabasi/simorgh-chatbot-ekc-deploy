@@ -1,6 +1,6 @@
 import React from 'react';
 import { XIcon } from 'lucide-react';
-import { DrawingEdits } from '../../types/project';
+import { DrawingEdits, TitleBlockSettings } from '../../types/project';
 import { PaperChoice } from '../../utils/cad/paper';
 import { DrawingGroups, DrawingPage } from '../../utils/cad/pages';
 import { DrawingEditor, EditorSheet } from './DrawingEditor';
@@ -32,12 +32,14 @@ interface Props {
    *  single-line editor. Generic on purpose: this window opens for symbol and
    *  template graphics too, which have nothing to send. */
   headerActions?: React.ReactNode;
+  /** The set's sign-off, for the title blocks — see the editor. */
+  signoff?: TitleBlockSettings;
   onClose: () => void;
 }
 
 export const SheetEditorWindow: React.FC<Props> = ({
   title, note, sheets, startAt, fileBase, titleBlock, paper, savedEdits, onSaveEdits,
-  canEdit = true, pages, pageGroups, onPages, headerActions, onClose,
+  canEdit = true, pages, pageGroups, onPages, headerActions, signoff, onClose,
 }) => (
   <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[210]" onClick={onClose}>
     <div
@@ -71,6 +73,7 @@ export const SheetEditorWindow: React.FC<Props> = ({
           pages={pages}
           pageGroups={pageGroups}
           onPages={onPages}
+          signoff={signoff}
         />
       </div>
     </div>

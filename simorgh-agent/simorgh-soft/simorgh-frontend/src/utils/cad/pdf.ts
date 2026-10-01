@@ -112,6 +112,17 @@ function polyline(doc: jsPDF, pts: [number, number][], mode: 'S' | 'F' | 'DF', c
 }
 
 function drawShape(doc: jsPDF, s: Shape, place: Place) {
+  if (s.t === 'image') {
+    // A logo or a signature, embedded as it is — jsPDF reads the data URL and
+    // keeps a PNG's transparency, so a signature sits on the paper, not on a
+    // white card. One that will not decode is left off rather than failing
+    // the whole set.
+    const format = /^data:image\/png/i.test(s.href) ? 'PNG' : 'JPEG';
+    try {
+      doc.addImage(s.href, format, px(place, s.x), py(place, s.y), s.w * place.s, s.h * place.s);
+    } catch { /* not a picture jsPDF can read */ }
+    return;
+  }
   const mode = style(doc, s, place);
   if (!mode) return;
   const X = (v: number) => px(place, v);

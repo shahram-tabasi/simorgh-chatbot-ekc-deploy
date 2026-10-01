@@ -79,6 +79,18 @@ export interface HeaderFields {
    * "alarm" — so the sheet can be read down a column without tracing a wire.
    */
   paths?: string[];
+  /** The company's logo, set in the OWNER cell beside its name. */
+  logo?: string;
+  /** Signatures, as pictures, set in their cells beside the names. */
+  drawnSign?: string;
+  checkedSign?: string;
+  /**
+   * Who approved it. The APPROVED cell is drawn only when this or its
+   * signature is given, so a title block nobody approves looks as it always
+   * did.
+   */
+  approvedBy?: string;
+  approvedSign?: string;
 }
 
 export interface HeaderStyle {
@@ -111,6 +123,7 @@ const CAPTIONS = {
   revision: 'REV',
   drawnBy: 'DRAWN',
   checkedBy: 'CHECKED',
+  approvedBy: 'APPROVED',
   date: 'DATE',
   scale: 'SCALE',
   size: 'SIZE',
@@ -311,11 +324,23 @@ export function sheetHeader(
    */
   const cell = (
     x: number, y: number, w: number, caption: string, value: string,
-    big = false,
+    big = false, image?: string,
   ) => {
     const pad = u * 0.45;
     const size = big ? u * 1.5 : u;
-    const fits = Math.max(1, Math.floor((w - pad * 2) / (size * 0.62)));
+    // A signature or a logo takes the right of the cell, as tall as the cell
+    // allows; the words keep the left and are clipped to what is left of it.
+    let room = w;
+    if (image) {
+      const ih = rowH - pad * 2;
+      const iw = Math.min(w * 0.5, ih * 2.6);
+      out.push({
+        t: 'image', x: x + w - pad - iw, y: y + pad, w: iw, h: ih, href: image,
+        layer: 'TITLE', blockName: HEADER,
+      });
+      room = w - iw - pad;
+    }
+    const fits = Math.max(1, Math.floor((room - pad * 2) / (size * 0.62)));
     const shown = value.length > fits ? `${value.slice(0, fits - 1)}…` : value;
     if (big) {
       say(x + pad, y + rowH * 0.5 + size * 0.36, shown, size, 'start', true);
@@ -326,12 +351,12 @@ export function sheetHeader(
   };
 
   /** A row split into cells by their share of the width. */
-  const split = (y: number, parts: [number, string, string][]) => {
+  const split = (y: number, parts: [number, string, string, string?][]) => {
     let x = tx;
-    parts.forEach(([share, caption, value], i) => {
+    parts.forEach(([share, caption, value, image], i) => {
       const w = tbW * share;
       if (i > 0) rule(x, y, x, y + rowH, thin);
-      cell(x, y, w, caption, value);
+      cell(x, y, w, caption, value, false, image);
       x += w;
     });
   };
@@ -342,11 +367,18 @@ export function sheetHeader(
     [0.32, CAPTIONS.number, fields.number ?? ''],
     [0.18, CAPTIONS.revision, fields.revision ?? ''],
   ]);
-  split(ty + rowH * 2, [
-    [0.34, CAPTIONS.drawnBy, fields.drawnBy ?? ''],
-    [0.33, CAPTIONS.checkedBy, fields.checkedBy ?? ''],
-    [0.33, CAPTIONS.date, fields.date ?? ''],
-  ]);
+  split(ty + rowH * 2, fields.approvedBy || fields.approvedSign
+    ? [
+      [0.27, CAPTIONS.drawnBy, fields.drawnBy ?? '', fields.drawnSign],
+      [0.27, CAPTIONS.checkedBy, fields.checkedBy ?? '', fields.checkedSign],
+      [0.27, CAPTIONS.approvedBy, fields.approvedBy ?? '', fields.approvedSign],
+      [0.19, CAPTIONS.date, fields.date ?? ''],
+    ]
+    : [
+      [0.34, CAPTIONS.drawnBy, fields.drawnBy ?? '', fields.drawnSign],
+      [0.33, CAPTIONS.checkedBy, fields.checkedBy ?? '', fields.checkedSign],
+      [0.33, CAPTIONS.date, fields.date ?? ''],
+    ]);
   // The owner cell gets the widest share of the row: the three beside it hold
   // a word each, and this one holds a company's name, which is longer than a
   // company expects to see abbreviated on its own drawing.
@@ -354,7 +386,7 @@ export function sheetHeader(
     [0.20, CAPTIONS.scale, fields.scale ?? 'NTS'],
     [0.16, CAPTIONS.size, fields.size ?? ''],
     [0.20, CAPTIONS.sheet, fields.sheet ?? ''],
-    [0.44, CAPTIONS.owner, fields.owner ?? SIGNATURE],
+    [0.44, CAPTIONS.owner, fields.owner ?? SIGNATURE, fields.logo],
   ]);
 
   return out;

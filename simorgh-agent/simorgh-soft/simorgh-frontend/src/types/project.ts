@@ -157,6 +157,8 @@ export interface ProjectData {
   drawingEdits?: DrawingEdits;
   /** Symbols redrawn for this project — see SymbolArtOverride. */
   symbolOverrides?: Record<string, SymbolArtOverride>;
+  /** The drawing set's sign-off and its reports — see DrawingDocs. */
+  drawingDocs?: DrawingDocs;
   /**
    * Pages drawn by hand in Simorgh Draw — the WD / SLD / OLD set.
    *
@@ -236,6 +238,45 @@ export interface SymbolArtOverride {
    */
   orientation?: 'horizontal';
   editedAt: string;
+}
+
+// ── The drawing set's sign-off and reports ───────────────────────────────────
+
+/** One person in the title block: their name and, if given, their signature. */
+export interface Signer {
+  name?: string;
+  /** A picture of the signature, as a data URL (PNG keeps its transparency). */
+  sign?: string;
+}
+
+/**
+ * What every page's title block carries beyond the page itself.
+ *
+ * Kept with the project, so a PDF printed on any machine is signed the same
+ * way, and set once rather than retyped into each page's DRAWN box.
+ */
+export interface TitleBlockSettings {
+  /** Whose drawing this is — printed in the OWNER cell. */
+  company?: string;
+  /** The company's logo, as a data URL. */
+  logo?: string;
+  drawn?: Signer;
+  checked?: Signer;
+  /** Shown as its own APPROVED cell only when somebody is named or signed. */
+  approved?: Signer;
+}
+
+/** The reports a drawing set can carry, after EPLAN's report types. */
+export type ReportKind =
+  | 'title' | 'toc' | 'devices' | 'parts'
+  | 'terminals' | 'strips' | 'connections'
+  | 'plc' | 'plcCards'
+  | 'cables' | 'revisions';
+
+export interface DrawingDocs {
+  titleBlock?: TitleBlockSettings;
+  /** Which reports are generated as pages of the set, in this order. */
+  reports?: ReportKind[];
 }
 
 // ── Edited sheets ────────────────────────────────────────────────────────────

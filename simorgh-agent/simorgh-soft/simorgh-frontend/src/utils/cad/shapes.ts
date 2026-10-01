@@ -182,6 +182,13 @@ export type Shape =
   | ({ t: 'curve'; x1: number; y1: number; cx: number; cy: number; x2: number; y2: number } & Pen)
   | ({ t: 'poly'; pts: Pt[]; close?: boolean } & Pen)
   /**
+   * A picture: a company's logo or somebody's signature in a title block.
+   * `href` is a data URL — JPEG, so the PDF can carry it as it is. Drawn on
+   * screen, in the SVG and in the PDF; a DXF has nowhere to keep one and goes
+   * without it.
+   */
+  | ({ t: 'image'; x: number; y: number; w: number; h: number; href: string } & Pen)
+  /**
    * `rot` turns the text about its own anchor, degrees anticlockwise on the
    * page — the way both DXF and a drawing office measure it, so a label written
    * up the side of a column is 90 in all three back-ends.
@@ -266,6 +273,7 @@ export function translateShape(s: Shape, dx: number, dy: number): Shape {
                               x2: s.x2 + dx, y2: s.y2 + dy };
     case 'poly':    return { ...s, pts: s.pts.map(p => [p[0] + dx, p[1] + dy] as Pt) };
     case 'text':    return { ...s, x: s.x + dx, y: s.y + dy };
+    case 'image':   return { ...s, x: s.x + dx, y: s.y + dy };
   }
 }
 

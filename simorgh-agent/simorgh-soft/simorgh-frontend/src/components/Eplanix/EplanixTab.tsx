@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx-js-style';
 import {
-  DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon, PencilRulerIcon } from 'lucide-react';
+  DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon, PencilRulerIcon,
+  SignatureIcon, FileTextIcon } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
 import { ProjectData, Equipment } from '../../types/project';
 import { sheetName } from '../../utils/bpmsExport';
@@ -27,6 +28,9 @@ import { drawingFromSvg, svgSize } from '../../utils/cad/fromSvg';
 import { fingerprint } from '../../utils/cad/edit';
 import { EditorSheet } from '../SimorghDraw/DrawingEditor';
 import { SheetEditorWindow } from '../SimorghDraw/SheetEditorWindow';
+import { TitleBlockDialog } from '../SimorghDraw/TitleBlockDialog';
+import { ReportsDialog } from '../SimorghDraw/ReportsDialog';
+import { buildReportSheets } from '../../utils/cad/reportPages';
 import { onDxfSymbols, symbolFromDxf } from '../../utils/cad/dxfSymbols';
 import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
@@ -122,7 +126,12 @@ function exportMechanicalExcel(data: ProjectData, equipments: Equipment[]) {
 }
 
 export const EplanixTab: React.FC = () => {
-  const { projectData, currentRevision, patchProjectData, isCurrentRevisionEditable } = useProject();
+  const { projectData, currentRevision, patchProjectData, isCurrentRevisionEditable, revisions } = useProject();
+  // The set's sign-off and reports — see DrawingDocs.
+  const [showSignoff, setShowSignoff] = useState(false);
+  const [showReports, setShowReports] = useState(false);
+  const signoff = projectData.drawingDocs?.titleBlock;
+  const reportKinds = useMemo(() => projectData.drawingDocs?.reports ?? [], [projectData.drawingDocs?.reports]);
   const [view, setView] = useState<View>('single-line');
   // The drawing editor is a window over the single line, not a tab of its own:
   // you look at the sheet, then open it for editing where it already is.
@@ -326,15 +335,62 @@ export const EplanixTab: React.FC = () => {
    * from anything: there is no project data underneath it that could move on
    * and leave the edits stale.
    */
-  const pageSheets = useMemo<EditorSheet[]>(
-    () => drawPages.map(page => ({
+  /**
+   * The reports asked for, as pages after the set's own — worked out from the
+   * pages as they are saved, every time the set is opened.
+   */
+  const reportSheets = useMemo(() => {
+    if (!editing || reportKinds.length === 0) return [];
+    const setPages = drawPages.map(page => ({
       name: page.name,
-      drawing: new Drawing(page.width, page.height, page.name),
-      key: pageKey(page.id),
-      drawnAs: 'page',
-      kind: page.type,
-    })),
-    [drawPages]);
+      description: page.description,
+      type: page.type,
+      shapes: projectData.drawingEdits?.[pageKey(page.id)]?.shapes ?? [],
+    }));
+    return buildReportSheets(reportKinds, setPages, projectData, revisions ?? [], signoff);
+  }, [editing, reportKinds, drawPages, projectData, revisions, signoff]);
+
+  const pageSheets = useMemo<EditorSheet[]>(
+    () => [
+      ...drawPages.map(page => ({
+        name: page.name,
+        drawing: new Drawing(page.width, page.height, page.name),
+        key: pageKey(page.id),
+        drawnAs: 'page',
+        kind: page.type,
+      })),
+      // A report is drawn from the project, so its fingerprint is what it
+      // says: a report somebody edited is flagged when the project moves on.
+      ...reportSheets.map((r, i) => ({
+        name: r.name,
+        drawing: r.drawing,
+        key: `report#${r.kind}#${i}`,
+        drawnAs: fingerprint(JSON.stringify(r.drawing.shapes.filter(s => s.t !== 'image'))),
+      })),
+    ],
+    [drawPages, reportSheets]);
+
+  /** The two buttons the set's documents are reached by. */
+  const docButtons = (dark: boolean) => (
+    <>
+      <button
+        onClick={() => setShowSignoff(true)}
+        title="Company, logo, and who drew, checked and approved the set — with signatures — on every title block"
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap ${dark
+          ? 'bg-white/15 text-white hover:bg-white/25' : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50'}`}
+      >
+        <SignatureIcon className="w-4 h-4" /> Title block
+      </button>
+      <button
+        onClick={() => setShowReports(true)}
+        title="EPLAN's reports — title page, contents, device and parts lists, terminal diagrams, connection list, PLC, cables, revisions — as pages of the set"
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap ${dark
+          ? 'bg-white/15 text-white hover:bg-white/25' : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50'}`}
+      >
+        <FileTextIcon className="w-4 h-4" /> Reports{reportKinds.length ? ` (${reportKinds.length})` : ''}
+      </button>
+    </>
+  );
 
   const editorSheets = useMemo<EditorSheet[]>(
     () => (editing && preview
@@ -413,6 +469,7 @@ export const EplanixTab: React.FC = () => {
               {drawPages.length || 'new'}
             </span>
           </button>
+          {docButtons(false)}
           <label className="text-sm text-gray-600">Switchgear</label>
           <select
             className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
@@ -568,6 +625,8 @@ export const EplanixTab: React.FC = () => {
           title={`Simorgh Draw — ${drawPages.find(p => p.id === openPage)?.name ?? 'page'}`}
           note={`${drawPages.length} page(s) in this project · the sheet list at the top right turns between them`}
           sheets={pageSheets}
+          signoff={signoff}
+          headerActions={docButtons(true)}
           startAt={Math.max(0, drawPages.findIndex(p => p.id === openPage))}
           fileBase={`${projectData.projectName || 'project'}_pages`}
           paper={paper}
@@ -588,6 +647,27 @@ export const EplanixTab: React.FC = () => {
             new Date().toLocaleDateString(),
           ].filter(Boolean)}
           onClose={() => { setEditing(false); setOpenPage(null); }}
+        />
+      )}
+
+      {showSignoff && (
+        <TitleBlockDialog
+          value={signoff ?? {}}
+          canEdit={isCurrentRevisionEditable}
+          onSave={next => patchProjectData(prev => ({
+            drawingDocs: { ...(prev.drawingDocs ?? {}), titleBlock: next },
+          }))}
+          onClose={() => setShowSignoff(false)}
+        />
+      )}
+      {showReports && (
+        <ReportsDialog
+          value={reportKinds}
+          canEdit={isCurrentRevisionEditable}
+          onSave={next => patchProjectData(prev => ({
+            drawingDocs: { ...(prev.drawingDocs ?? {}), reports: next },
+          }))}
+          onClose={() => setShowReports(false)}
         />
       )}
 
