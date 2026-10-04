@@ -1258,6 +1258,23 @@ function pinOf(id: SymbolId, x: number, y: number, name: string): Pt {
   return name === '2' ? { x, y: y + symbolHeight(id) } : { x, y };
 }
 
+/** Which way the wire leaves a connection point: the symbol's own say when
+ *  it was drawn with one, the library's otherwise. */
+const LIBRARY_DIRS: Partial<Record<SymbolId, Record<string, string>>> = {
+  'mechanical-interlock': { 1: 'right', 2: 'left' },
+  'earthing-switch': { 1: 'right', 2: 'right', 3: 'left' },
+  magnet: { 1: 'up', 2: 'down' },
+};
+function pinDirOf(id: SymbolId, name: string): string | undefined {
+  const o = symbolOverride(id);
+  if (o?.art && o.terminals?.length) {
+    const t = o.terminals.find(p => p.name === name);
+    if (t) return t.dir;
+  }
+  return LIBRARY_DIRS[id]?.[name];
+}
+const isUpright = (dir?: string) => dir === 'up' || dir === 'down';
+
 const dashed = (pts: Pt[], w = 1) =>
   `<polyline points="${pts.map(p => `${p.x},${p.y}`).join(' ')}" fill="none" stroke="#111" ` +
   `stroke-width="${w}" stroke-dasharray="4 3"/>`;
@@ -1497,6 +1514,18 @@ function drawMvCell(
         // Room for what hangs beside the switch, stacked down from its middle.
         st.role === 'switch' ? switchHang(st.item) : 0);
     } else if (st.kind === 'earth') {
+      // An interlock drawn upright hangs between the switch's 3 and the
+      // earth switch's 2, so the earth switch starts low enough to take it.
+      if (sw && switchY >= 0) {
+        const il = interlock?.id ?? 'mechanical-interlock';
+        if (isUpright(pinDirOf(il, '1'))) {
+          const s3y = pinOf(sw.id, x, switchY, '3').y;
+          const span = pinOf(il, 0, 0, '2').y - pinOf(il, 0, 0, '1').y;
+          const e2off = pinOf(st.item.id, 0, 0, '2').y;
+          y = Math.max(y, s3y + 10 + Math.abs(span) + 8 - e2off);
+          ys.set(st.item, y);
+        }
+      }
       esY = y;
       y += CELL + 10;
     } else if (st.kind === 'shunt') {
@@ -1539,11 +1568,26 @@ function drawMvCell(
       out.push(simLabel(st.item, sx + 16, sy + 30, 'start', 9));
       reach(sx - 12, sy + CELL);
     } else if (st.kind === 'shunt') {
-      out.push(line(sx, sy, x, sy, 1.2), node({ x, y: sy }));
-      out.push(drawDevice(st.item, sx, sy));
-      if (st.item.id !== 'magnet') out.push(earth(sx, sy + CELL + 8));
-      out.push(simLabel(st.item, sx + 16, sy + 30, 'start', 9));
-      reach(sx - 12, sy + CELL + 14);
+      // A shunt whose connection point leaves to the left is drawn to stand
+      // on the right of the line — the office's capacitive detector is — and
+      // the other way round; one with no say stands on the left.
+      const d1 = pinDirOf(st.item.id, '1');
+      if (d1 === 'left') {
+        const off = pinOf(st.item.id, 0, 0, '1');
+        const px = x + 22 - off.x;
+        const p1 = pinOf(st.item.id, px, sy, '1');
+        out.push(line(x, p1.y, p1.x, p1.y, 1.2), node({ x, y: p1.y }));
+        out.push(drawDevice(st.item, px, sy));
+        const lx = px + symbolRight(st.item.id) + 6;
+        out.push(simLabel(st.item, lx, p1.y + 3, 'start', 9));
+        reach(lx + textWidth(labelText(st.item).length, 9), sy + symbolHeight(st.item.id));
+      } else {
+        out.push(line(sx, sy, x, sy, 1.2), node({ x, y: sy }));
+        out.push(drawDevice(st.item, sx, sy));
+        if (st.item.id !== 'magnet' && !symbolOverride(st.item.id)?.art) out.push(earth(sx, sy + CELL + 8));
+        out.push(simLabel(st.item, sx + 16, sy + 30, 'start', 9));
+        reach(sx - 12, sy + CELL + 14);
+      }
     } else {
       // The VT beside the line. With a PT truck at the incoming it is
       // plugged in on a socket after the breaker, never drawn as a second
@@ -1573,21 +1617,43 @@ function drawMvCell(
   if (sw && es && switchY >= 0 && esY >= 0) {
     const s3 = pinOf(sw.id, x, switchY, '3');
     const ilItem = interlock ?? synth('mechanical-interlock', '');
-    // Drawn level with the switch's 3, halfway out to the earth switch.
-    const ilX = x - MV_CELL.shuntDx / 2 + 4;
-    const ilY = s3.y - HALF;
-    const i1 = pinOf(ilItem.id, ilX, ilY, '1');
-    const i2 = pinOf(ilItem.id, ilX, ilY, '2');
     const e2 = pinOf(es.id, sx, esY, '2');
-    out.push(dashed([s3, { x: i1.x, y: s3.y }, i1]));
-    out.push(`<g ${symbolBlock(ilItem.id, ilX, ilY)}>${drawIecSymbol(ilItem.id, ilX, ilY)}</g>`);
-    if (interlock) out.push(simLabel(interlock, ilX, ilY + 4, 'middle', 8));
-    out.push(dashed([i2, { x: e2.x, y: i2.y }, e2]));
+    if (isUpright(pinDirOf(ilItem.id, '1'))) {
+      // Drawn upright, as the office drew it: its 1 at the top takes the
+      // switch's 3 from above, its 2 at the bottom goes down and across into
+      // the earth switch's 2 — from the side that point faces.
+      const off1 = pinOf(ilItem.id, 0, 0, '1');
+      const e2Left = pinDirOf(es.id, '2') !== 'right';
+      const col = e2Left ? e2.x - 18 : e2.x + 18;
+      const ilX = col - off1.x;
+      const ilY = s3.y + 10 - off1.y;
+      const i1 = pinOf(ilItem.id, ilX, ilY, '1');
+      const i2 = pinOf(ilItem.id, ilX, ilY, '2');
+      out.push(dashed([s3, { x: i1.x, y: s3.y }, i1]));
+      out.push(`<g ${symbolBlock(ilItem.id, ilX, ilY)}>${drawIecSymbol(ilItem.id, ilX, ilY)}</g>`);
+      if (interlock) out.push(simLabel(interlock, ilX - symbolLeft(ilItem.id) - 4, ilY + HALF, 'end', 8));
+      out.push(dashed([i2, { x: i2.x, y: e2.y }, e2]));
+      reach(ilX - symbolLeft(ilItem.id), i2.y);
+    } else {
+      // Drawn across: level with the switch's 3, halfway out to the earth
+      // switch.
+      const ilX = x - MV_CELL.shuntDx / 2 + 4;
+      const ilY = s3.y - HALF;
+      const i1 = pinOf(ilItem.id, ilX, ilY, '1');
+      const i2 = pinOf(ilItem.id, ilX, ilY, '2');
+      out.push(dashed([s3, { x: i1.x, y: s3.y }, i1]));
+      out.push(`<g ${symbolBlock(ilItem.id, ilX, ilY)}>${drawIecSymbol(ilItem.id, ilX, ilY)}</g>`);
+      if (interlock) out.push(simLabel(interlock, ilX, ilY + 4, 'middle', 8));
+      out.push(dashed([i2, { x: e2.x, y: i2.y }, e2]));
+    }
   }
   if (es && magnet && esY >= 0) {
     const e3 = pinOf(es.id, sx, esY, '3');
-    const mx = sx - MV_CELL.magnetDx;
-    const my = e3.y;
+    const mOff = pinOf(magnet.id, 0, 0, '1');
+    const mx = sx - MV_CELL.magnetDx - mOff.x;
+    // Its 1 faces up: the line from the earth switch's 3 runs across and
+    // drops into it from above.
+    const my = e3.y + 10 - mOff.y;
     const m1 = pinOf(magnet.id, mx, my, '1');
     out.push(dashed([e3, { x: m1.x, y: e3.y }, m1]));
     out.push(drawDevice(magnet, mx, my));
@@ -1717,8 +1783,11 @@ function drawMvCell(
     // down its own lane. The first runs straight across into what stands
     // level with the CT; each later one starts lower and turns down further
     // left, so no core crosses another on its way.
-    const cx0 = x + 20;
-    const cy = ctY + HALF;
+    // Out of the CT's own secondary when it was drawn with one (its 3).
+    const sec = symbolOverride(ct.id)?.terminals?.some(t => t.name === '3')
+      ? pinOf(ct.id, x, ctY, '3') : { x: x + 20, y: ctY + HALF };
+    const cx0 = sec.x;
+    const cy = sec.y;
     const coreY = (n: number) => cy + n * 7;
     if (cores.length > 1) out.push(line(cx0, coreY(0), cx0, coreY(cores.length - 1), 1));
     cores.forEach((core, n) => {
