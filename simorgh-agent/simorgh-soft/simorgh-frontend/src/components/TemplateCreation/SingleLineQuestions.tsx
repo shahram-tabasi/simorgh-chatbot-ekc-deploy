@@ -3,6 +3,7 @@ import { CheckIcon, InfoIcon, PlusIcon, XIcon } from 'lucide-react';
 import {
   CtCore, CtCorePurpose, DeviceAttachment, TemplateSingleLine,
 } from '../../types/project';
+import { mvAsks } from '../../utils/eplanSingleLine';
 
 // The questions a medium-voltage cell is asked so its single line comes out
 // whole: what the parts in the template cannot say on their own.
@@ -19,6 +20,9 @@ interface Props {
   onChange: (next: TemplateSingleLine) => void;
   /** EK36 or SIMOPRIME — the PT truck is a SIMOPRIME question. */
   family: 'EK36' | 'SIMOPRIME' | '';
+  /** The cell type and its sub-type: which questions it is asked. */
+  cellType?: string;
+  sub?: string;
 }
 
 const Pill: React.FC<{ on: boolean; label: string; onClick: () => void; tone?: 'blue' | 'gray' }> = ({
@@ -99,7 +103,8 @@ const Attachments: React.FC<{
   );
 };
 
-export const SingleLineQuestions: React.FC<Props> = ({ value, onChange, family }) => {
+export const SingleLineQuestions: React.FC<Props> = ({ value, onChange, family, cellType = '', sub = '' }) => {
+  const asks = mvAsks(cellType, sub);
   // An answer is cleared by dropping its key — the drawing reads the absence
   // as "work it out from the parts".
   const set = <K extends keyof TemplateSingleLine>(key: K, v: TemplateSingleLine[K] | undefined) => {
@@ -124,16 +129,52 @@ export const SingleLineQuestions: React.FC<Props> = ({ value, onChange, family }
           is read from the parts; the graphic above redraws as you answer.</span>
       </p>
 
-      <Question title="Main switch" hint="Drawn on the line, connections 1 and 2 in the main path.">
+      {asks.nothing && (
+        <p className="py-2 text-xs text-gray-600">An empty cell is drawn as a box marked DUMMY — nothing to ask.</p>
+      )}
+
+      {asks.switchType && <Question title="Main switch" hint="Drawn on the line, connections 1 and 2 in the main path.">
         <div className="flex flex-wrap gap-1">
           <Pill tone="gray" on={value.switchType === undefined} label="Auto" onClick={() => set('switchType', undefined)} />
           <Pill on={value.switchType === 'vcb'} label="Circuit breaker (VCB)" onClick={() => set('switchType', 'vcb')} />
           <Pill on={value.switchType === 'vc-fuse'} label="Contactor + fuse" onClick={() => set('switchType', 'vc-fuse')} />
           <Pill on={value.switchType === 'none'} label="None" onClick={() => set('switchType', 'none')} />
         </div>
-      </Question>
+      </Question>}
 
-      <Question title="Interlock with downstream"
+      {asks.otherSection && (
+        <Question title="Bus section beyond the riser" hint="The bar is broken between the coupling and its riser; this names the far side.">
+          <input className={input} value={value.otherSection ?? ''} placeholder="BUS B"
+            onChange={e => set('otherSection', e.target.value)} />
+        </Question>
+      )}
+
+      {asks.connectedTo && (
+        <Question title="Connected to" hint="Written at the end of the cell's line.">
+          <input className={input} value={value.connectedTo ?? ''} placeholder={asks.connectedToHint}
+            onChange={e => set('connectedTo', e.target.value)} />
+        </Question>
+      )}
+
+      {asks.neutral && (
+        <Question title="Neutral earthing">
+          <div className="flex flex-wrap gap-1">
+            <Pill on={value.neutralEarthing !== 'solid'} label="Through a resistor (NGR)" onClick={() => set('neutralEarthing', undefined)} />
+            <Pill on={value.neutralEarthing === 'solid'} label="Solidly earthed" onClick={() => set('neutralEarthing', 'solid')} />
+          </div>
+        </Question>
+      )}
+
+      {asks.vt && (
+        <Question title="Voltage transformer" hint="The catalogue's two forms: with HRC fuses, or without.">
+          <div className="flex flex-wrap gap-1">
+            <Pill on={value.vtFuses !== false} label="With fuses" onClick={() => set('vtFuses', undefined)} />
+            <Pill on={value.vtFuses === false} label="Without fuses" onClick={() => set('vtFuses', false)} />
+          </div>
+        </Question>
+      )}
+
+      {asks.interlocks && <Question title="Interlock with downstream"
         hint="Earth switch 3 → magnet 1, magnet 2 → the feeder below, its name written on the line.">
         <div className="flex flex-wrap gap-1">
           <Pill tone="gray" on={value.downstreamInterlock === undefined} label="Auto"
@@ -145,9 +186,9 @@ export const SingleLineQuestions: React.FC<Props> = ({ value, onChange, family }
           <input className={input} value={value.downstreamText ?? ''} placeholder="OUTGOING FEEDER"
             onChange={e => set('downstreamText', e.target.value)} />
         )}
-      </Question>
+      </Question>}
 
-      <Question title="Interlock with upstream" hint="A key interlock on the breaker's line.">
+      {asks.interlocks && <Question title="Interlock with upstream" hint="A key interlock on the breaker's line.">
         <div className="flex flex-wrap gap-1">
           <Pill on={value.upstreamInterlock === true} label="Yes" onClick={() => set('upstreamInterlock', true)} />
           <Pill on={value.upstreamInterlock !== true} label="No" onClick={() => set('upstreamInterlock', undefined)} />
@@ -156,9 +197,9 @@ export const SingleLineQuestions: React.FC<Props> = ({ value, onChange, family }
           <input className={input} value={value.upstreamText ?? ''} placeholder="INCOMING FEEDER"
             onChange={e => set('upstreamText', e.target.value)} />
         )}
-      </Question>
+      </Question>}
 
-      <Question title="CT cores"
+      {asks.ctCores && <Question title="CT cores"
         hint={family === 'EK36'
           ? 'EK36: the CT comes after the earth switch. How many cores, and what is each for?'
           : 'How many cores, and what is each for?'}>
@@ -183,9 +224,9 @@ export const SingleLineQuestions: React.FC<Props> = ({ value, onChange, family }
             )}
           </div>
         ))}
-      </Question>
+      </Question>}
 
-      <Question title="Protection relay">
+      {asks.relay && <Question title="Protection relay">
         <div className="flex flex-wrap gap-1">
           <Pill on={value.relayMode !== 'functions'} label="Protection relay only"
             onClick={() => set('relayMode', undefined)} />
@@ -196,17 +237,17 @@ export const SingleLineQuestions: React.FC<Props> = ({ value, onChange, family }
           <input className={input} value={value.relayFunctions ?? ''} placeholder="50, 50N, 51, 51N, 25, BCU"
             onChange={e => set('relayFunctions', e.target.value)} />
         )}
-      </Question>
+      </Question>}
 
-      <Question title="On the breaker" hint="Strung along the key interlock's line.">
+      {asks.breakerAttachments && <Question title="On the breaker" hint="Strung along the key interlock's line.">
         <Attachments value={value.breakerAttachments} onChange={v => set('breakerAttachments', v)} />
-      </Question>
+      </Question>}
 
-      <Question title="On the relay">
+      {asks.relay && <Question title="On the relay">
         <Attachments value={value.relayAttachments} onChange={v => set('relayAttachments', v)} />
-      </Question>
+      </Question>}
 
-      {family === 'SIMOPRIME' && (
+      {family === 'SIMOPRIME' && asks.ptTruck && (
         <Question title="Incoming with a PT truck"
           hint="The PT is then drawn after the breaker, on a socket — not as a switched device.">
           <div className="flex flex-wrap gap-1">

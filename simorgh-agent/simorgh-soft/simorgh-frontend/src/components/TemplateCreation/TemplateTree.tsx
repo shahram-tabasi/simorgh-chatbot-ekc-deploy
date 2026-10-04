@@ -51,6 +51,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
     addTemplate,
     deleteTemplate,
     setTemplateMechanical,
+    setTemplateSingleLine,
     moveTemplate,
     lockedBy,
   } = useProject();
@@ -723,7 +724,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           pasteMode={wizard.pasteMode ?? 'copy'}
           moveCount={wizard.many?.length ?? 1}
           onCancel={() => setWizard(null)}
-          onSubmit={({ name, hierarchy, useSimorghDraw, mechanical, copyFromId }) => {
+          onSubmit={({ name, hierarchy, useSimorghDraw, mechanical, singleLine, copyFromId }) => {
             if (wizard.many && wizard.many.length > 1) {
               // The path is theirs now; the name and the answers stay each one's own.
               for (const id of wizard.many) moveTemplate(id, hierarchy);
@@ -735,10 +736,12 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
               moveTemplate(wizard.startFrom.id, hierarchy, name, useSimorghDraw);
               // Answers edited on the way through are the template's now.
               setTemplateMechanical(wizard.startFrom.id, mechanical);
+              if (useSimorghDraw) setTemplateSingleLine(wizard.startFrom.id, singleLine);
               // Only a move consumes what was cut; an edit never touched it.
               if (wizard.pasteMode === 'move') setClip(null);
             } else {
-              addTemplate(wizard.tier, name, hierarchy, copyFromId, useSimorghDraw, mechanical);
+              addTemplate(wizard.tier, name, hierarchy, copyFromId, useSimorghDraw, mechanical,
+                useSimorghDraw ? singleLine : undefined);
             }
             const newExpanded = new Set(expandedNodes);
             newExpanded.add(wizard.tier);

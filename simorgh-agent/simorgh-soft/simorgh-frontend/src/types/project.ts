@@ -476,6 +476,15 @@ export interface TemplateSingleLine {
   /** SIMOPRIME: the incoming has a PT truck, so the PT is drawn after the
    *  breaker, on a socket. */
   ptTruck?: boolean;
+  /** The VT drawn with its HRC fuses (true) or without (false). */
+  vtFuses?: boolean;
+  /** Coupling: the bus section on the far side of the riser — "BUS B". */
+  otherSection?: string;
+  /** Riser / adaptor / busduct / cable connection: what it goes to,
+   *  written at the end of its line. */
+  connectedTo?: string;
+  /** Neutral panel: earthed through a resistor or solidly. */
+  neutralEarthing?: 'resistor' | 'solid';
 }
 
 export interface DeviceItem {

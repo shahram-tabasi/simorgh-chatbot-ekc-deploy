@@ -50,7 +50,8 @@ export type SymbolId =
   | 'drive' | 'soft-starter' | 'magnet' | 'alarm-annunciator' | 'lcs'
   // connections
   | 'terminal' | 'test-block' | 'key-interlock' | 'mechanical-interlock'
-  | 'bus-duct' | 'link' | 'outgoing' | 'incoming' | 'accessory';
+  | 'bus-duct' | 'link' | 'outgoing' | 'incoming' | 'accessory'
+  | 'cable-sealing-end' | 'resistor';
 
 export interface IecSymbol {
   id: SymbolId;
@@ -579,6 +580,24 @@ export const IEC_SYMBOLS: Record<SymbolId, IecSymbol> = {
     id: 'incoming', title: 'Incoming supply', titleFa: 'ورودی', group: 'Connections',
     draw: (x, y) => ln(x, y + 14, x, y + CELL) +
       path(`M ${x - 6} ${y + 16} L ${x} ${y + 4} L ${x + 6} ${y + 16} Z`, 1, S),
+  },
+  'cable-sealing-end': {
+    id: 'cable-sealing-end', title: 'Cable sealing end', titleFa: 'سرکابل',
+    group: 'Connections',
+    // The catalogue's cone: the conductor into the point of a triangle, the
+    // cable out of its base.
+    draw: (x, y) => [
+      ln(x, y, x, y + 12),
+      path(`M ${x} ${y + 12} L ${x - 8} ${y + 26} L ${x + 8} ${y + 26} Z`, 1.2),
+      ln(x, y + 26, x, y + CELL),
+    ].join(''),
+  },
+  resistor: {
+    id: 'resistor', title: 'Resistor (neutral earthing)', titleFa: 'مقاومت زمین نوترال',
+    group: 'Protection',
+    draw: (x, y) => [
+      ln(x, y, x, y + 10), box(x - 6, y + 10, 12, 20), ln(x, y + 30, x, y + CELL),
+    ].join(''),
   },
   accessory: {
     id: 'accessory', title: 'Accessory (belongs to the device above)', titleFa: 'متعلقات',

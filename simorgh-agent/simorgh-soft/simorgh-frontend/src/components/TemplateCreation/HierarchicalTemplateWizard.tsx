@@ -36,10 +36,11 @@
 import React, { useMemo, useState } from 'react';
 import { XIcon, ChevronRightIcon, SparklesIcon, CheckIcon } from 'lucide-react';
 import {
-  TemplateItem, TemplateHierarchy, TemplateLeafKind, TemplateMechanical,
+  TemplateItem, TemplateHierarchy, TemplateLeafKind, TemplateMechanical, TemplateSingleLine,
 } from '../../types/project';
 import { TEMPLATE_FAMILIES, foldedPath, familyOf } from '../../utils/templateFamilies';
 import { MechanicalQuestions } from './MechanicalQuestions';
+import { SingleLineQuestions } from './SingleLineQuestions';
 import { type Tier } from '../../utils/tiers';
 
 const LV_ROOTS       = ['S8', '8PT'] as const;
@@ -296,6 +297,8 @@ interface Props {
     useSimorghDraw: boolean;
     /** What the estimate sheets ask that the columns do not answer. */
     mechanical: TemplateMechanical;
+    /** Asked when Simorgh Draw is on: what the cell's single line needs. */
+    singleLine: TemplateSingleLine;
     copyFromId?: string;
   }) => void;
 }
@@ -353,6 +356,10 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
   // The mechanical answers. Never required: a template with none behaves
   // exactly as one made before this step existed, because every fact it
   // would have overruled is read from the columns instead.
+  // The single-line answers — asked only when Simorgh Draw is on, which is
+  // what that question was put there to gate.
+  const [singleLine, setSingleLine] = useState<TemplateSingleLine>(
+    JSON.parse(JSON.stringify(startFrom?.singleLine ?? {})));
   const [mechanical, setMechanical] = useState<TemplateMechanical>(
     { ...(startFrom?.mechanical ?? {}) });
 
@@ -580,6 +587,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
       },
       useSimorghDraw: !!useSimorghDraw,
       mechanical,
+      singleLine,
       // A paste brings the source with it even when the button that started
       // it was not one of the suggestions.
       copyFromId: copyFromId ?? startFrom?.id,
@@ -882,6 +890,23 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
               Answered Yes already — change it if this template's equipment is not drawn here.
               Nothing waits on it.
             </p>
+            {/* Yes asks the single line's own questions, for the cell type
+                picked above. Optional, like Mechanical: anything left on
+                Auto is read from the parts. */}
+            {useSimorghDraw && mvLike(tier) && structuralPathComplete && (
+              <div className="mt-2 rounded border border-indigo-200 bg-indigo-50/40">
+                <p className="px-3 pt-2 text-xs font-semibold text-indigo-800">
+                  Single-line questions{cellType ? ` — ${cellType}${cellSub ? ` · ${cellSub}` : ''}` : ''}
+                </p>
+                <SingleLineQuestions
+                  value={singleLine}
+                  onChange={setSingleLine}
+                  family={family === 'EK36' ? 'EK36' : String(family ?? '').startsWith('SIMOPRIME') ? 'SIMOPRIME' : ''}
+                  cellType={cellType ?? ''}
+                  sub={cellSub ?? ''}
+                />
+              </div>
+            )}
           </div>}
 
           {/* Step — Name + create */}

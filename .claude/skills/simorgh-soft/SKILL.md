@@ -275,6 +275,12 @@ otherwise. What the parts cannot say is asked on the template screen
 `setTemplateSingleLine`); a key left out means "work it out from the parts".
 Beside every device the sheet writes `label : SIM-TABLE value` (`partCode`)
 and nothing else — the numbered tag and the part entry are the tooltip.
+The cell type in the path (`mvCellType`) decides the panel (`cellKind`): which
+switch it draws, whether it has a VT, how its line ends (`MvEnd` — a coupling
+joins the riser beside it under a broken bus, a cable connection ends in a
+sealing end, a dummy and the neutral panel are off the bus) and which
+questions it is asked (`mvAsks`). On an MV board only a *feeder* cell can be
+the supply: the old wording test took the coupling and the incoming VT cell.
 
 Comments here explain *why*, in prose, and are worth keeping — match that.
 

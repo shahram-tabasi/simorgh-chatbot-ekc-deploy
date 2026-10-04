@@ -527,8 +527,18 @@ export function buildSingleLinePages(
     library.find(d => d.name === equipment.name)?.properties ?? {};
 
   const all = equipment.devices ?? [];
-  const incomers = all.filter(isIncomer);
-  const outgoing = all.filter(l => !isIncomer(l));
+  // On an MV board only a feeder cell can be the supply. A coupling, a riser,
+  // an incoming VT cell match the old wording test ("coupl", "incom") but are
+  // cells on the bus like any other — taken as the supply, the coupling was
+  // drawn above the busbar and every other such cell vanished from the sheet.
+  const mvNotSupply = (l: DeviceTableRow) => {
+    if (LAYOUT_OF[equipment.type] !== 'MV') return false;
+    const t = l.templateId ? templates.get(l.templateId) : undefined;
+    const { cellType } = mvCellType(t);
+    return Boolean(cellType) && !/^feeder/i.test(cellType);
+  };
+  const incomers = all.filter(l => isIncomer(l) && !mvNotSupply(l));
+  const outgoing = all.filter(l => !isIncomer(l) || mvNotSupply(l));
   const branches = outgoing.length > 0 ? outgoing : all;
   const supply = outgoing.length > 0 ? incomers[0] : undefined;
 
@@ -1089,17 +1099,102 @@ export function mvFamily(template?: TemplateLike): 'EK36' | 'SIMOPRIME' | '' {
   return '';
 }
 
+/** The cell type and its sub-type (w VT / With Fuse) from the path, with
+ *  the family at its head stepped over. */
+export function mvCellType(template?: TemplateLike): { cellType: string; sub: string } {
+  const full = (template?.hierarchy?.path ?? []).map(p => String(p ?? '').trim());
+  const path = mvFamily(template) ? full.slice(1) : full;
+  return { cellType: path[0] ?? '', sub: path[1] ?? '' };
+}
+
 export interface MvCellOptions {
   answers?: TemplateSingleLine;
   mechanical?: TemplateMechanical;
   family?: 'EK36' | 'SIMOPRIME' | '';
+  /** Feeder Truck, Coupling Wda, Metering Riser… — what kind of panel. */
+  cellType?: string;
+  /** w VT / wo VT, With Fuse / Without Fuse. */
+  sub?: string;
 }
 
 export const mvOptionsOf = (template?: TemplateLike): MvCellOptions => ({
   answers: template?.singleLine,
   mechanical: template?.mechanical,
   family: mvFamily(template),
+  ...mvCellType(template),
 });
+
+/**
+ * How a cell's line ends at the bottom of the sheet.
+ *
+ *   outgoing   the arrow to the load (a feeder, a disconnector link)
+ *   coupling   the bus sectionalizer's breaker: its line turns across to the
+ *              riser beside it (a bar connection) — the sheet joins them
+ *   riser      the riser: up from that bar connection into the next section
+ *   cable      a bus cable connection: a cable sealing end, out
+ *   cable-in   the incoming VT cell: the cable comes in from below
+ *   bar        an adaptor: the copper bar on to another panel
+ *   busduct    a busduct
+ *   capacitor  a capacitor bank
+ *   none       the line ends at its last device (metering, neutral)
+ */
+export type MvEnd =
+  | 'outgoing' | 'coupling' | 'riser' | 'cable' | 'cable-in' | 'bar' | 'busduct' | 'capacitor' | 'none';
+
+/** What kind of panel a cell type is, as far as the drawing cares. */
+function cellKind(cellType = '', sub = '') {
+  const t = cellType.toLowerCase();
+  const s = sub.toLowerCase();
+  const withVt = /\bw vt\b/.test(s) || /^metering|incoming vt/.test(t);
+  if (/^coupling/.test(t)) return { end: 'coupling' as MvEnd, withVt: false, switchDefault: 'vcb' as SymbolId };
+  if (t === 'riser' || t === 'metering riser') return { end: 'riser' as MvEnd, withVt: t === 'metering riser' };
+  if (/riser connection/.test(t)) return { end: 'cable' as MvEnd, withVt: /^metering/.test(t) };
+  if (t === 'incoming vt cell') return { end: 'cable-in' as MvEnd, withVt: true };
+  if (t === 'metering') return { end: 'none' as MvEnd, withVt: true, vtIsLoad: true };
+  if (t === 'adaptor') return { end: 'bar' as MvEnd, withVt: false };
+  if (t === 'busduct') return { end: 'busduct' as MvEnd, withVt: false };
+  if (t === 'dummy') return { end: 'none' as MvEnd, withVt: false, dummy: true };
+  if (t === 'cap bank') return { end: 'capacitor' as MvEnd, withVt: false, switchDefault: 'vcb' as SymbolId };
+  if (t === 'neutral panel') return { end: 'none' as MvEnd, withVt: false, neutral: true };
+  if (t === 'disconnector link') {
+    return { end: 'outgoing' as MvEnd, withVt: false, switchDefault: 'disconnector' as SymbolId,
+      fuse: /with fuse/.test(s) && !/without/.test(s) };
+  }
+  // Feeder Truck / Feeder Wda, and anything not filed by cell type yet.
+  return { end: 'outgoing' as MvEnd, withVt, switchDefault: t.startsWith('feeder') ? 'vcb' as SymbolId : undefined };
+}
+
+/** Which single-line questions a cell type is asked — only the ones its
+ *  drawing has a place for. */
+export function mvAsks(cellType = '', sub = '') {
+  const k = cellKind(cellType, sub);
+  const t = cellType.toLowerCase();
+  const switched = k.end === 'outgoing' || k.end === 'coupling' || k.end === 'capacitor' || !cellType;
+  const secondary = !k.dummy && k.end !== 'bar' && k.end !== 'busduct';
+  return {
+    nothing: Boolean(k.dummy),
+    switchType: switched && t !== 'disconnector link',
+    interlocks: switched,
+    ctCores: secondary,
+    relay: secondary,
+    breakerAttachments: switched,
+    vt: Boolean(k.withVt) || /feeder|^$/.test(t),
+    ptTruck: /feeder|^$/.test(t),
+    otherSection: k.end === 'coupling',
+    connectedTo: ['cable', 'cable-in', 'bar', 'busduct'].includes(k.end),
+    connectedToHint: k.end === 'cable-in' ? 'INCOMING CABLE' : k.end === 'cable' ? 'BUS CABLE CONNECTION'
+      : k.end === 'bar' ? 'BAR CONNECTION TO ANOTHER PANEL' : 'BUSDUCT',
+    neutral: Boolean(k.neutral),
+  };
+}
+
+/** Where a cell's line ends, so the sheet can finish it. */
+export const mvEndOf = (opts: MvCellOptions): MvEnd => cellKind(opts.cellType, opts.sub).end;
+/** A dummy cell and the neutral panel are not hung on the busbar. */
+export const mvOffBus = (opts: MvCellOptions): boolean => {
+  const k = cellKind(opts.cellType, opts.sub);
+  return Boolean(k.dummy || k.neutral);
+};
 
 const SWITCH_IDS: SymbolId[] = [
   'vcb', 'vcb-racking', 'withdrawable-cb', 'vacuum-contactor-fuse',
@@ -1238,6 +1333,7 @@ function drawMvCell(
 ): { svg: string; bottom: number; reachBottom: number; left: number; right: number } {
   const answers = opts.answers ?? {};
   const mech = opts.mechanical ?? {};
+  const kind = cellKind(opts.cellType, opts.sub);
   const out: string[] = [];
   let reachBottom = top;
   let left = x - 20;
@@ -1245,6 +1341,14 @@ function drawMvCell(
   const reach = (px: number, py: number) => {
     left = Math.min(left, px); right = Math.max(right, px); reachBottom = Math.max(reachBottom, py);
   };
+
+  // An empty cell is a box saying so: no line, nothing on the bus.
+  if (kind.dummy) {
+    out.push(`<rect x="${x - 30}" y="${top}" width="60" height="${CELL * 2}" fill="none" stroke="#111" ` +
+      `stroke-width="1" stroke-dasharray="5 3"/>`);
+    out.push(`<text x="${x}" y="${top + CELL + 3}" font-size="9" font-weight="600" text-anchor="middle" fill="#111">DUMMY</text>`);
+    return { svg: out.join(''), bottom: top + CELL * 2, reachBottom: top + CELL * 2, left: x - 30, right: x + 30 };
+  }
 
   // ── Sort the parts into the cell ──────────────────────────────────────
   const rest = [...chain];
@@ -1256,6 +1360,14 @@ function drawMvCell(
   let sw = answers.switchType === 'none' ? undefined : take(i => SWITCH_IDS.includes(i.id));
   if (answers.switchType === 'vcb') sw = { ...(sw ?? synth('vcb', 'Q')), id: 'vcb' };
   if (answers.switchType === 'vc-fuse') sw = { ...(sw ?? synth('vacuum-contactor-fuse', 'Q')), id: 'vacuum-contactor-fuse' };
+  // A panel that is a switch by what it is — a feeder, a coupling, a link —
+  // draws one even before its parts are in.
+  if (!sw && answers.switchType !== 'none' && kind.switchDefault) sw = synth(kind.switchDefault, 'Q');
+  // A disconnector link is a disconnector: a breaker read from its parts is
+  // the parts' wording, not the panel.
+  if (sw && kind.switchDefault === 'disconnector' && !answers.switchType) sw = { ...sw, id: 'disconnector' };
+  // The fuse-linked panel carries its fuses after the disconnector.
+  const linkFuse = kind.fuse ? take(i => i.id === 'hrc-fuse' || i.id === 'fuse') ?? synth('hrc-fuse', 'F') : undefined;
 
   let es = take(i => i.id === 'earthing-switch');
   if (!es && mech.cableEarthSwitch) es = synth('earthing-switch', 'QC');
@@ -1270,7 +1382,18 @@ function drawMvCell(
 
   const ct = take(i => i.id === 'current-transformer');
   const ptTruck = opts.family === 'SIMOPRIME' && answers.ptTruck === true;
-  const socketVt = ptTruck ? take(i => i.id === 'voltage-transformer') ?? synth('voltage-transformer', 'T') : undefined;
+  // The VT: tapped off the line beside the cell — on a socket when the
+  // incoming has a PT truck, through its HRC fuses unless answered without.
+  // On a metering panel it is the load, at the end of the line.
+  const vtPart = take(i => i.id === 'voltage-transformer');
+  const vtItem = vtPart ?? (kind.withVt || ptTruck ? synth('voltage-transformer', 'T') : undefined);
+  const vtFuse = answers.vtFuses !== false;
+  const socketVt = vtItem && !kind.vtIsLoad ? vtItem : undefined;
+  const loadVt = vtItem && kind.vtIsLoad ? vtItem : undefined;
+  // The neutral panel: from the transformer's star point, through the
+  // resistor unless earthed solidly, to earth.
+  const ngr = kind.neutral && answers.neutralEarthing !== 'solid'
+    ? take(i => i.id === 'resistor') ?? synth('resistor', 'R') : undefined;
   const shunts = [...(orphanMagnet ? [orphanMagnet] : []), ...rest.filter(i => LEFT_SHUNTS.includes(i.id))];
   const instruments = rest.filter(i => isInstrument(i.id));
   const series = rest.filter(i => !LEFT_SHUNTS.includes(i.id) && !isInstrument(i.id))
@@ -1286,6 +1409,7 @@ function drawMvCell(
     | { kind: 'socket-vt'; item: ChainItem };
   const stations: Station[] = [];
   if (sw) stations.push({ kind: 'series', item: sw, role: 'switch' });
+  if (linkFuse) stations.push({ kind: 'series', item: linkFuse });
   const earthAndDetectors = () => {
     if (es) stations.push({ kind: 'earth', item: es });
     shunts.forEach(item => stations.push({ kind: 'shunt', item }));
@@ -1301,12 +1425,19 @@ function drawMvCell(
   }
   series.forEach(item => stations.push({ kind: 'series', item }));
   if (socketVt) stations.push({ kind: 'socket-vt', item: socketVt });
+  if (loadVt) {
+    if (vtFuse) stations.push({ kind: 'series', item: synth('hrc-fuse', 'F') });
+    stations.push({ kind: 'series', item: loadVt });
+  }
+  if (ngr) stations.push({ kind: 'series', item: ngr });
 
   const sx = x - MV_CELL.shuntDx;
   const labelX = x + Math.max(24, ...[sw, ct, ...series].filter(Boolean)
     .map(i => labelOffset(i as ChainItem)));
   const ys = new Map<ChainItem, number>();
-  let y = top;
+  // The neutral panel's caption stands above its line.
+  let y = kind.neutral ? top + 14 : top;
+  const lineTop = y;
   let switchY = -1;
   let ctY = -1;
   let esY = -1;
@@ -1322,12 +1453,20 @@ function drawMvCell(
     } else if (st.kind === 'shunt') {
       y += SHUNT_STEP;
     } else {
-      y += 2 * CELL + 14;
+      y += (ptTruck ? 30 : 8) + (vtFuse ? CELL : 0) + CELL + 14;
     }
   }
   const bottom = Math.max(y, top + CELL);
-  out.push(line(x, top, x, bottom));
+  out.push(line(x, lineTop, x, bottom));
   reach(x, bottom);
+  if (kind.neutral) {
+    // Not on the busbar: it hangs from the transformer's star point and ends
+    // in the earth.
+    out.push(`<text x="${x + 8}" y="${top + 6}" font-size="8" fill="#111">FROM TRANSFORMER NEUTRAL</text>`);
+    out.push(`<path d="M ${x - 4} ${lineTop - 6} L ${x} ${lineTop} L ${x + 4} ${lineTop - 6} Z" fill="#111"/>`);
+    out.push(earth(x, bottom + 8));
+    reach(x, bottom + 16);
+  }
 
   for (const st of stations) {
     const sy = ys.get(st.item)!;
@@ -1349,15 +1488,27 @@ function drawMvCell(
       out.push(simLabel(st.item, sx + 16, sy + 30, 'start', 9));
       reach(sx - 12, sy + CELL + 14);
     } else {
-      // The PT on a truck at the incoming: after the breaker, plugged in on a
-      // socket, never drawn as a second switched device.
+      // The VT beside the line. With a PT truck at the incoming it is
+      // plugged in on a socket after the breaker, never drawn as a second
+      // switched device; its HRC fuses above it unless answered without.
       out.push(line(sx, sy + 4, x, sy + 4, 1.2), node({ x, y: sy + 4 }));
-      out.push(line(sx, sy + 4, sx, sy + 8, 1.2));
-      out.push(drawBlock('socket', sx, sy + 8));
-      out.push(line(sx, sy + 34, sx, sy + CELL + 10, 1.2));
-      out.push(drawDevice(st.item, sx, sy + CELL + 10));
-      out.push(simLabel(st.item, sx + 30, sy + CELL + 26, 'start', 9));
-      reach(sx - 12, sy + 2 * CELL + 14);
+      let vy = sy + 4;
+      if (ptTruck) {
+        out.push(line(sx, vy, sx, vy + 4, 1.2));
+        out.push(drawBlock('socket', sx, vy + 4));
+        vy += 30;
+      } else {
+        out.push(line(sx, vy, sx, vy + 4, 1.2));
+        vy += 4;
+      }
+      if (vtFuse) {
+        const fuse = synth('hrc-fuse', 'F');
+        out.push(drawDevice(fuse, sx, vy));
+        vy += CELL;
+      }
+      out.push(drawDevice(st.item, sx, vy));
+      out.push(simLabel(st.item, sx + 30, vy + 16, 'start', 9));
+      reach(sx - 12, vy + CELL);
     }
   }
 
@@ -1532,7 +1683,7 @@ function drawMvCell(
 
   // The voltage instruments, off the VT when there is one.
   if (volts.length) {
-    const vt = socketVt ?? series.find(i => i.id === 'voltage-transformer');
+    const vt = socketVt ?? loadVt ?? series.find(i => i.id === 'voltage-transformer');
     const vy = vt ? ys.get(vt) : undefined;
     const start = ty;
     ty = stack(volts, ty) + 8;
@@ -1556,6 +1707,34 @@ function drawMvCell(
   reach(ix, ty);
 
   return { svg: out.join('\n'), bottom, reachBottom: Math.max(reachBottom, bottom), left, right };
+}
+
+/**
+ * How a cell's line is finished below its last device, at `y`: the arrow to
+ * the load, the cable sealing end, the capacitor, the busduct, the copper
+ * bar on to another panel. A coupling and its riser are joined by the sheet.
+ */
+function drawMvEnd(end: MvEnd, x: number, y: number, opts: MvCellOptions, motor: boolean): string {
+  const say = (fallback: string) =>
+    (String(opts.answers?.connectedTo ?? '').trim() || fallback).toUpperCase();
+  const caption = (t: string, ty: number) =>
+    `<text x="${x + 10}" y="${ty}" font-size="8" fill="#111">${esc(t)}</text>`;
+  switch (end) {
+    case 'outgoing': return drawBlock(motor ? 'motor' : 'outgoing', x, y);
+    case 'cable':
+      return drawBlock('cable-sealing-end', x, y) + drawBlock('outgoing', x, y + CELL) +
+        caption(say('BUS CABLE CONNECTION'), y + CELL + 30);
+    case 'cable-in':
+      return drawBlock('cable-sealing-end', x, y) + drawBlock('incoming', x, y + CELL) +
+        caption(say('INCOMING CABLE'), y + CELL + 30);
+    case 'capacitor': return drawBlock('capacitor', x, y);
+    case 'busduct':
+      return drawBlock('bus-duct', x, y) + caption(say('BUSDUCT'), y + CELL - 4);
+    case 'bar':
+      return line(x, y, x, y + 24, 2.2) + `<path d="M ${x - 6} ${y + 20} L ${x} ${y + 32} L ${x + 6} ${y + 20} Z" fill="#111"/>` +
+        caption(say('BAR CONNECTION TO ANOTHER PANEL'), y + 30);
+    default: return '';
+  }
 }
 
 /** How much room a cell takes, measured by drawing it at the origin. */
@@ -1667,7 +1846,9 @@ function drawSheet(o: {
   const loadY = chainTop + body + 20;
   // An MV cell can reach below its own line — the magnet's line down to the
   // feeder it is interlocked with — and the table starts clear of that too.
-  const tableTop = Math.max(loadY + CELL + 36,
+  // A cable connection ends in its sealing end and the cable below it.
+  const endRoom = mvCells.some(c => ['cable', 'cable-in'].includes(mvEndOf(c.opts))) ? CELL + 10 : 0;
+  const tableTop = Math.max(loadY + CELL + 36 + endRoom,
     ...mvCells.map(c => chainTop + c.size.height + 24));
   const tableHeight = TABLE_ROWS.length * cardRowHeight;
   // The sheet is exactly as wide as the feeders on it: busbar and the block
@@ -1711,7 +1892,35 @@ function drawSheet(o: {
   // The busbar says outright which layer it is. It used to be recognised by
   // being drawn heavier than 4 units, which made its weight a thing the reader
   // depended on rather than a thing the draughtsman could choose.
-  out.push(`<line data-layer="BUS" x1="${margin}" y1="${busY}" x2="${contentRight}" y2="${busY}" stroke="#111" stroke-width="3.2"/>`);
+  // A bus sectionalizer splits the bar: the coupling's breaker on one side,
+  // its riser on the other, joined underneath by the bar connection. Each
+  // coupling is paired with the riser beside it on the sheet.
+  const ends = isMv ? mvCells.map(c => mvEndOf(c.opts)) : [];
+  const pairOf = new Map<number, number>();
+  ends.forEach((end, i) => {
+    if (end !== 'coupling' || pairOf.has(i)) return;
+    const j = [i + 1, i - 1].find(k => ends[k] === 'riser' && !pairOf.has(k));
+    if (j != null) { pairOf.set(i, j); pairOf.set(j, i); }
+  });
+  const breaks: { x: number; label: string }[] = [];
+  ends.forEach((end, i) => {
+    const j = pairOf.get(i);
+    if (end !== 'coupling' || j == null) return;
+    const riserRow = o.lines[j];
+    breaks.push({
+      x: bodyLeft + Math.max(i, j) * colWidth,
+      label: String(mvCells[i].opts.answers?.otherSection ?? '').trim()
+        || (riserRow.busSection ? `BUS ${riserRow.busSection}` : 'BUS B'),
+    });
+  });
+  breaks.sort((a, b) => a.x - b.x);
+  let from = margin;
+  for (const b of breaks) {
+    out.push(`<line data-layer="BUS" x1="${from}" y1="${busY}" x2="${b.x - 7}" y2="${busY}" stroke="#111" stroke-width="3.2"/>`);
+    out.push(`<text x="${b.x + 11}" y="${busY - 9}" font-size="9.5" font-weight="600" fill="#111">${esc(b.label)}</text>`);
+    from = b.x + 7;
+  }
+  out.push(`<line data-layer="BUS" x1="${from}" y1="${busY}" x2="${contentRight}" y2="${busY}" stroke="#111" stroke-width="3.2"/>`);
 
   // ── The incoming column ───────────────────────────────────────────────
   if (o.supply && supplyBranch) {
@@ -1733,15 +1942,41 @@ function drawSheet(o: {
   // ── Outgoing feeders ──────────────────────────────────────────────────
   o.lines.forEach((line_, i) => {
     const x = bodyLeft + i * colWidth + branchDx;
-    out.push(`<line x1="${x}" y1="${busY}" x2="${x}" y2="${chainTop}" stroke="#111" stroke-width="1.3"/>`);
-    out.push(`<circle cx="${x}" cy="${busY}" r="3" fill="#111"/>`);
+    const offBus = isMv && mvOffBus(mvCells[i].opts);
+    if (!offBus) {
+      out.push(`<line x1="${x}" y1="${busY}" x2="${x}" y2="${chainTop}" stroke="#111" stroke-width="1.3"/>`);
+      out.push(`<circle cx="${x}" cy="${busY}" r="3" fill="#111"/>`);
+    }
 
     const drawn = isMv
       ? drawMvCell(mvCells[i].chain, mvCells[i].opts, x, chainTop)
       : drawBranch(branches[i], x, chainTop);
     out.push(drawn.svg);
+    if (!isMv) {
+      out.push(`<line x1="${x}" y1="${drawn.bottom}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
+      out.push(drawBlock(isMotorLoad(line_) ? 'motor' : 'outgoing', x, loadY));
+      return;
+    }
+    const end = ends[i];
+    if (end === 'none') return;
+    if (end === 'coupling' || end === 'riser') {
+      // Down to the bar connection, and — from the coupling's side — across
+      // to the riser.
+      const barY = loadY + 12;
+      out.push(`<line x1="${x}" y1="${drawn.bottom}" x2="${x}" y2="${barY}" stroke="#111" stroke-width="1.3"/>`);
+      const j = pairOf.get(i);
+      if (end === 'coupling' && j != null) {
+        const rx = bodyLeft + j * colWidth + branchDx;
+        out.push(`<line x1="${x}" y1="${barY}" x2="${rx}" y2="${barY}" stroke="#111" stroke-width="2.2"/>`);
+      } else if (j == null) {
+        // No partner on this sheet: say where the bar goes.
+        out.push(`<text x="${x + 8}" y="${barY + 4}" font-size="8" fill="#111">${
+          esc(end === 'coupling' ? 'TO RISER' : 'TO COUPLING')}</text>`);
+      }
+      return;
+    }
     out.push(`<line x1="${x}" y1="${drawn.bottom}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
-    out.push(drawBlock(isMotorLoad(line_) ? 'motor' : 'outgoing', x, loadY));
+    out.push(drawMvEnd(end, x, loadY, mvCells[i].opts, isMotorLoad(line_)));
   });
 
   // ── The block under the drawing ───────────────────────────────────────
@@ -1826,7 +2061,7 @@ export function buildTemplateSvg(
     ? Math.max(x + INSTR_DX + 104, x + mvSize.right + 20) + margin
     : x + INSTR_DX + 104 + margin;
   const bottom = Math.max(drawn.bottom, top);
-  const height = Math.max(bottom + stub + 34, mvSize ? top + mvSize.height + 20 : 0);
+  const height = Math.max(bottom + stub + 34 + (mvSize ? CELL + 20 : 0), mvSize ? top + mvSize.height + 20 : 0);
 
   const out: string[] = [];
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" ` +
@@ -1839,23 +2074,41 @@ export function buildTemplateSvg(
     esc(`${tier} · ${branch.series.length} in series · ${branch.instruments.length} instrument(s)`
       + (branch.shunts.length ? ` · ${branch.shunts.length} to earth` : ''))}</text>`);
 
-  if (chain.length === 0) {
+  // An MV cell is drawn from its type even before it has parts — a riser or
+  // a dummy may never have any.
+  if (chain.length === 0 && !(mvSize && mvOpts.cellType)) {
     out.push(`<text x="${margin}" y="${top + 20}" font-size="11" fill="#888">` +
       `No parts in this template yet.</text>`);
     out.push('</svg>');
     return { svg: out.join('\n'), width, height, devices: 0 };
   }
 
-  // Where it hangs from, and what it feeds.
-  out.push(line(x, top - stub, x, top, 1.3));
-  out.push(`<path d="M ${x - 6} ${top - stub + 11} L ${x} ${top - stub} L ${x + 6} ${top - stub + 11} Z" fill="#111"/>`);
-  out.push(`<text x="${x + 10}" y="${top - stub + 9}" font-size="8.5" fill="#666">from the busbar</text>`);
+  // Where it hangs from, and what it feeds. A dummy and the neutral panel
+  // hang from nothing on the busbar.
+  if (!(mvSize && mvOffBus(mvOpts))) {
+    out.push(line(x, top - stub, x, top, 1.3));
+    out.push(`<path d="M ${x - 6} ${top - stub + 11} L ${x} ${top - stub} L ${x + 6} ${top - stub + 11} Z" fill="#111"/>`);
+    out.push(`<text x="${x + 10}" y="${top - stub + 9}" font-size="8.5" fill="#666">from the busbar</text>`);
+  }
 
   out.push(drawn.svg);
 
-  out.push(line(x, bottom, x, bottom + stub, 1.3));
-  out.push(`<path d="M ${x - 6} ${bottom + stub - 11} L ${x} ${bottom + stub} L ${x + 6} ${bottom + stub - 11} Z" fill="#111"/>`);
-  out.push(`<text x="${x + 10}" y="${bottom + stub - 2}" font-size="8.5" fill="#666">to the load</text>`);
+  const mvEnd = mvSize ? mvEndOf(mvOpts) : 'outgoing';
+  if (mvSize && mvEnd !== 'outgoing') {
+    // The cell's own ending — a riser's bar, a cable sealing end, nothing.
+    if (mvEnd === 'coupling' || mvEnd === 'riser') {
+      out.push(line(x, bottom, x, bottom + 12, 1.3));
+      out.push(line(x, bottom + 12, x + (mvEnd === 'coupling' ? 40 : -40), bottom + 12, 2.2));
+      out.push(`<text x="${x + 10}" y="${bottom + 26}" font-size="8.5" fill="#666">${
+        mvEnd === 'coupling' ? 'bar connection to the riser' : 'bar connection to the coupling'}</text>`);
+    } else {
+      out.push(drawMvEnd(mvEnd, x, bottom, mvOpts, false));
+    }
+  } else {
+    out.push(line(x, bottom, x, bottom + stub, 1.3));
+    out.push(`<path d="M ${x - 6} ${bottom + stub - 11} L ${x} ${bottom + stub} L ${x + 6} ${bottom + stub - 11} Z" fill="#111"/>`);
+    out.push(`<text x="${x + 10}" y="${bottom + stub - 2}" font-size="8.5" fill="#666">to the load</text>`);
+  }
 
   out.push('</svg>');
   return { svg: out.join('\n'), width, height, devices: chain.length };
