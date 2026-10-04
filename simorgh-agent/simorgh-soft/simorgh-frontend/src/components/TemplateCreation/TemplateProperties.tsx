@@ -6,7 +6,7 @@ import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
 import { PanelFrame } from '../shared/PanelFrame';
 import { PartCell } from './PartCell';
 import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
-import { EplanSymbolMap, mvFamily } from '../../utils/eplanSingleLine';
+import { EplanSymbolMap, mvFamily, mvCellType } from '../../utils/eplanSingleLine';
 import { SingleLineQuestions } from './SingleLineQuestions';
 import { TemplateSingleLine, TemplateMechanical } from '../../types/project';
 import { useSymbolVersion } from '../../utils/cad/useSymbols';
@@ -59,6 +59,7 @@ interface TemplateItem {
   /** The single line's own questions — see SingleLineQuestions. */
   singleLine?: TemplateSingleLine;
   mechanical?: TemplateMechanical;
+  useSimorghDraw?: boolean;
 }
 
 interface PropertyValue {
@@ -1345,8 +1346,9 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           onOpenGraphic={setGraphicSymbols}
         />
         {/* What the cell's single line needs and its parts cannot say. MV
-            only: an LV board is drawn from its parts alone. */}
-        {LAYOUT_OF[template.type] === 'MV' && (
+            only, and only where Simorgh Draw is on for the template — that
+            is the question the wizard asks to gate these. */}
+        {LAYOUT_OF[template.type] === 'MV' && template.useSimorghDraw !== false && (
           <div className="mt-2 border-t">
             <button
               type="button"
@@ -1360,6 +1362,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
               <SingleLineQuestions
                 value={template.singleLine ?? {}}
                 family={mvFamily(template)}
+                {...mvCellType(template)}
                 onChange={next => setTemplateSingleLine(template.id, next)}
               />
             )}

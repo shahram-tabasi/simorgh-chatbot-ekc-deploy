@@ -60,7 +60,7 @@ interface ProjectContextType {
    * on one panel went, and nothing should happen to the other nine.
    */
   restoreOneSwitchgear: (from: ProjectData, equipmentId: string) => void;
-  addTemplate: (type: Tier, name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean, mechanical?: TemplateMechanical) => void;
+  addTemplate: (type: Tier, name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean, mechanical?: TemplateMechanical, singleLine?: TemplateSingleLine) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   /** The mechanical answers a template holds, replaced whole. */
   setTemplateMechanical: (templateId: string, mechanical: TemplateMechanical) => void;
@@ -728,6 +728,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     copyFromId?: string,
     useSimorghDraw?: boolean,
     mechanical?: TemplateMechanical,
+    singleLine?: TemplateSingleLine,
   ) => {
     if (!guardEdit()) return;
     setProjectData(prev => {
@@ -764,7 +765,10 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         // every template would make "nobody has looked at this yet"
         // indistinguishable from "looked at, nothing to say".
         ...(mech && Object.keys(mech).length > 0 ? { mechanical: mech } : {}),
-        ...(baseSingleLine ? { singleLine: baseSingleLine } : {}),
+        // Answered in the wizard wins over what a copy brings, as with mechanical.
+        ...(singleLine && Object.keys(singleLine).length > 0
+          ? { singleLine }
+          : baseSingleLine ? { singleLine: baseSingleLine } : {}),
       };
       return {
         ...prev,
