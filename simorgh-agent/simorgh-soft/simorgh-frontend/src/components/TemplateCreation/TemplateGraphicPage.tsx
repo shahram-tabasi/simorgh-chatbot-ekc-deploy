@@ -18,6 +18,7 @@ import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
 import { useSymbolLibrary } from '../../utils/cad/useSymbols';
 import { TIERS } from '../../utils/tiers';
 import { TEMPLATE_GRAPHIC_CHANNEL } from '../../utils/templateGraphicChannel';
+import { ProjectContextProvider } from '../../context/ProjectContext';
 
 
 export interface TemplateGraphicState {
@@ -98,8 +99,28 @@ export const TemplateGraphicPage: React.FC<{ projectId: string; templateId: stri
     </div>;
   }
 
+  // The symbol library reads the project's redrawn symbols and writes a
+  // redraw back. Here there is no project: it is given those symbols, and a
+  // redraw is sent to the project's tab, which applies it through its own
+  // edit gate — and the change comes back here with the next announcement.
+  const editable = live && state.editable;
+  const lite = {
+    projectData: { symbolOverrides: state.symbolOverrides ?? {} },
+    patchProjectData: (updater: (prev: any) => any) => {
+      if (!editable) {
+        window.alert('The project is read-only here — open it in Simorgh Soft (and raise a revision if TPMS owns it) to change its symbols.');
+        return;
+      }
+      const next = updater({ symbolOverrides: state.symbolOverrides ?? {} });
+      if (next?.symbolOverrides) {
+        channel.current?.postMessage({ type: 'symbols', projectId, symbolOverrides: next.symbolOverrides });
+      }
+    },
+    isCurrentRevisionEditable: editable,
+  } as any;
+
   return (
-    <>
+    <ProjectContextProvider value={lite}>
       {!live && (
         <div className="fixed top-0 inset-x-0 z-10 bg-amber-100 text-amber-900 text-xs px-3 py-1 text-center">
           The project is not open in another tab — showing the saved copy, read-only.
@@ -114,6 +135,6 @@ export const TemplateGraphicPage: React.FC<{ projectId: string; templateId: stri
         onSaveEdits={next => channel.current?.postMessage({ type: 'save', projectId, edits: next })}
         onClose={() => window.close()}
       />
-    </>
+    </ProjectContextProvider>
   );
 };

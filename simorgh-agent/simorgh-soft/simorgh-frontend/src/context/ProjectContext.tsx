@@ -209,6 +209,13 @@ export function wholeProject(project: ProjectData): ProjectData {
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
+/**
+ * For a page that holds no project of its own — a template's graphic in a tab
+ * of its own — to hand the symbol library just what it reads (the project's
+ * redrawn symbols) and a way to send a redraw back to the project's tab.
+ */
+export const ProjectContextProvider = ProjectContext.Provider;
+
 interface ProjectProviderProps {
   children: ReactNode;
   initialProject?: ProjectData | null;
@@ -423,6 +430,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     });
   }, []);
   const patchRef = React.useRef<(edits: any) => void>(() => {});
+  const symbolsRef = React.useRef<(overrides: any) => void>(() => {});
   React.useEffect(() => {
     if (typeof BroadcastChannel === 'undefined') return;
     const channel = new BroadcastChannel(TEMPLATE_GRAPHIC_CHANNEL);
@@ -432,6 +440,9 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       if (m?.projectId !== (projectIdRef.current ?? 'unsaved')) return;
       if (m.type === 'hello') announceGraphic();
       else if (m.type === 'save' && m.edits) patchRef.current(m.edits);
+      // A symbol redrawn in the graphic's tab: only the project's symbols, and
+      // through the same edit gate.
+      else if (m.type === 'symbols' && m.symbolOverrides) symbolsRef.current(m.symbolOverrides);
     };
     return () => { channel.close(); graphicChannel.current = null; };
   }, [announceGraphic]);
@@ -513,6 +524,8 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   };
   // The graphic tab's Save, and what it is told it may do.
   patchRef.current = (edits: ProjectData['drawingEdits']) => patchProjectData(() => ({ drawingEdits: edits }));
+  symbolsRef.current = (overrides: ProjectData['symbolOverrides']) =>
+    patchProjectData(() => ({ symbolOverrides: overrides }));
   editableRef.current = isCurrentRevisionEditable && !isTpmsMastered;
   React.useEffect(() => { announceGraphic(); },
     [projectData.templates, projectData.symbolOverrides, projectData.drawingEdits, projectId,

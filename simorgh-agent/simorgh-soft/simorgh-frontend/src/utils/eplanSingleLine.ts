@@ -1071,7 +1071,9 @@ function labelLines(text_: string, wrap: number): string[] {
   // At the commas first; a piece still too long breaks between words.
   const lines: string[] = [];
   let cur = '';
-  const pieces = text_.split(/\s*,\s*/);
+  // At the commas, and before every "Core 2:" — each core of a CT on its
+  // own line.
+  const pieces = text_.split(/\s*,\s*|\s+(?=core\s*\d+\s*:)/i).filter(Boolean);
   pieces.forEach((piece, k) => {
     const comma = k < pieces.length - 1 ? ',' : '';
     // A word longer than the line — an order code — breaks after a dash.
@@ -1406,6 +1408,9 @@ export const mvOffBus = (opts: MvCellOptions): boolean => {
   return Boolean(k.dummy || k.neutral);
 };
 
+/** Every current transformer: labelled on its left, its cores to the right. */
+const CT_IDS: SymbolId[] = ['current-transformer', 'core-balance-ct'];
+
 const SWITCH_IDS: SymbolId[] = [
   'vcb', 'vcb-racking', 'withdrawable-cb', 'vacuum-contactor-fuse',
   'circuit-breaker', 'contactor', 'disconnector', 'switch-disconnector',
@@ -1557,9 +1562,11 @@ function coresOf(
   answers: TemplateSingleLine | undefined, hasRelay: boolean, hasMeters: boolean, ct?: ChainItem,
 ): CtCore[] {
   if (ct?.cores?.length) return ct.cores;
-  if (answers?.ctCores?.length) return answers.ctCores;
+  // The CT's own SIM-TABLE says more about its cores than the cell's
+  // general answer does.
   const read = ct ? (coresFromText(ct.simTable).length ? coresFromText(ct.simTable) : coresFromText(ct.code)) : [];
   if (read.length) return read;
+  if (answers?.ctCores?.length) return answers.ctCores;
   const cores: CtCore[] = [];
   if (hasRelay) cores.push({ purpose: 'protection' });
   if (hasMeters) cores.push({ purpose: 'measurement' });
@@ -1699,11 +1706,12 @@ function drawMvCell(
   // EK36: the earth switch straight after the switch, the CT after it. Every
   // other cell: the CT first, then the earth switch and the detector.
   if (opts.family === 'EK36') {
-    // As the EK36 sheets draw it: the earth switch, the CT straight after it,
-    // then the detector and the arrester.
+    // As the EK36 sheets draw it: the earth switch, the capacitive voltage
+    // detector, and the CT always after the detector; then the arrester.
     if (es) stations.push({ kind: 'earth', item: es });
+    shunts.filter(i => i.id === 'capacitive-divider').forEach(item => stations.push({ kind: 'shunt', item }));
     if (ct) stations.push({ kind: 'series', item: ct, role: 'ct' });
-    shunts.forEach(item => stations.push({ kind: 'shunt', item }));
+    shunts.filter(i => i.id !== 'capacitive-divider').forEach(item => stations.push({ kind: 'shunt', item }));
   } else {
     if (ct) stations.push({ kind: 'series', item: ct, role: 'ct' });
     earthAndDetectors();
@@ -1739,7 +1747,7 @@ function drawMvCell(
       if (st.role === 'ct') ctY = y;
       y += Math.max(stepFor(st.item), st.role === 'switch' ? CELL + 10 : 0,
         // A long label is broken onto lines; the device keeps room for them.
-        12 + labelLineCount(st.item, st.role ? 22 : MV_LABEL.wrap) * MV_LABEL.size * 1.15 + 8,
+        12 + labelLineCount(st.item, st.role || CT_IDS.includes(st.item.id) ? 22 : MV_LABEL.wrap) * MV_LABEL.size * 1.15 + 8,
         // Room for what hangs beside the switch, stacked down from its middle.
         st.role === 'switch' ? switchHang(st.item) : 0);
     } else if (st.kind === 'earth') {
@@ -1831,7 +1839,7 @@ function drawMvCell(
     const sy = ys.get(st.item)!;
     if (st.kind === 'series') {
       out.push(drawDevice(st.item, x, sy));
-      if (st.role === 'switch' || st.role === 'ct' || st.item.id === 'core-balance-ct') {
+      if (st.role === 'switch' || st.role === 'ct' || CT_IDS.includes(st.item.id)) {
         // The switch and the CT are labelled on their left, as the office's
         // sheets do: their right is where the 94 / CR / 74 / 86 hang and the
         // cores leave. The switch's label climbs up beside its top when it
@@ -2011,6 +2019,8 @@ function drawMvCell(
   const ix = x + MV_CELL.instrDx;
   let ty = ctY >= 0 ? ctY : (switchY >= 0 ? switchY : top);
   let relayAt = -1;
+  /** Where the meters' line starts, once they are hung. */
+  let meterTop = -1;
   /** Where a core can come up into the relay from below, and how far right
    *  it and what hangs on it reach. */
   let relayBox = { cx: 0, bottom: 0, right: 0, reach: 0 };
@@ -2196,16 +2206,25 @@ function drawMvCell(
         else { landY = ty + HALF; next = drawRelay(item, ty) + 8; }
         out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
       } else if (core.purpose === 'measurement') {
-        if (meters.length) {
+        if (meters.length && meterTop >= 0) {
+          // A second measuring core joins the meters already hung.
+          landY = meterTop;
+          next = ty;
+          out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
+        } else if (meters.length) {
           landY = ty;
+          meterTop = ty;
           next = stack(meters, ty) + 8;
           out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
         } else {
-          landY = ty + 8;
-          out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix + 10, y: landY }]), arrowRight(ix + 10, landY));
-          out.push(`<text x="${ix + 14}" y="${landY + 3}" font-size="8" fill="#111">MEASURING</text>`);
-          reach(ix + 14 + textWidth(9, 8), landY);
-          next = ty + 20;
+          // No meter on the cell to take it: a short arrow straight out of
+          // the CT saying what the core is for.
+          landY = start.y;
+          const tip = start.x + 30;
+          out.push(solidPath([start, { x: tip, y: start.y }]), arrowRight(tip, start.y));
+          out.push(`<text x="${tip + 4}" y="${start.y + 3}" font-size="7.5" fill="#111">MEASURING</text>`);
+          reach(tip + 4 + 9 * 7.5 * 0.62, landY);
+          next = ty;
         }
       } else {
         // A remark is a short arrow straight out of the CT with its text
@@ -2293,7 +2312,42 @@ function drawMvCell(
     }
     reach(lane + 8, from.y);
   }
-  if (!ct && meters.length) ty = stack(meters, ty) + 8;
+  if (!ct && meters.length) { meterTop = ty; ty = stack(meters, ty) + 8; }
+
+  // Every other CT on the line has its cores too, each to what it is for:
+  // protection up into the relay, measuring onto the meters' line, a remark
+  // as an arrow with its text — and with nothing on the cell to take a core,
+  // an arrow saying what it is for.
+  const moreCts = series.filter(i => i.id === 'current-transformer' && i !== ct);
+  moreCts.forEach((other, j) => {
+    const oy = ys.get(other);
+    if (oy == null) return;
+    const own = coresOf(answers, Boolean(relay), meters.length > 0, other);
+    const sec = symbolOverride(other.id)?.terminals?.some(t => t.name === '3')
+      ? pinOf(other.id, x, oy, '3') : { x: x + 20, y: oy + HALF };
+    if (own.length > 1) out.push(line(sec.x, sec.y, sec.x, sec.y + (own.length - 1) * 10, 1));
+    own.forEach((core, k) => {
+      const start = { x: sec.x, y: sec.y + k * 10 };
+      const arrow = (say: string) => {
+        const tip = start.x + 30;
+        out.push(solidPath([start, { x: tip, y: start.y }]), arrowRight(tip, start.y));
+        out.push(`<text x="${tip + 4}" y="${start.y + 3}" font-size="7.5" fill="#111">${esc(say)}</text>`);
+        reach(tip + 4 + say.length * 7.5 * 0.62, start.y);
+      };
+      if (core.purpose === 'protection' && relayAt >= 0) {
+        const lane = relayBox.cx - 10 - (j * 2 + k) * 8;
+        out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: relayBox.bottom }]),
+          node({ x: lane, y: relayBox.bottom }));
+      } else if (core.purpose === 'measurement' && meterTop >= 0) {
+        const lane = ix - 14 - (j * 2 + k) * 6;
+        out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: meterTop }, { x: ix, y: meterTop }]),
+          node({ x: ix, y: meterTop }));
+      } else {
+        arrow(core.purpose === 'remark' ? String(core.text ?? '').trim().toUpperCase()
+          : core.purpose === 'protection' ? 'PROTECTION' : 'MEASURING');
+      }
+    });
+  });
 
   // The voltage instruments, off the VT when there is one.
   if (volts.length) {
