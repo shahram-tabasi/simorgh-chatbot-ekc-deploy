@@ -294,6 +294,13 @@ lines (`labelLines`, at commas, words, then dashes) and every layout step
 makes room for the lines — a label never runs over the drawing. The line is
 drawn between devices, never under them.
 
+**Signals run to the foot of the cell, all to one level.** A relay's serial
+link and statuses, a breaker's statuses (carrying on the interlock's dashed
+line) and the magnet's line are collected by `signalDown` and drawn last by
+`drawSignals`, so every arrow ends on one floor — the sheet passes the level
+of the cell's own final arrow (`floorAt`). A relay's functions from its
+window are written in its box in place of PROTECTION RELAY.
+
 Comments here explain *why*, in prose, and are worth keeping — match that.
 
 ## The PLC page

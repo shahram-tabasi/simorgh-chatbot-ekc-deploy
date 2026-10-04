@@ -445,6 +445,13 @@ interface ChainItem {
   relayRole?: 'main' | 'auxiliary';
   /** An auxiliary relay: wired to the breaker, the main relay, or both. */
   relayConnect?: 'breaker' | 'relay' | 'both';
+  /** A relay's functions, written in its box. */
+  functions?: string;
+  /** A relay's serial link, and its text. */
+  serialLink?: boolean;
+  serialText?: string;
+  /** Status signals out of a relay or a breaker. */
+  statuses?: string[];
   eplan?: EplanSymbolInfo;
 }
 
@@ -541,6 +548,10 @@ function chainOfTemplate(
         placement: sld.placement,
         relayRole: sld.relayRole,
         relayConnect: sld.relayConnect,
+        functions: sld.functions,
+        serialLink: sld.serialLink,
+        serialText: sld.serialText,
+        statuses: sld.statuses,
       };
       out.push(item);
       host = item;
@@ -1529,6 +1540,9 @@ export const MV_CELL = {
  */
 function drawMvCell(
   chain: ChainItem[], opts: MvCellOptions, x: number, top: number,
+  /** The foot of the cell — level with the arrow its line ends in — where
+   *  every signal line (serial link, status, interlock) is run down to. */
+  floorAt?: number,
 ): { svg: string; bottom: number; reachBottom: number; left: number; right: number } {
   const answers = opts.answers ?? {};
   const mech = opts.mechanical ?? {};
@@ -1697,6 +1711,36 @@ function drawMvCell(
     }
   }
   const bottom = Math.max(y, top + CELL);
+  const floor = Math.max(floorAt ?? bottom + 26, bottom + 26);
+
+  /**
+   * A signal run down to the foot of the cell, as the office's sheets draw
+   * them: a dashed line from `fromY` to the floor with its arrow, and its
+   * text written along it, on a white ground so the dashes do not cross it.
+   */
+  // Collected, and drawn last, so every one of them ends on one level: the
+  // floor, or lower when the longest text needs it — never each at its own.
+  const signals: { x: number; fromY: number; name: string }[] = [];
+  const signalDown = (sx_: number, fromY: number, text_: string) => {
+    signals.push({ x: sx_, fromY, name: text_.trim().toUpperCase() });
+  };
+  const textLen = (name: string) => name.length * 7.5 * 0.68;
+  const drawSignals = () => {
+    if (!signals.length) return;
+    const end = Math.max(floor, ...signals.map(sg => sg.fromY + textLen(sg.name) + 24));
+    for (const { x: sx_, fromY, name } of signals) {
+      const tw = textLen(name);
+      out.push(dashed([{ x: sx_, y: fromY }, { x: sx_, y: end }]), arrowDown(sx_, end));
+      if (name) {
+        const mid = (fromY + end) / 2;
+        out.push(`<g transform="rotate(-90 ${sx_} ${mid})">` +
+          `<rect x="${sx_ - tw / 2 - 3}" y="${mid - 5.5}" width="${tw + 6}" height="10" fill="#fff"/>` +
+          `<text x="${sx_}" y="${mid + 2.8}" font-size="7.5" text-anchor="middle" fill="#111">${esc(name)}</text></g>`);
+      }
+      reach(sx_ - 6, end);
+      reach(sx_ + 6, end);
+    }
+  };
   // **The line is drawn between the devices, never through them.** One line
   // from top to bottom under everything joined the breaker's two terminals
   // past its open blade — the drawing said the breaker was closed. Each
@@ -1854,20 +1898,25 @@ function drawMvCell(
     // Magnet's 2 out to the feeder it is interlocked with, the name written
     // on the line itself.
     if (answers.downstreamInterlock !== false) {
+      // Magnet's 2 to the feeder it is interlocked with, named along the
+      // line, down to the foot of the cell with the other signals.
       const m2 = pinOf(magnet.id, mx, my, '2');
-      const name = (String(answers.downstreamText ?? '').trim() || 'OUTGOING FEEDER').toUpperCase();
-      // Capitals run wider than `textWidth`'s mixed-case guess.
-      const tw = name.length * 8 * 0.68;
-      const len = Math.max(70, tw + 30);
-      const end = { x: m2.x, y: m2.y + len };
-      out.push(dashed([m2, end]), arrowDown(end.x, end.y));
-      const mid = m2.y + len / 2;
-      const w = tw + 6;
-      out.push(`<g transform="rotate(-90 ${m2.x} ${mid})">` +
-        `<rect x="${m2.x - w / 2}" y="${mid - 6}" width="${w}" height="11" fill="#fff"/>` +
-        `<text x="${m2.x}" y="${mid + 3}" font-size="8" text-anchor="middle" fill="#111">${esc(name)}</text></g>`);
-      reach(m2.x - 8, end.y);
+      signalDown(m2.x, m2.y, String(answers.downstreamText ?? '').trim() || 'OUTGOING FEEDER');
     }
+  }
+
+  // ── The breaker's status signals ──────────────────────────────────────
+  // The mechanical interlock's dashed line carries on past the interlock,
+  // out to the left of everything on the cell, and each status drops from it
+  // to the foot of the cell with its text along it — the bundle of dashed
+  // lines down the left of the office's SIMOPRIME sheets.
+  const swStatuses = (sw?.statuses ?? []).map(t => t.trim()).filter(Boolean);
+  if (sw && switchY >= 0 && swStatuses.length) {
+    const s3 = pinOf(sw.id, x, switchY, '3');
+    const first = left - 14;
+    const lanes = swStatuses.map((_, k) => first - k * 16);
+    out.push(dashed([s3, { x: lanes[lanes.length - 1], y: s3.y }]));
+    swStatuses.forEach((t, k) => signalDown(lanes[k], s3.y, t));
   }
 
   // ── What hangs on the breaker, along the key interlock's line ─────────
@@ -1937,9 +1986,11 @@ function drawMvCell(
     };
     let rx = ix + symbolRight(item.id);
     let h = CELL;
-    const fns = item.id === 'protection-relay' && answers.relayMode === 'functions'
-      ? String(answers.relayFunctions ?? '').split(/[,،;\n]+/).map(f => f.trim()).filter(Boolean)
-      : [];
+    // The relay's own window says its functions; the cell's question is the
+    // fallback. None: the plain relay, "PROTECTION RELAY" in its box.
+    const fnText = String(item.functions ?? '').trim()
+      || (item.id === 'protection-relay' && answers.relayMode === 'functions' ? String(answers.relayFunctions ?? '') : '');
+    const fns = fnText.split(/[,،;\n]+/).map(f => f.trim()).filter(Boolean);
     if (fns.length === 0) {
       out.push(drawDevice(item, ix, y0));
       label(y0 + 8);
@@ -1993,6 +2044,27 @@ function drawMvCell(
     out.push(k.svg);
     relayBox.reach = Math.max(relayBox.right, k.right);
     reach(Math.max(rx, k.right), Math.max(y0 + h, k.bottom));
+
+    // The serial link and the status signals: each leaves the bottom of the
+    // relay's box, turns out to the right of everything on the relay, and
+    // runs down to the foot of the cell with its text along it. The first
+    // goes furthest out and the later ones turn lower and nearer in, so no
+    // two of them cross.
+    const signals = [
+      ...(item.serialLink ? [String(item.serialText ?? '').trim() || 'SERIAL LINK'] : []),
+      ...(item.statuses ?? []).map(t => t.trim()).filter(Boolean),
+    ];
+    if (signals.length) {
+      const n = signals.length;
+      const lanes = signals.map((_, k) => relayBox.reach + 16 + (n - 1 - k) * 16);
+      signals.forEach((t, k) => {
+        const sx_ = Math.max(relayBox.cx + 8, relayBox.right - 6 - k * 7);
+        const turn = relayBox.bottom + 6 + k * 6;
+        out.push(dashed([{ x: sx_, y: relayBox.bottom }, { x: sx_, y: turn }, { x: lanes[k], y: turn }]));
+        signalDown(lanes[k], turn, t);
+      });
+      relayBox.reach = lanes[0] + 8;
+    }
     return Math.max(y0 + h, k.bottom + 4);
   };
 
@@ -2148,6 +2220,7 @@ function drawMvCell(
   }
   reach(ix, ty);
 
+  drawSignals();
   return { svg: out.join('\n'), bottom, reachBottom: Math.max(reachBottom, bottom), left, right };
 }
 
@@ -2371,7 +2444,7 @@ function drawSheet(o: {
     out.push(`<text x="${supplyX}" y="94" font-size="9" fill="#555">${
       esc(clip(String(o.supply.description || ''), 30))}</text>`);
     const drawn = mvSupply
-      ? drawMvCell(mvSupply.chain, mvSupply.opts, supplyX, supplyTop)
+      ? drawMvCell(mvSupply.chain, mvSupply.opts, supplyX, supplyTop, busY - 8)
       : drawBranch(supplyBranch, supplyX, supplyTop);
     out.push(drawn.svg);
     out.push(`<line x1="${supplyX}" y1="${drawn.bottom}" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
@@ -2391,7 +2464,7 @@ function drawSheet(o: {
     }
 
     const drawn = isMv
-      ? drawMvCell(mvCells[i].chain, mvCells[i].opts, x, chainTop)
+      ? drawMvCell(mvCells[i].chain, mvCells[i].opts, x, chainTop, loadY + 36)
       : drawBranch(branches[i], x, chainTop);
     out.push(drawn.svg);
     if (!isMv) {

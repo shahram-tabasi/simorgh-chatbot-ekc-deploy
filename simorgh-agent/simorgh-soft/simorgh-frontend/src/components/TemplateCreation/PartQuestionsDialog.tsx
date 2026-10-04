@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { CheckIcon, XIcon, InfoIcon } from 'lucide-react';
+import { CheckIcon, XIcon, InfoIcon, PlusIcon, TrashIcon } from 'lucide-react';
 import { PartSingleLine } from '../../types/project';
 import { IEC_SYMBOLS, SYMBOL_GROUPS, SymbolId } from '../../utils/iecSymbols';
 import { breakLabel, symbolForPart } from '../../utils/eplanSingleLine';
@@ -32,11 +32,48 @@ interface Props {
   host?: any;
   /** Opened because the part was just entered (rather than to edit). */
   fresh: boolean;
-  onSave: (answers: PartSingleLine, symbolId: string | undefined) => void;
+  /** `simTable` is the SIM-TABLE typed here, or undefined to keep the
+   *  part's own (its order number / designation). */
+  onSave: (answers: PartSingleLine, symbolId: string | undefined, simTable: string | undefined) => void;
   onClose: () => void;
 }
 
 const RELAYS: SymbolId[] = ['protection-relay', 'earth-fault-relay'];
+const SWITCHES: SymbolId[] = [
+  'vcb', 'vcb-racking', 'withdrawable-cb', 'vacuum-contactor-fuse', 'circuit-breaker',
+  'contactor', 'disconnector', 'switch-disconnector', 'mcb', 'motor-starter',
+];
+
+const input = 'w-full min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-400';
+
+/** A list of status texts: each one a dashed line to the foot of the cell. */
+const StatusList: React.FC<{
+  value: string[] | undefined;
+  onChange: (next: string[] | undefined) => void;
+  hint: string;
+}> = ({ value, onChange, hint }) => {
+  const list = value ?? [];
+  const set = (next: string[]) => onChange(next.length ? next : undefined);
+  return (
+    <div className="w-full space-y-1.5">
+      {list.map((t, k) => (
+        <div key={k} className="flex items-center gap-1.5">
+          <span className="text-[11px] text-gray-500 w-14 shrink-0">Status {k + 1}</span>
+          <input className={input} value={t} placeholder={hint}
+            onChange={e => set(list.map((x, i) => (i === k ? e.target.value : x)))} />
+          <button type="button" title="Remove this status" onClick={() => set(list.filter((_, i) => i !== k))}
+            className="p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50">
+            <TrashIcon className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      ))}
+      <button type="button" onClick={() => onChange([...list, ''])}
+        className="flex items-center gap-1 px-2 py-1 rounded border border-dashed border-gray-300 text-xs text-gray-600 hover:border-blue-400 hover:text-blue-700">
+        <PlusIcon className="w-3.5 h-3.5" /> Add a status
+      </button>
+    </div>
+  );
+};
 const INSTRUMENT_IDS: SymbolId[] = [
   'test-block', 'ammeter', 'ampere-selector', 'multimeter', 'watt-meter', 'var-meter',
   'power-factor-meter', 'kwh-meter', 'kvarh-meter', 'transducer', 'protection-relay',
@@ -96,7 +133,11 @@ export const PartQuestionsDialog: React.FC<Props> = ({
     });
 
   const label = stripLocaleTags(part?.label) || '';
-  const code = partCode(part);
+  // The SIM-TABLE as the part gives it, and as typed here.
+  const ownCode = partCode({ ...part, simTableOverride: undefined });
+  const [simTable, setSimTable] = useState<string>(partCode(part));
+  const code = simTable.trim();
+  const isSwitch = SWITCHES.includes(effective);
   const asksRole = index > 0;
   const isAccessory = asksRole ? answers.role !== 'main' : answers.role === 'accessory';
   const isRelay = RELAYS.includes(effective);
@@ -132,6 +173,15 @@ export const PartQuestionsDialog: React.FC<Props> = ({
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+          <Question n={++n} title="SIM-TABLE">
+            <input className={input} value={simTable} placeholder={ownCode || 'SIM-TABLE'}
+              onChange={e => setSimTable(e.target.value)} />
+            {simTable.trim() !== ownCode && ownCode && (
+              <button type="button" onClick={() => setSimTable(ownCode)}
+                className="text-[11px] text-blue-700 hover:underline">Back to the part’s own: {ownCode}</button>
+            )}
+          </Question>
+
           {asksRole && (
             <Question n={++n} title="Is it an accessory of the device above, or a device of its own?">
               <Choice on={isAccessory} title="Accessory"
@@ -189,6 +239,46 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                   <Choice on={answers.relayConnect === 'both'} title="Both" onClick={() => set('relayConnect', 'both')} />
                 </Question>
               )}
+
+              {isRelay && (
+                <Question n={++n} title="Functions">
+                  <input className={input} value={answers.functions ?? ''}
+                    placeholder="50, 50N, 51, 51N, 25, BCU — empty: PROTECTION RELAY"
+                    onChange={e => set('functions', e.target.value || undefined)} />
+                  <p className="w-full text-[11px] text-gray-500">
+                    Written in the relay’s box in place of “PROTECTION RELAY”. Left empty, the box says PROTECTION RELAY.
+                  </p>
+                </Question>
+              )}
+
+              {isRelay && (
+                <Question n={++n} title="Serial link?">
+                  <Choice on={answers.serialLink === true} title="Yes"
+                    note="A dashed line from the relay down to the foot of the cell, its text along it."
+                    onClick={() => set('serialLink', true)} />
+                  <Choice on={answers.serialLink !== true} title="No"
+                    onClick={() => { set('serialLink', undefined); set('serialText', undefined); }} />
+                  {answers.serialLink && (
+                    <input className={input} value={answers.serialText ?? ''} placeholder="SERIAL LINK"
+                      onChange={e => set('serialText', e.target.value || undefined)} />
+                  )}
+                </Question>
+              )}
+
+              {(isRelay || isSwitch) && (
+                <Question n={++n} title={isRelay ? 'Status signals from the relay' : 'Status signals from the breaker'}>
+                  <p className="w-full text-[11px] text-gray-500">
+                    {isRelay
+                      ? 'Each one a dashed line from the relay, beside the serial link, down to the foot of the cell with its text along it.'
+                      : 'Each one carries on the mechanical interlock’s dashed line and runs down to the foot of the cell with its text along it.'}
+                  </p>
+                  <StatusList
+                    value={answers.statuses}
+                    onChange={v => set('statuses', v)}
+                    hint={isRelay ? 'e.g. TRIP TO UPSTREAM' : 'e.g. CB OPEN/CLOSE TO DCS'}
+                  />
+                </Question>
+              )}
             </>
           )}
 
@@ -211,7 +301,16 @@ export const PartQuestionsDialog: React.FC<Props> = ({
             {fresh ? 'Skip' : 'Cancel'}
           </button>
           <button
-            onClick={() => onSave(answers, symbolId || undefined)}
+            onClick={() => {
+              // Empty statuses are dropped; nothing typed is no key at all.
+              const clean = { ...answers };
+              if (clean.statuses) {
+                const kept = clean.statuses.map(t => t.trim()).filter(Boolean);
+                if (kept.length) clean.statuses = kept; else delete clean.statuses;
+              }
+              const typed = simTable.trim();
+              onSave(clean, symbolId || undefined, typed && typed !== ownCode ? typed : undefined);
+            }}
             className="px-4 py-2 text-sm rounded bg-blue-600 text-white font-medium hover:bg-blue-700"
           >
             Save

@@ -686,15 +686,20 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   const [questionsFor, setQuestionsFor] = useState<{ ref: PartRef; fresh: boolean } | null>(null);
 
   /** A part's single-line answers and its symbol, saved together. */
-  const changePartAnswers = (ref: PartRef, sld: PartSingleLine, symbolId: string | undefined) => {
+  const changePartAnswers = (
+    ref: PartRef, sld: PartSingleLine, symbolId: string | undefined, simTable: string | undefined,
+  ) => {
     const row = properties[ref.slot];
     if (!row?.parts?.[ref.index]) return;
     const parts = row.parts.map((part, i) => {
       if (i !== ref.index) return part;
-      const { symbolId: _was, sld: _old, ...rest } = part;
+      const { symbolId: _was, sld: _old, simTableOverride: _sim, ...rest } = part;
       return {
         ...rest,
         ...(symbolId ? { symbolId } : {}),
+        // The SIM-TABLE typed in the window is the same override the table's
+        // own SIM-TABLE cell writes; none means the part's own.
+        ...(simTable ? { simTableOverride: simTable } : {}),
         // Nothing answered is no key at all: the drawing reads its absence
         // as "as it always did".
         ...(Object.keys(sld).length ? { sld } : {}),
@@ -1435,8 +1440,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
             host={index > 0 ? properties[slot]?.parts?.[0] : undefined}
             fresh={questionsFor.fresh}
             onClose={() => setQuestionsFor(null)}
-            onSave={(sld, symbolId) => {
-              changePartAnswers({ slot, index, part: live }, sld, symbolId);
+            onSave={(sld, symbolId, simTable) => {
+              changePartAnswers({ slot, index, part: live }, sld, symbolId, simTable);
               setQuestionsFor(null);
             }}
           />

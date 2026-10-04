@@ -453,6 +453,16 @@ export interface PartSingleLine {
   relayRole?: 'main' | 'auxiliary';
   /** An auxiliary relay: what it is wired to. */
   relayConnect?: 'breaker' | 'relay' | 'both';
+  /** A relay's ANSI functions, written in its box in place of "PROTECTION
+   *  RELAY" — "50, 50N, 51, 51N". Empty keeps the plain relay. */
+  functions?: string;
+  /** A relay with a serial link: a dashed line down to the foot of the cell,
+   *  its text written along it. */
+  serialLink?: boolean;
+  serialText?: string;
+  /** Status signals out of a relay or a breaker — each a dashed line down to
+   *  the foot of the cell with its text along it. */
+  statuses?: string[];
 }
 
 /** What one core of a CT is for. */
