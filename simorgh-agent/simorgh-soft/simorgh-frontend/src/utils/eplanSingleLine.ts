@@ -1607,12 +1607,29 @@ function keyLine(from: Pt, attachments: DeviceAttachment[], upstream?: string): 
  * parts, then decide.
  */
 export function coresFromText(text_: string): CtCore[] {
-  const pieces = String(text_ ?? '').split(/core\s*\d+\s*[:=-]/i).slice(1);
-  return pieces.map(piece => (
-    /\b\d+\s*P\s*\d+|\bP\s*X\b|\bTP[SXYZ]\b|protect/i.test(piece)
-      ? { purpose: 'protection' as const }
-      : { purpose: 'measurement' as const }));
+  // Each "Core n:" with what follows it, put in the order of its number —
+  // core 1 first, whatever order the text happens to list them in.
+  const found: { n: number; piece: string }[] = [];
+  const re = /core\s*(\d+)\s*[:=-]/gi;
+  const text = String(text_ ?? '');
+  const hits = [...text.matchAll(re)];
+  hits.forEach((h, k) => {
+    const from = (h.index ?? 0) + h[0].length;
+    const to = k + 1 < hits.length ? hits[k + 1].index ?? text.length : text.length;
+    found.push({ n: Number(h[1]), piece: text.slice(from, to) });
+  });
+  return found
+    .sort((a, b) => a.n - b.n)
+    .map(({ piece }) => (
+      /\b\d+\s*P\s*\d+|\bP\s*X\b|\bTP[SXYZ]\b|protect/i.test(piece)
+        ? { purpose: 'protection' as const }
+        : { purpose: 'measurement' as const }));
 }
+
+/** A core's number written on its line beside the CT, so the order of the
+ *  cores — core 1 the top line — is there to read on the drawing. */
+const coreNumber = (x: number, y: number, n: number) =>
+  `<text x="${x + 5}" y="${y - 2}" font-size="6.5" fill="#111">${n}</text>`;
 
 /** The cores a CT is drawn with: its own window's, the cell's answer, what
  *  its SIM-TABLE says, or what the parts imply. */
@@ -2298,10 +2315,16 @@ function drawMvCellLines(
     const cx0 = sec.x;
     const cy = sec.y;
     const coreY = (n: number) => cy + n * 10;
+    // The meters shared out among the measuring cores, in order.
+    const measuring = cores.filter(c => c.purpose === 'measurement').length;
+    const meterGroups: ChainItem[][] = Array.from({ length: measuring }, (_, j) =>
+      (j === measuring - 1 ? meters.slice(j) : meters.slice(j, j + 1)));
+    let measSeen = 0;
     if (cores.length > 1) out.push(line(cx0, coreY(0), cx0, coreY(cores.length - 1), 1));
     cores.forEach((core, n) => {
       const lane = x + MV_CELL.laneDx - n * MV_CELL.laneStep;
       const start = { x: cx0, y: coreY(n) };
+      out.push(coreNumber(cx0, start.y, n + 1));
       let landY: number;
       let next: number;
       if (core.purpose === 'protection') {
@@ -2310,19 +2333,19 @@ function drawMvCellLines(
         else { landY = ty + HALF; next = drawRelay(item, ty) + 8; }
         out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
       } else if (core.purpose === 'measurement') {
-        if (meters.length && meterTop >= 0) {
-          // A second measuring core joins the meters already hung.
-          landY = meterTop;
-          next = ty;
-          out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
-        } else if (meters.length) {
+        // The meters this core feeds: with several measuring cores, each
+        // takes its own, in order — core 2 the first meter, core 3 the next,
+        // the last core the rest — so two cores never run into one meter on
+        // top of each other. A core left with no meter is an arrow.
+        const mine = meterGroups[measSeen++] ?? [];
+        if (mine.length) {
           // Straight across into the first meter when it is fed from its
           // side: the meters hang so its point is level with the core.
-          const side = singlePin(dk(meters[0]));
+          const side = singlePin(dk(mine[0]));
           const top_ = side ? Math.max(ty, start.y - HALF) : ty;
           landY = side ? top_ + HALF : top_;
-          meterTop = side ? top_ + HALF : top_;
-          next = stack(meters, top_, ix, landY) + 8;
+          if (meterTop < 0) meterTop = side ? top_ + HALF : top_;
+          next = stack(mine, top_, ix, landY) + 8;
           out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
         } else {
           // No meter on the cell to take it: a short arrow straight out of
@@ -2439,6 +2462,7 @@ function drawMvCellLines(
     if (own.length > 1) out.push(line(sec.x, sec.y, sec.x, sec.y + (own.length - 1) * 10, 1));
     own.forEach((core, k) => {
       const start = { x: sec.x, y: sec.y + k * 10 };
+      out.push(coreNumber(sec.x, start.y, k + 1));
       const arrow = (say: string) => {
         const tip = start.x + 30;
         out.push(solidPath([start, { x: tip, y: start.y }]), arrowRight(tip, start.y));
