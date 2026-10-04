@@ -44,6 +44,32 @@ export function useSymbolVersion(): number {
   return useSyncExternalStore(onSymbols, symbolsVersion, symbolsVersion);
 }
 
+/** Which edge of its box a connection point is nearest — the way its wire
+ *  leaves. */
+function edgeOf(x: number, y: number, w: number, h: number): string {
+  const d = [
+    ['up', y], ['down', h - y], ['left', x], ['right', w - x],
+  ] as [string, number][];
+  return d.sort((a, b) => a[1] - b[1])[0][0];
+}
+
+/**
+ * A file's points carry no names, so they are given the ones the single line
+ * reads: the topmost is 1 and the bottommost 2 — where the line comes in and
+ * goes out — and any others 3, 4… in the order the file has them.
+ */
+function namePackPoints(points: [number, number][]): { x: number; y: number; name: string }[] {
+  if (points.length === 0) return [];
+  if (points.length === 1) return [{ x: points[0][0], y: points[0][1], name: '1' }];
+  const byY = points.map((p, i) => ({ p, i })).sort((a, b) => a.p[1] - b.p[1]);
+  const top = byY[0].i;
+  const bottom = byY[byY.length - 1].i;
+  let next = 3;
+  return points.map(([x, y], i) => ({
+    x, y, name: i === top ? '1' : i === bottom ? '2' : String(next++),
+  }));
+}
+
 /** The office's DXF pack, as the library wants it. */
 function packLayer(): Partial<Record<SymbolId, SymbolOverride>> {
   const out: Partial<Record<SymbolId, SymbolOverride>> = {};
@@ -51,6 +77,13 @@ function packLayer(): Partial<Record<SymbolId, SymbolOverride>> {
     out[s.id as SymbolId] = {
       url: '', art: s.art, width: s.width, height: s.height,
       pinX: s.pinX, cells: s.cells, title: s.fileName,
+      // The connection points placed on the file travel with it — left
+      // behind, a symbol from the pack fell back to two invented points on
+      // its conductor whatever the office had marked. Each faces the edge it
+      // sits on.
+      terminals: namePackPoints(s.terminalPoints ?? []).map(({ x, y, name }) => ({
+        x, y, name, dir: edgeOf(x, y, s.width, s.height),
+      })),
     };
   }
   return out;

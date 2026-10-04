@@ -2040,12 +2040,19 @@ function drawMvCell(
    */
   const instrSignals: { lead: Pt[]; y: number; text: string }[] = [];
 
-  /** A meter drawn with one connection point, out to its side — it hangs off
-   *  the core's line by that point rather than sitting in it. */
+  /**
+   * A meter whose connection point 1 is on its side — the office draws them
+   * so, the core coming in from the left — hangs off the core's line by that
+   * point rather than sitting in it with the line drawn through it. One
+   * point or two makes no difference: where 1 is decides.
+   */
   const singlePin = (id: SymbolId) => {
     const o = symbolOverride(id);
     if (!o?.art || !o.terminals?.length) return false;
-    return !o.terminals.some(t => t.name === '2');
+    const t1 = o.terminals.find(t => t.name === '1') ?? o.terminals[0];
+    if (t1.dir) return t1.dir === 'left' || t1.dir === 'right';
+    const w = o.width && o.width > 0 ? o.width : 1;
+    return o.terminals.length === 1 || t1.x <= w * 0.3 || t1.x >= w * 0.7;
   };
 
   /** A column of instruments hanging on one line at `ix`, from `y0`. */
@@ -2064,7 +2071,11 @@ function drawMvCell(
       if (singlePin(item.id)) {
         // Tapped off the line at its one point.
         const off = pinOf(item.id, 0, 0, '1');
-        const goesRight = pinDirOf(item.id, '1') === 'right';
+        // Its point on its right: it stands to the left of the line.
+        const o1 = symbolOverride(item.id);
+        const t1 = o1?.terminals?.find(t => t.name === '1') ?? o1?.terminals?.[0];
+        const goesRight = pinDirOf(item.id, '1') === 'right'
+          || (!t1?.dir && !!t1 && t1.x >= (o1?.width ?? 1) * 0.7);
         const px = goesRight ? ix - 16 : ix + 16;
         const mx = px - off.x;
         const my = yy + HALF - off.y;
