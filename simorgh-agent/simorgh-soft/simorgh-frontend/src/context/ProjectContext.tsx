@@ -1,5 +1,5 @@
 import React, { useState, createContext, useContext, ReactNode } from 'react';
-import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy, TemplateMechanical, Revision } from '../types/project';
+import { ProjectData, TemplateItem, DeviceItem, Equipment, TemplateHierarchy, TemplateMechanical, TemplateSingleLine, Revision } from '../types/project';
 import { ProjectConflict, SaveNeedsYou, projectService } from '../services/projectService';
 import { removeTemplateEverywhere } from '../utils/cascadeDelete';
 import { downloadText, fileSafe } from '../utils/download';
@@ -64,6 +64,8 @@ interface ProjectContextType {
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   /** The mechanical answers a template holds, replaced whole. */
   setTemplateMechanical: (templateId: string, mechanical: TemplateMechanical) => void;
+  /** The single-line answers a template holds, replaced whole. */
+  setTemplateSingleLine: (templateId: string, singleLine: TemplateSingleLine) => void;
   /** Re-file a template under a new path, keeping its id and its parts. */
   moveTemplate: (templateId: string, hierarchy: TemplateHierarchy, name?: string, useSimorghDraw?: boolean) => void;
   deleteTemplate: (templateId: string) => void;
@@ -739,11 +741,14 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       // the wizard still wins, so the inheritance is a starting point rather
       // than something to undo.
       let baseMechanical: TemplateMechanical | undefined;
+      // And its single-line answers, for the same reason.
+      let baseSingleLine: TemplateSingleLine | undefined;
       if (copyFromId) {
         const source = prev.templates[type].find(t => t.id === copyFromId);
         if (source) {
           baseProps = JSON.parse(JSON.stringify(source.properties || {}));
           if (source.mechanical) baseMechanical = { ...source.mechanical };
+          if (source.singleLine) baseSingleLine = JSON.parse(JSON.stringify(source.singleLine));
         }
       }
       const mech = mechanical && Object.keys(mechanical).length > 0
@@ -759,6 +764,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         // every template would make "nobody has looked at this yet"
         // indistinguishable from "looked at, nothing to say".
         ...(mech && Object.keys(mech).length > 0 ? { mechanical: mech } : {}),
+        ...(baseSingleLine ? { singleLine: baseSingleLine } : {}),
       };
       return {
         ...prev,
@@ -797,6 +803,21 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       for (const type of TIERS) {
         updatedTemplates[type] = updatedTemplates[type].map(template =>
           template.id === templateId ? { ...template, mechanical } : template
+        );
+      }
+      return { ...prev, templates: updatedTemplates, changedOn: new Date().toISOString() };
+    });
+  };
+
+  // Replaced whole for the same reason as the mechanical answers: a cleared
+  // answer is a dropped key, and the drawing reads its absence as "work it out".
+  const setTemplateSingleLine = (templateId: string, singleLine: TemplateSingleLine) => {
+    if (!guardEdit()) return;
+    setProjectData(prev => {
+      const updatedTemplates = { ...prev.templates };
+      for (const type of TIERS) {
+        updatedTemplates[type] = updatedTemplates[type].map(template =>
+          template.id === templateId ? { ...template, singleLine } : template
         );
       }
       return { ...prev, templates: updatedTemplates, changedOn: new Date().toISOString() };
@@ -1233,6 +1254,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
         addTemplate,
         updateTemplate,
         setTemplateMechanical,
+        setTemplateSingleLine,
         moveTemplate,
         deleteTemplate,
         addDevice,

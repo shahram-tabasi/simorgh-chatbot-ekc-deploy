@@ -400,6 +400,13 @@ export interface TemplateItem {
    * `utils/mechanical/template.ts`.
    */
   mechanical?: TemplateMechanical;
+  /**
+   * What the single line needs to know about the cell and cannot read from
+   * its parts: the switch, the interlocks, the CT's cores and what each is
+   * for, the relay's functions, what hangs on the breaker and the relay, the
+   * PT truck. Asked on the template screen; see `utils/singleLineCell.ts`.
+   */
+  singleLine?: TemplateSingleLine;
 }
 
 /**
@@ -427,6 +434,48 @@ export interface TemplateMechanical {
   hasVt?: boolean;
   /** Overrules the reading of the CT column. */
   hasCt?: boolean;
+}
+
+/** What one core of a CT is for. */
+export type CtCorePurpose = 'protection' | 'measurement' | 'remark';
+
+export interface CtCore {
+  purpose: CtCorePurpose;
+  /** For a remark: what is written at the arrow on the end of the core. */
+  text?: string;
+}
+
+/** Something that hangs on the breaker or the relay — serial, link, status. */
+export interface DeviceAttachment {
+  kind: 'serial' | 'link' | 'status' | 'other';
+  /** What is written in its box; for `other`, the whole of it. */
+  text?: string;
+}
+
+/** The single-line questions a template is asked. Every key is optional:
+ *  a key left out means the drawing works it out from the parts. */
+export interface TemplateSingleLine {
+  /** The main switch of the cell, when the parts do not say it well. */
+  switchType?: 'vcb' | 'vc-fuse' | 'none';
+  /** Interlocked with the feeder below it — the magnet's line, and its text. */
+  downstreamInterlock?: boolean;
+  downstreamText?: string;
+  /** Interlocked with the feeder above it — on the key interlock's line. */
+  upstreamInterlock?: boolean;
+  upstreamText?: string;
+  /** The CT's cores, in order, and what each one feeds. */
+  ctCores?: CtCore[];
+  /** 'plain' draws only "protection relay"; 'functions' lists them. */
+  relayMode?: 'plain' | 'functions';
+  /** ANSI functions, comma separated: "50, 50N, 51, 51N". */
+  relayFunctions?: string;
+  /** What hangs on the breaker, along the key interlock's line. */
+  breakerAttachments?: DeviceAttachment[];
+  /** What hangs on the relay. */
+  relayAttachments?: DeviceAttachment[];
+  /** SIMOPRIME: the incoming has a PT truck, so the PT is drawn after the
+   *  breaker, on a socket. */
+  ptTruck?: boolean;
 }
 
 export interface DeviceItem {

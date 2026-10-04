@@ -264,6 +264,18 @@ into every title block: an `image` shape for the logo and each signature — a
 data URL, drawn on screen, in SVG and in the PDF (jsPDF `addImage`), left out
 of DXF. A new place that draws a shape type must handle `image`.
 
+**An MV cell is drawn as connections, not as a column** (`drawMvCell` in
+`eplanSingleLine.ts`). The switch's 3 → mechanical interlock 1, interlock 2 →
+earth switch 2, earth switch 1 → the line after the switch, earth switch 3 →
+magnet 1, magnet 2 → the downstream feeder, named on the line. EK36 has the
+earth switch before the CT; every other family has the CT first. The points are
+the symbol's own when it was drawn with terminals named 1/2/3, `LIBRARY_PINS`
+otherwise. What the parts cannot say is asked on the template screen
+(`SingleLineQuestions`, kept as `template.singleLine` through
+`setTemplateSingleLine`); a key left out means "work it out from the parts".
+Beside every device the sheet writes `label : SIM-TABLE value` (`partCode`)
+and nothing else — the numbered tag and the part entry are the tooltip.
+
 Comments here explain *why*, in prose, and are worth keeping — match that.
 
 ## The PLC page

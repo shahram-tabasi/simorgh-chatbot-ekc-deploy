@@ -57,7 +57,7 @@ const SLOT_OF: Record<'LV' | 'MV', Record<number, string>> = {
 };
 
 /** The code a part is written with — the SIM-TABLE value of Create Template. */
-function partCode(part: any): string {
+export function partCode(part: any): string {
   if (part?.simTableOverride != null && String(part.simTableOverride).trim() !== '') {
     return stripLocaleTags(part.simTableOverride);
   }

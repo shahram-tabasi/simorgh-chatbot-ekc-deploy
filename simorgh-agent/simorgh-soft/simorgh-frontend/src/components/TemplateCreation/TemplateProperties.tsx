@@ -1,12 +1,14 @@
 // src/components/TemplateCreation/TemplateProperties.tsx - FIXED SQL CONNECTION
 import React, { useEffect, useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
-import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon, CopyIcon, ClipboardPasteIcon } from 'lucide-react';
+import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon, CopyIcon, ClipboardPasteIcon } from 'lucide-react';
 import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
 import { PanelFrame } from '../shared/PanelFrame';
 import { PartCell } from './PartCell';
 import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
-import { EplanSymbolMap } from '../../utils/eplanSingleLine';
+import { EplanSymbolMap, mvFamily } from '../../utils/eplanSingleLine';
+import { SingleLineQuestions } from './SingleLineQuestions';
+import { TemplateSingleLine, TemplateMechanical } from '../../types/project';
 import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import { templateMeta } from '../../utils/templateMeta';
 import { type Tier, LAYOUT_OF } from '../../utils/tiers';
@@ -54,6 +56,9 @@ interface TemplateItem {
     leafKind?: string;
     params?: { kw?: string; currentA?: string };
   };
+  /** The single line's own questions — see SingleLineQuestions. */
+  singleLine?: TemplateSingleLine;
+  mechanical?: TemplateMechanical;
 }
 
 interface PropertyValue {
@@ -524,7 +529,10 @@ const DetailRow: React.FC<{
 export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   template
 }) => {
-  const { updateTemplate, projectData, patchProjectData, isCurrentRevisionEditable } = useProject();
+  const {
+    updateTemplate, projectData, patchProjectData, isCurrentRevisionEditable, setTemplateSingleLine,
+  } = useProject();
+  const [singleLineOpen, setSingleLineOpen] = useState(true);
   const [clip, setClipState] = useState<SectionClip | null>(sectionClip);
   const setClip = (next: SectionClip | null) => { sectionClip = next; setClipState(next); };
   const [properties, setProperties] = useState<Record<string, PropertyValue>>(
@@ -1336,6 +1344,27 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           onSymbolChange={changePartSymbol}
           onOpenGraphic={setGraphicSymbols}
         />
+        {/* What the cell's single line needs and its parts cannot say. MV
+            only: an LV board is drawn from its parts alone. */}
+        {LAYOUT_OF[template.type] === 'MV' && (
+          <div className="mt-2 border-t">
+            <button
+              type="button"
+              onClick={() => setSingleLineOpen(o => !o)}
+              className="w-full flex items-center gap-1 px-3 py-2 text-left text-sm font-medium text-gray-800 hover:bg-gray-50"
+            >
+              {singleLineOpen ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
+              Single-line questions
+            </button>
+            {singleLineOpen && (
+              <SingleLineQuestions
+                value={template.singleLine ?? {}}
+                family={mvFamily(template)}
+                onChange={next => setTemplateSingleLine(template.id, next)}
+              />
+            )}
+          </div>
+        )}
       </PanelFrame>
       </div>
 

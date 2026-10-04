@@ -14,16 +14,20 @@
 //                         busbar with one branch per feeder, the devices on it
 //                         in slot order. For reading and checking, not a
 //                         substitute for the EPLAN drawing.
-import { ProjectData, Equipment, TemplateItem, DeviceTableRow } from '../types/project';
+import {
+  ProjectData, Equipment, TemplateItem, DeviceTableRow,
+  TemplateSingleLine, TemplateMechanical, DeviceAttachment, CtCore,
+} from '../types/project';
 import {
   templateParts, formatPartEntry, stripLocaleTags, getEplanixValue,
   LV_TEMPLATE_PROPERTIES, MV_TEMPLATE_PROPERTIES,
 } from './tierEquipmentMatrix';
 import {
-  CELL, SymbolId, drawIecSymbol, symbolRight, symbolLeft, symbolHeight,
-  overrideBox, buildSymbolCatalogueSvg, IEC_SYMBOLS
+  CELL, HALF, SymbolId, drawIecSymbol, symbolRight, symbolLeft, symbolHeight,
+  overrideBox, buildSymbolCatalogueSvg, IEC_SYMBOLS, symbolOverride, symbolTerminals,
 } from './iecSymbols';
 import { type Tier, LAYOUT_OF } from './tiers';
+import { partCode } from './eplanDataExport';
 
 export const EPLAN_HEADERS = [
   'Page', 'Higher-level function', 'Location', 'DT', 'Function text',
@@ -275,6 +279,12 @@ export interface TemplateLike {
   id?: string;
   name?: string;
   properties?: Record<string, any>;
+  /** Where it is filed — an MV path starts with its switchgear family. */
+  hierarchy?: { path?: string[] };
+  /** The answers the single line is drawn with; see `TemplateSingleLine`. */
+  singleLine?: TemplateSingleLine;
+  /** The earth switch and the magnet are answered here too. */
+  mechanical?: TemplateMechanical;
 }
 
 /** Where a part's symbol was decided, so a screen can say why it drew that. */
@@ -368,6 +378,11 @@ const isMotorLoad = (line: DeviceTableRow) =>
 interface ChainItem {
   id: SymbolId;
   tag: string;
+  /** The device's own letter — Q, F, T — with no number after it. */
+  label: string;
+  /** The part's SIM-TABLE value, as Create Template shows it. The sheet
+   *  writes `label : SIM-TABLE` beside the device and nothing else. */
+  simTable: string;
   code: string;
   slot: string;
   /** The rest of the parts in this slot — written, not drawn. */
@@ -454,6 +469,8 @@ function chainOfTemplate(
     out.push({
       id,
       tag,
+      label,
+      simTable: partCode(primary),
       code: formatPartEntry(primary),
       slot,
       accessories: inSlot.slice(1).map(p => formatPartEntry(p)),
@@ -646,12 +663,10 @@ const textWidth = (chars: number, size: number): number => chars * size * 0.52;
 const CODE_CHARS = 15;
 
 /** How tall the text beside a device is, from the top of its cell. */
-function textRoom(item: ChainItem): number {
-  const lines = Math.min(item.accessories.length, 3);
-  const last = lines === 0
-    ? TEXT.code
-    : TEXT.firstAccessory + (lines - 1) * TEXT.accessoryStep;
-  return TEXT.top + last + TEXT.gap;
+function textRoom(_item: ChainItem): number {
+  // One line now — the label — where there used to be a tag, a code and up
+  // to three accessories.
+  return TEXT.top + TEXT.gap;
 }
 
 // How much room a device needs down the line: its own cell, and enough for the
@@ -903,26 +918,27 @@ const earth = (x: number, y: number) => [
   line(x - 2, y + 6, x + 2, y + 6, 1.2),
 ].join('');
 
-// The tag in black and the part code in blue, with the accessories under them:
-// the office writes the codes in colour beside the symbol, and it keeps the
-// two apart at a glance.
-function deviceText(item: ChainItem, tx: number, y: number, codeChars = 17, anchor = 'start'): string {
+// What is written beside a device: its label, a colon, and the part's
+// SIM-TABLE value — the code Create Template shows for it. Nothing else, and
+// no number after the label. The numbered tag, the full part entry and the
+// accessories it used to write out are kept as the text's tooltip, so nothing
+// that was known about the device is lost.
+
+/** `Q : 3AH5…` — or the label alone when the part has no SIM-TABLE yet. */
+const labelText = (item: ChainItem) =>
+  (item.simTable ? `${item.label} : ${item.simTable}` : item.label);
+
+function simLabel(
+  item: ChainItem, tx: number, y: number, anchor = 'start', size: number = TEXT.tag,
+): string {
   const a = anchor === 'start' ? '' : ` text-anchor="${anchor}"`;
-  const out = [
-    `<text x="${tx}" y="${y}" font-size="${TEXT.tag}" font-weight="600" fill="#111"${a}>${esc(item.tag)}</text>`,
-    `<text x="${tx}" y="${y + TEXT.code}" font-size="${TEXT.codeSize}" fill="#1d4ed8"${a}><title>${esc(item.code)}</title>${
-      esc(clip(item.code, codeChars))}</text>`,
-  ];
-  const line = (n: number) => y + TEXT.firstAccessory + n * TEXT.accessoryStep;
-  item.accessories.slice(0, 2).forEach((ac, ai) => {
-    out.push(`<text x="${tx}" y="${line(ai)}" font-size="${TEXT.accessorySize}" fill="#6b7280"${a}><title>${
-      esc(ac)}</title>+ ${esc(clip(ac, codeChars))}</text>`);
-  });
-  if (item.accessories.length > 2) {
-    out.push(`<text x="${tx}" y="${line(2)}" font-size="${TEXT.accessorySize}" fill="#6b7280"${a}>+ ${
-      item.accessories.length - 2} more</text>`);
-  }
-  return out.join('');
+  const about = [item.tag, item.code, ...item.accessories].filter(Boolean).join(' · ');
+  return `<text x="${tx}" y="${y}" font-size="${size}" font-weight="600" fill="#111"${a}>` +
+    `${about ? `<title>${esc(about)}</title>` : ''}${esc(labelText(item))}</text>`;
+}
+
+function deviceText(item: ChainItem, tx: number, y: number, _codeChars = 17, anchor = 'start'): string {
+  return simLabel(item, tx, y, anchor);
 }
 
 /**
@@ -1039,6 +1055,515 @@ function secondary(x: number, y: number, to: number, source: ChainItem | null): 
   return out.join('');
 }
 
+// ── A medium-voltage cell, as the office draws one ──────────────────────────
+//
+// The LV branch above is a column of devices with instruments hanging off the
+// side. An MV cell is drawn the way the panel is built (Siemens' own component
+// tables, the EK36 and SIMOPRIME sheets), and it is drawn as a set of
+// connections between named points rather than as a column:
+//
+//   on the line      the switch — a vacuum breaker, or a vacuum contactor with
+//                    its fuses — then the CT and the rest of the power path
+//   the switch's 3   → the mechanical interlock's 1
+//   interlock's 2    → the earth switch's 2
+//   earth switch 1   → the line, after the switch symbol
+//   earth switch 3   → the magnet's 1
+//   magnet's 2       → OUTGOING FEEDER, written on the line
+//
+// EK36 puts the earth switch straight after the switch and the CT after it;
+// every other cell has the CT first, then the earth switch and the capacitive
+// voltage detector. The CT's cores go out one each to what they are for — the
+// protection core into the relay, the measuring core into the meters, a
+// remark core to an arrow with its text — and what hangs on the breaker and
+// the relay (serial, link, status) is strung along a key interlock line.
+//
+// The connection points are the symbol's own when it has been drawn with them
+// (named 1, 2, 3 on the symbol page); the library's drawings get the points
+// below, which sit where those connections are on its ink.
+
+/** Which family a template belongs to, from the head of its path. */
+export function mvFamily(template?: TemplateLike): 'EK36' | 'SIMOPRIME' | '' {
+  const head = String(template?.hierarchy?.path?.[0] ?? '').toUpperCase();
+  if (head === 'EK36') return 'EK36';
+  if (head.startsWith('SIMOPRIME')) return 'SIMOPRIME';
+  return '';
+}
+
+export interface MvCellOptions {
+  answers?: TemplateSingleLine;
+  mechanical?: TemplateMechanical;
+  family?: 'EK36' | 'SIMOPRIME' | '';
+}
+
+export const mvOptionsOf = (template?: TemplateLike): MvCellOptions => ({
+  answers: template?.singleLine,
+  mechanical: template?.mechanical,
+  family: mvFamily(template),
+});
+
+const SWITCH_IDS: SymbolId[] = [
+  'vcb', 'vcb-racking', 'withdrawable-cb', 'vacuum-contactor-fuse',
+  'circuit-breaker', 'contactor', 'disconnector', 'switch-disconnector',
+];
+const METER_IDS: SymbolId[] = [
+  'ammeter', 'ampere-selector', 'multimeter', 'watt-meter', 'var-meter',
+  'power-factor-meter', 'kwh-meter', 'kvarh-meter', 'transducer',
+];
+const VOLTAGE_IDS: SymbolId[] = ['voltmeter', 'voltage-selector', 'frequency-meter'];
+const LEFT_SHUNTS: SymbolId[] = ['capacitive-divider', 'surge-arrester', 'surge-limiter'];
+
+type Pt = { x: number; y: number };
+
+/**
+ * The library's own connection points that are not the two ends of the line.
+ * Offsets from where the symbol is drawn.
+ */
+const LIBRARY_PINS: Partial<Record<SymbolId, Record<string, Pt>>> = {
+  // The switch's operating side, beside the blade.
+  vcb: { 3: { x: -8, y: 19 } },
+  'vcb-racking': { 3: { x: -8, y: 19 } },
+  'withdrawable-cb': { 3: { x: -8, y: 19 } },
+  'vacuum-contactor-fuse': { 3: { x: -6, y: 28 } },
+  'circuit-breaker': { 3: { x: -4, y: 20 } },
+  contactor: { 3: { x: -4, y: 20 } },
+  disconnector: { 3: { x: -4, y: 20 } },
+  'switch-disconnector': { 3: { x: -4, y: 20 } },
+  // The earth switch: 1 its contact to the line, 2 the blade's middle — where
+  // the interlock works it — and 3 near the pivot, out to the magnet.
+  'earthing-switch': { 1: { x: 10, y: 2 }, 2: { x: 5, y: 9 }, 3: { x: 2, y: 13 } },
+  // Drawn across: 1 on the right, 2 on the left.
+  'mechanical-interlock': { 1: { x: 18, y: HALF }, 2: { x: -18, y: HALF } },
+  magnet: { 1: { x: 0, y: 0 }, 2: { x: 0, y: CELL } },
+};
+
+/** Where a named connection point of a device drawn at (x, y) is. */
+function pinOf(id: SymbolId, x: number, y: number, name: string): Pt {
+  const o = symbolOverride(id);
+  if (o?.art && o.terminals?.length) {
+    const t = symbolTerminals(id, x, y).find(p => p.name === name);
+    if (t) return { x: t.x, y: t.y };
+  }
+  const own = LIBRARY_PINS[id]?.[name];
+  if (own) return { x: x + own.x, y: y + own.y };
+  return name === '2' ? { x, y: y + symbolHeight(id) } : { x, y };
+}
+
+const dashed = (pts: Pt[], w = 1) =>
+  `<polyline points="${pts.map(p => `${p.x},${p.y}`).join(' ')}" fill="none" stroke="#111" ` +
+  `stroke-width="${w}" stroke-dasharray="4 3"/>`;
+const solidPath = (pts: Pt[], w = 1.1) =>
+  `<polyline points="${pts.map(p => `${p.x},${p.y}`).join(' ')}" fill="none" stroke="#111" stroke-width="${w}"/>`;
+const node = (p: Pt) => `<circle cx="${p.x}" cy="${p.y}" r="2.2" fill="#111"/>`;
+const arrowRight = (x: number, y: number) =>
+  `<path d="M ${x - 7} ${y - 3.5} L ${x} ${y} L ${x - 7} ${y + 3.5} Z" fill="#111"/>`;
+const arrowDown = (x: number, y: number) =>
+  `<path d="M ${x - 3.5} ${y - 7} L ${x} ${y} L ${x + 3.5} ${y - 7} Z" fill="#111"/>`;
+
+const ATTACHMENT_TEXT: Record<DeviceAttachment['kind'], string> = {
+  serial: 'SERIAL', link: 'LINK', status: 'STATUS', other: '',
+};
+const attachmentText = (a: DeviceAttachment) =>
+  (String(a.text ?? '').trim() || ATTACHMENT_TEXT[a.kind] || '').toUpperCase();
+
+/**
+ * A key interlock's line out of a device, with what hangs on it.
+ *
+ * Starts at `from` and runs right: a box per attachment, then — when the
+ * device is interlocked with something upstream — the key and what it is
+ * interlocked with. Returns the markup and how far right it reached.
+ */
+function keyLine(from: Pt, attachments: DeviceAttachment[], upstream?: string): { svg: string; right: number } {
+  const items = attachments.map(attachmentText).filter(Boolean);
+  if (items.length === 0 && !upstream) return { svg: '', right: from.x };
+  const out: string[] = [];
+  let cx = from.x + 12;
+  const boxes: string[] = [];
+  for (const t of items) {
+    const w = textWidth(t.length, 7.5) + 10;
+    boxes.push(`<rect x="${cx}" y="${from.y - 7}" width="${w}" height="14" fill="#fff" stroke="#111" stroke-width="1"/>` +
+      `<text x="${cx + w / 2}" y="${from.y + 3}" font-size="7.5" text-anchor="middle" fill="#111">${esc(t)}</text>`);
+    cx += w + 8;
+  }
+  let end = cx - 8;
+  if (upstream) {
+    // The key: a ring with its bit, on the line.
+    const kx = cx + 6;
+    boxes.push(`<g data-symbol="key-interlock" data-name="Key interlock">` +
+      `<circle cx="${kx}" cy="${from.y}" r="4" fill="#fff" stroke="#111" stroke-width="1.1"/>` +
+      `<line x1="${kx + 4}" y1="${from.y}" x2="${kx + 14}" y2="${from.y}" stroke="#111" stroke-width="1.1"/>` +
+      `<line x1="${kx + 11}" y1="${from.y}" x2="${kx + 11}" y2="${from.y + 4}" stroke="#111" stroke-width="1.1"/>` +
+      `<line x1="${kx + 14}" y1="${from.y}" x2="${kx + 14}" y2="${from.y + 4}" stroke="#111" stroke-width="1.1"/></g>`);
+    boxes.push(`<text x="${kx + 20}" y="${from.y + 3}" font-size="8" fill="#111">${esc(upstream.toUpperCase())}</text>`);
+    end = kx + 20 + textWidth(upstream.length, 8);
+  }
+  out.push(dashed([from, { x: Math.max(from.x + 12, cx - 8), y: from.y }]));
+  out.push(...boxes);
+  return { svg: out.join(''), right: end };
+}
+
+/** The cores a CT is drawn with: the ones answered, or what the parts imply. */
+function coresOf(answers: TemplateSingleLine | undefined, hasRelay: boolean, hasMeters: boolean): CtCore[] {
+  if (answers?.ctCores?.length) return answers.ctCores;
+  const cores: CtCore[] = [];
+  if (hasRelay) cores.push({ purpose: 'protection' });
+  if (hasMeters) cores.push({ purpose: 'measurement' });
+  return cores;
+}
+
+const synth = (id: SymbolId, label: string): ChainItem =>
+  ({ id, tag: `-${label}`, label, simTable: '', code: '', slot: '', accessories: [] });
+
+/** Geometry the sheet needs to lay columns out round a cell. */
+export const MV_CELL = {
+  /** The earth switch, divider and arrester stand this far left of the line. */
+  shuntDx: 100,
+  /** The magnet stands this far left of them. */
+  magnetDx: 42,
+  /** The CT's cores run down lanes starting this far right of the line. */
+  laneDx: 128,
+  laneStep: 12,
+  /** Where the relay and the meters stand. */
+  instrDx: 172,
+};
+
+/**
+ * One MV cell drawn down the line at `x`, from `top`.
+ *
+ * Returns the markup, where the power path leaves (for the line on to the
+ * load), and how far the drawing reaches either side and down, so the sheet
+ * can size the column round it.
+ */
+function drawMvCell(
+  chain: ChainItem[], opts: MvCellOptions, x: number, top: number,
+): { svg: string; bottom: number; reachBottom: number; left: number; right: number } {
+  const answers = opts.answers ?? {};
+  const mech = opts.mechanical ?? {};
+  const out: string[] = [];
+  let reachBottom = top;
+  let left = x - 20;
+  let right = x + 20;
+  const reach = (px: number, py: number) => {
+    left = Math.min(left, px); right = Math.max(right, px); reachBottom = Math.max(reachBottom, py);
+  };
+
+  // ── Sort the parts into the cell ──────────────────────────────────────
+  const rest = [...chain];
+  const take = (pred: (i: ChainItem) => boolean): ChainItem | undefined => {
+    const k = rest.findIndex(pred);
+    return k >= 0 ? rest.splice(k, 1)[0] : undefined;
+  };
+
+  let sw = answers.switchType === 'none' ? undefined : take(i => SWITCH_IDS.includes(i.id));
+  if (answers.switchType === 'vcb') sw = { ...(sw ?? synth('vcb', 'Q')), id: 'vcb' };
+  if (answers.switchType === 'vc-fuse') sw = { ...(sw ?? synth('vacuum-contactor-fuse', 'Q')), id: 'vacuum-contactor-fuse' };
+
+  let es = take(i => i.id === 'earthing-switch');
+  if (!es && mech.cableEarthSwitch) es = synth('earthing-switch', 'QC');
+  const interlock = take(i => i.id === 'mechanical-interlock');
+  let magnet = take(i => i.id === 'magnet');
+  if (!magnet && (mech.magnetLabel || answers.downstreamInterlock)) magnet = synth('magnet', 'MB');
+  // With no earth switch to hang on, a magnet stands beside the line on its
+  // own, as it always has.
+  const orphanMagnet = !es && magnet ? magnet : undefined;
+  if (orphanMagnet) magnet = undefined;
+  take(i => i.id === 'key-interlock');   // drawn as the key on the key line
+
+  const ct = take(i => i.id === 'current-transformer');
+  const ptTruck = opts.family === 'SIMOPRIME' && answers.ptTruck === true;
+  const socketVt = ptTruck ? take(i => i.id === 'voltage-transformer') ?? synth('voltage-transformer', 'T') : undefined;
+  const shunts = [...(orphanMagnet ? [orphanMagnet] : []), ...rest.filter(i => LEFT_SHUNTS.includes(i.id))];
+  const instruments = rest.filter(i => isInstrument(i.id));
+  const series = rest.filter(i => !LEFT_SHUNTS.includes(i.id) && !isInstrument(i.id))
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => powerRank(a.item.id) - powerRank(b.item.id) || a.index - b.index)
+    .map(e => e.item);
+
+  // ── Down the line ─────────────────────────────────────────────────────
+  type Station =
+    | { kind: 'series'; item: ChainItem; role?: 'switch' | 'ct' }
+    | { kind: 'earth'; item: ChainItem }
+    | { kind: 'shunt'; item: ChainItem }
+    | { kind: 'socket-vt'; item: ChainItem };
+  const stations: Station[] = [];
+  if (sw) stations.push({ kind: 'series', item: sw, role: 'switch' });
+  const earthAndDetectors = () => {
+    if (es) stations.push({ kind: 'earth', item: es });
+    shunts.forEach(item => stations.push({ kind: 'shunt', item }));
+  };
+  // EK36: the earth switch straight after the switch, the CT after it. Every
+  // other cell: the CT first, then the earth switch and the detector.
+  if (opts.family === 'EK36') {
+    earthAndDetectors();
+    if (ct) stations.push({ kind: 'series', item: ct, role: 'ct' });
+  } else {
+    if (ct) stations.push({ kind: 'series', item: ct, role: 'ct' });
+    earthAndDetectors();
+  }
+  series.forEach(item => stations.push({ kind: 'series', item }));
+  if (socketVt) stations.push({ kind: 'socket-vt', item: socketVt });
+
+  const sx = x - MV_CELL.shuntDx;
+  const labelX = x + Math.max(24, ...[sw, ct, ...series].filter(Boolean)
+    .map(i => labelOffset(i as ChainItem)));
+  const ys = new Map<ChainItem, number>();
+  let y = top;
+  let switchY = -1;
+  let ctY = -1;
+  let esY = -1;
+  for (const st of stations) {
+    ys.set(st.item, y);
+    if (st.kind === 'series') {
+      if (st.role === 'switch') switchY = y;
+      if (st.role === 'ct') ctY = y;
+      y += Math.max(stepFor(st.item), st.role === 'switch' ? CELL + 10 : 0);
+    } else if (st.kind === 'earth') {
+      esY = y;
+      y += CELL + 10;
+    } else if (st.kind === 'shunt') {
+      y += SHUNT_STEP;
+    } else {
+      y += 2 * CELL + 14;
+    }
+  }
+  const bottom = Math.max(y, top + CELL);
+  out.push(line(x, top, x, bottom));
+  reach(x, bottom);
+
+  for (const st of stations) {
+    const sy = ys.get(st.item)!;
+    if (st.kind === 'series') {
+      out.push(drawDevice(st.item, x, sy));
+      const fed = st.role === 'ct';
+      out.push(simLabel(st.item, labelX, sy + (fed ? TEXT.topWhenFed : TEXT.top)));
+      reach(labelX + textWidth(labelText(st.item).length, TEXT.tag), sy);
+    } else if (st.kind === 'earth') {
+      const e1 = pinOf(st.item.id, sx, sy, '1');
+      out.push(solidPath([{ x, y: e1.y }, e1], 1.2), node({ x, y: e1.y }));
+      out.push(drawDevice(st.item, sx, sy));
+      out.push(simLabel(st.item, sx + 16, sy + 30, 'start', 9));
+      reach(sx - 12, sy + CELL);
+    } else if (st.kind === 'shunt') {
+      out.push(line(sx, sy, x, sy, 1.2), node({ x, y: sy }));
+      out.push(drawDevice(st.item, sx, sy));
+      if (st.item.id !== 'magnet') out.push(earth(sx, sy + CELL + 8));
+      out.push(simLabel(st.item, sx + 16, sy + 30, 'start', 9));
+      reach(sx - 12, sy + CELL + 14);
+    } else {
+      // The PT on a truck at the incoming: after the breaker, plugged in on a
+      // socket, never drawn as a second switched device.
+      out.push(line(sx, sy + 4, x, sy + 4, 1.2), node({ x, y: sy + 4 }));
+      out.push(line(sx, sy + 4, sx, sy + 8, 1.2));
+      out.push(drawBlock('socket', sx, sy + 8));
+      out.push(line(sx, sy + 34, sx, sy + CELL + 10, 1.2));
+      out.push(drawDevice(st.item, sx, sy + CELL + 10));
+      out.push(simLabel(st.item, sx + 30, sy + CELL + 26, 'start', 9));
+      reach(sx - 12, sy + 2 * CELL + 14);
+    }
+  }
+
+  // ── The mechanical chain: switch → interlock → earth switch → magnet ──
+  if (sw && es && switchY >= 0 && esY >= 0) {
+    const s3 = pinOf(sw.id, x, switchY, '3');
+    const ilItem = interlock ?? synth('mechanical-interlock', '');
+    // Drawn level with the switch's 3, halfway out to the earth switch.
+    const ilX = x - MV_CELL.shuntDx / 2 + 4;
+    const ilY = s3.y - HALF;
+    const i1 = pinOf(ilItem.id, ilX, ilY, '1');
+    const i2 = pinOf(ilItem.id, ilX, ilY, '2');
+    const e2 = pinOf(es.id, sx, esY, '2');
+    out.push(dashed([s3, { x: i1.x, y: s3.y }, i1]));
+    out.push(`<g ${symbolBlock(ilItem.id, ilX, ilY)}>${drawIecSymbol(ilItem.id, ilX, ilY)}</g>`);
+    if (interlock) out.push(simLabel(interlock, ilX, ilY + 4, 'middle', 8));
+    out.push(dashed([i2, { x: e2.x, y: i2.y }, e2]));
+  }
+  if (es && magnet && esY >= 0) {
+    const e3 = pinOf(es.id, sx, esY, '3');
+    const mx = sx - MV_CELL.magnetDx;
+    const my = e3.y;
+    const m1 = pinOf(magnet.id, mx, my, '1');
+    out.push(dashed([e3, { x: m1.x, y: e3.y }, m1]));
+    out.push(drawDevice(magnet, mx, my));
+    out.push(simLabel(magnet, mx - 15, my + 22, 'end', 9));
+    reach(mx - 15 - textWidth(labelText(magnet).length, 9), my + CELL);
+    // Magnet's 2 out to the feeder it is interlocked with, the name written
+    // on the line itself.
+    if (answers.downstreamInterlock !== false) {
+      const m2 = pinOf(magnet.id, mx, my, '2');
+      const name = (String(answers.downstreamText ?? '').trim() || 'OUTGOING FEEDER').toUpperCase();
+      // Capitals run wider than `textWidth`'s mixed-case guess.
+      const tw = name.length * 8 * 0.68;
+      const len = Math.max(70, tw + 30);
+      const end = { x: m2.x, y: m2.y + len };
+      out.push(dashed([m2, end]), arrowDown(end.x, end.y));
+      const mid = m2.y + len / 2;
+      const w = tw + 6;
+      out.push(`<g transform="rotate(-90 ${m2.x} ${mid})">` +
+        `<rect x="${m2.x - w / 2}" y="${mid - 6}" width="${w}" height="11" fill="#fff"/>` +
+        `<text x="${m2.x}" y="${mid + 3}" font-size="8" text-anchor="middle" fill="#111">${esc(name)}</text></g>`);
+      reach(m2.x - 8, end.y);
+    }
+  }
+
+  // ── What hangs on the breaker, along the key interlock's line ─────────
+  if (sw && switchY >= 0) {
+    const upstream = answers.upstreamInterlock
+      ? (String(answers.upstreamText ?? '').trim() || 'INCOMING FEEDER') : undefined;
+    // Out of the switch's own side, under its label.
+    const k = keyLine({ x: x + 8, y: switchY + 28 }, answers.breakerAttachments ?? [], upstream);
+    out.push(k.svg);
+    reach(k.right, switchY + 36);
+  }
+
+  // ── The secondary side: the CT's cores, and what each one feeds ───────
+  const relay = instruments.find(i => i.id === 'protection-relay');
+  const efRelay = instruments.find(i => i.id === 'earth-fault-relay');
+  const testBlock = instruments.find(i => i.id === 'test-block');
+  const meters = instruments.filter(i => METER_IDS.includes(i.id));
+  const volts = instruments.filter(i => VOLTAGE_IDS.includes(i.id));
+  const others = instruments.filter(i =>
+    i !== relay && i !== efRelay && i !== testBlock && !meters.includes(i) && !volts.includes(i));
+  const ix = x + MV_CELL.instrDx;
+  let ty = ctY >= 0 ? ctY : (switchY >= 0 ? switchY : top);
+  let relayAt = -1;
+
+  /** A column of instruments hanging on one line at `ix`, from `y0`. */
+  const stack = (items: ChainItem[], y0: number): number => {
+    if (items.length === 0) return y0;
+    out.push(line(ix, y0, ix, y0 + items.length * CELL));
+    items.forEach((item, n) => {
+      out.push(drawDevice(item, ix, y0 + n * CELL));
+      const tx = ix + Math.max(34, labelOffset(item));
+      out.push(simLabel(item, tx, y0 + n * CELL + 17, 'start', 9));
+      reach(tx + textWidth(labelText(item).length, 9), y0 + (n + 1) * CELL);
+    });
+    return y0 + items.length * CELL;
+  };
+
+  const drawRelay = (item: ChainItem, y0: number): number => {
+    relayAt = y0;
+    out.push(drawDevice(item, ix, y0));
+    out.push(simLabel(item, ix + 5, y0 + 5, 'start', 9));
+    let rx = ix + symbolRight(item.id);
+    let h = CELL;
+    if (item.id === 'protection-relay' && answers.relayMode === 'functions') {
+      const fns = String(answers.relayFunctions ?? '').split(/[,،;\n]+/).map(f => f.trim()).filter(Boolean);
+      if (fns.length) {
+        const perRow = 4;
+        const rows = Math.ceil(fns.length / perRow);
+        const w = 4 + perRow * 24;
+        const bx = rx + 6;
+        out.push(line(rx, y0 + HALF, bx, y0 + HALF, 1));
+        out.push(`<rect x="${bx}" y="${y0 + 6}" width="${w}" height="${Math.max(28, rows * 11 + 6)}" fill="#fff" stroke="#111" stroke-width="1"/>`);
+        fns.forEach((f, n) => {
+          out.push(`<text x="${bx + 4 + (n % perRow) * 24}" y="${y0 + 15 + Math.floor(n / perRow) * 11}" ` +
+            `font-size="7.5" fill="#111">${esc(f)}</text>`);
+        });
+        rx = bx + w;
+        h = Math.max(CELL, rows * 11 + 14);
+      }
+    }
+    const k = keyLine({ x: rx, y: y0 + HALF }, answers.relayAttachments ?? []);
+    out.push(k.svg);
+    reach(Math.max(rx, k.right), y0 + h);
+    return y0 + h;
+  };
+
+  const cores = ct ? coresOf(answers, Boolean(relay || efRelay), meters.length > 0) : [];
+  if (ct && cores.length) {
+    // The cores leave the CT's secondary one under the other and part, each
+    // down its own lane. The first runs straight across into what stands
+    // level with the CT; each later one starts lower and turns down further
+    // left, so no core crosses another on its way.
+    const cx0 = x + 20;
+    const cy = ctY + HALF;
+    const coreY = (n: number) => cy + n * 7;
+    if (cores.length > 1) out.push(line(cx0, coreY(0), cx0, coreY(cores.length - 1), 1));
+    cores.forEach((core, n) => {
+      const lane = x + MV_CELL.laneDx - n * MV_CELL.laneStep;
+      const start = { x: cx0, y: coreY(n) };
+      let landY: number;
+      let next: number;
+      if (core.purpose === 'protection') {
+        const item = relay ?? efRelay ?? synth('protection-relay', 'F');
+        if (relayAt >= 0) { landY = relayAt + HALF; next = ty; }
+        else { landY = ty + HALF; next = drawRelay(item, ty) + 8; }
+        out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
+      } else if (core.purpose === 'measurement') {
+        if (meters.length) {
+          landY = ty;
+          next = stack(meters, ty) + 8;
+          out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
+        } else {
+          landY = ty + 8;
+          out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix + 10, y: landY }]), arrowRight(ix + 10, landY));
+          out.push(`<text x="${ix + 14}" y="${landY + 3}" font-size="8" fill="#111">MEASURING</text>`);
+          reach(ix + 14 + textWidth(9, 8), landY);
+          next = ty + 20;
+        }
+      } else {
+        landY = ty + 8;
+        const say = String(core.text ?? '').trim().toUpperCase();
+        out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix + 10, y: landY }]), arrowRight(ix + 10, landY));
+        if (say) out.push(`<text x="${ix + 14}" y="${landY + 3}" font-size="8" fill="#111">${esc(say)}</text>`);
+        reach(ix + 14 + textWidth(say.length, 8), landY);
+        next = ty + 20;
+      }
+      // Through the test block, when the cell has one: a test terminal on
+      // every core, just before the core reaches what it feeds.
+      if (testBlock && core.purpose !== 'remark') {
+        const tbx = lane + 22;
+        out.push(`<g ${symbolBlock('test-block', tbx, landY)}><circle cx="${tbx}" cy="${landY}" r="4" fill="#fff" stroke="#111" stroke-width="1.1"/>` +
+          `<circle cx="${tbx}" cy="${landY}" r="1.6" fill="#111"/></g>`);
+        if (n === 0) out.push(simLabel(testBlock, tbx + 5, landY - 7, 'end', 8));
+      }
+      ty = Math.max(ty, next);
+      reach(ix, landY);
+    });
+  } else if (relay || efRelay) {
+    // No CT on the cell, or no core answered: the relay still stands where
+    // it would, joined by a control line from the switch.
+    const item = (relay ?? efRelay)!;
+    const from = switchY >= 0 ? switchY + HALF : top + HALF;
+    out.push(dashed([{ x: x + 8, y: from }, { x: ix, y: from }]));
+    ty = drawRelay(item, Math.max(ty, from - HALF)) + 8;
+  }
+  if (efRelay && relay && relayAt >= 0) ty = drawRelay(efRelay, ty) + 8;
+  if (!ct && meters.length) ty = stack(meters, ty) + 8;
+
+  // The voltage instruments, off the VT when there is one.
+  if (volts.length) {
+    const vt = socketVt ?? series.find(i => i.id === 'voltage-transformer');
+    const vy = vt ? ys.get(vt) : undefined;
+    const start = ty;
+    ty = stack(volts, ty) + 8;
+    if (vt && vy != null) {
+      const fromX = vt === socketVt ? sx + 28 : x + 28;
+      const fromY = vt === socketVt ? vy + CELL + 10 + HALF + 5 : vy + HALF + 5;
+      const lane = x + MV_CELL.laneDx - MV_CELL.laneStep;
+      out.push(solidPath([{ x: fromX, y: fromY }, { x: lane, y: fromY }, { x: lane, y: start }, { x: ix, y: start }]), node({ x: ix, y: start }));
+    }
+  }
+
+  // Everything else — the alarm window, lamps, the LCS — on the relay's
+  // control line, or the switch's when there is no relay.
+  if (others.length) {
+    const start = ty;
+    ty = stack(others, ty) + 8;
+    const fromY = relayAt >= 0 ? relayAt + CELL : (switchY >= 0 ? switchY + HALF : top);
+    if (relayAt >= 0) out.push(dashed([{ x: ix, y: fromY }, { x: ix, y: start }]));
+    else out.push(dashed([{ x: x + 8, y: fromY }, { x: ix - 10, y: fromY }, { x: ix - 10, y: start }, { x: ix, y: start }]));
+  }
+  reach(ix, ty);
+
+  return { svg: out.join('\n'), bottom, reachBottom: Math.max(reachBottom, bottom), left, right };
+}
+
+/** How much room a cell takes, measured by drawing it at the origin. */
+function measureMvCell(chain: ChainItem[], opts: MvCellOptions) {
+  const d = drawMvCell(chain, opts, 0, 0);
+  return { left: -d.left, right: d.right, height: d.reachBottom, bottom: d.bottom };
+}
+
 function drawSheet(o: {
   data: ProjectData;
   equipment: Equipment;
@@ -1053,6 +1578,18 @@ function drawSheet(o: {
   of: number;
 }): string {
   const { margin, cardRowHeight } = GEOM;
+
+  // A medium-voltage board is drawn cell by cell (`drawMvCell`), each with the
+  // answers its own template holds.
+  const isMv = LAYOUT_OF[o.equipment.type] === 'MV';
+  const mvOf = (line_: DeviceTableRow, page: number) => {
+    const template = line_.templateId ? o.templates.get(line_.templateId) : undefined;
+    const chain = chainFor(line_, o.templates, o.order, page, o.symbols, o.equipment.type);
+    const opts = mvOptionsOf(template);
+    return { chain, opts, size: measureMvCell(chain, opts) };
+  };
+  const mvCells = isMv ? o.lines.map((line_, i) => mvOf(line_, o.firstIndex + i + 1)) : [];
+  const mvSupply = isMv && o.supply ? mvOf(o.supply, 0) : null;
 
   const branches = o.lines.map((line_, i) =>
     splitBranch(chainFor(
@@ -1083,7 +1620,10 @@ function drawSheet(o: {
   // its racking does — so the line is set far enough in for the widest of them.
   const reach = Math.max(...all.flatMap(b =>
     [...b.series, ...b.instruments].map(i => symbolLeft(i.id))), 16);
-  const branchDx = Math.max(hasShunt ? 130 : 34, reach + 10);
+  const mvAll = [...mvCells, ...(mvSupply ? [mvSupply] : [])];
+  const branchDx = isMv && mvAll.length
+    ? Math.max(34, reach + 10, ...mvAll.map(c => c.size.left + 12))
+    : Math.max(hasShunt ? 130 : 34, reach + 10);
 
   /**
    * How wide a feeder column has to be.
@@ -1099,10 +1639,16 @@ function drawSheet(o: {
    */
   const labelReach = Math.max(24, ...all.flatMap(
     b => b.series.map(i => labelOffset(i))));
-  const forText = branchDx + labelReach + textWidth(CODE_CHARS, TEXT.codeSize) + 18;
+  // The label is written whole — `Q : <SIM-TABLE>` — so the column is as wide
+  // as the longest one on the sheet, and never narrower than it used to be.
+  const labelChars = Math.max(0, ...all.flatMap(b => [...b.series, ...b.shunts, ...b.instruments]
+    .map(i => labelText(i).length)));
+  const forText = branchDx + labelReach + Math.max(
+    textWidth(CODE_CHARS, TEXT.codeSize), textWidth(labelChars, TEXT.tag)) + 18;
   const colWidth = Math.max(
     forText,
     hasShunt || wide ? branchDx + INSTR_DX + 104 : 0,
+    ...mvAll.map(c => branchDx + c.size.right + 24),
   );
 
   const supplyWidth = o.supply ? colWidth : 90;
@@ -1111,12 +1657,18 @@ function drawSheet(o: {
 
   const supplyTop = 104;
   const busY = Math.max(GEOM.busY,
-    supplyTop + (supplyBranch ? branchHeight(supplyBranch) : 0) + 26);
+    supplyTop + (mvSupply ? mvSupply.size.height
+      : supplyBranch ? branchHeight(supplyBranch) : 0) + 26);
 
   const chainTop = busY + 26;
-  const body = Math.max(CELL, ...branches.map(branchHeight));
+  const body = isMv
+    ? Math.max(CELL, ...mvCells.map(c => c.size.bottom))
+    : Math.max(CELL, ...branches.map(branchHeight));
   const loadY = chainTop + body + 20;
-  const tableTop = loadY + CELL + 36;
+  // An MV cell can reach below its own line — the magnet's line down to the
+  // feeder it is interlocked with — and the table starts clear of that too.
+  const tableTop = Math.max(loadY + CELL + 36,
+    ...mvCells.map(c => chainTop + c.size.height + 24));
   const tableHeight = TABLE_ROWS.length * cardRowHeight;
   // The sheet is exactly as wide as the feeders on it: busbar and the block
   // underneath both end at the last column, never in mid-air.
@@ -1167,7 +1719,9 @@ function drawSheet(o: {
       esc(clip(String(o.supply.feederNo || 'INCOMING'), 22))}</text>`);
     out.push(`<text x="${supplyX}" y="94" font-size="9" fill="#555">${
       esc(clip(String(o.supply.description || ''), 30))}</text>`);
-    const drawn = drawBranch(supplyBranch, supplyX, supplyTop);
+    const drawn = mvSupply
+      ? drawMvCell(mvSupply.chain, mvSupply.opts, supplyX, supplyTop)
+      : drawBranch(supplyBranch, supplyX, supplyTop);
     out.push(drawn.svg);
     out.push(`<line x1="${supplyX}" y1="${drawn.bottom}" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
   } else {
@@ -1182,7 +1736,9 @@ function drawSheet(o: {
     out.push(`<line x1="${x}" y1="${busY}" x2="${x}" y2="${chainTop}" stroke="#111" stroke-width="1.3"/>`);
     out.push(`<circle cx="${x}" cy="${busY}" r="3" fill="#111"/>`);
 
-    const drawn = drawBranch(branches[i], x, chainTop);
+    const drawn = isMv
+      ? drawMvCell(mvCells[i].chain, mvCells[i].opts, x, chainTop)
+      : drawBranch(branches[i], x, chainTop);
     out.push(drawn.svg);
     out.push(`<line x1="${x}" y1="${drawn.bottom}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
     out.push(drawBlock(isMotorLoad(line_) ? 'motor' : 'outgoing', x, loadY));
@@ -1251,19 +1807,26 @@ export function buildTemplateSvg(
   const order = propertyOrder(tier);
   const chain = chainOfTemplate(template, order, 1, symbols, tier);
   const branch = splitBranch(chain);
+  const isMv = LAYOUT_OF[tier] === 'MV';
+  const mvOpts = mvOptionsOf(template);
+  const mvSize = isMv ? measureMvCell(chain, mvOpts) : null;
 
   // Room for whatever reaches out sideways, the same way a sheet works out how
   // wide a column has to be.
   const reach = Math.max(16, ...[...branch.series, ...branch.instruments].map(i => symbolLeft(i.id)));
-  const branchDx = Math.max(branch.shunts.length > 0 ? 130 : 34, reach + 10);
+  const branchDx = mvSize
+    ? Math.max(34, reach + 10, mvSize.left + 12)
+    : Math.max(branch.shunts.length > 0 ? 130 : 34, reach + 10);
   const x = margin + branchDx;
   const stub = 26;
   const top = 34 + stub;
 
-  const drawn = drawBranch(branch, x, top);
-  const width = x + INSTR_DX + 104 + margin;
+  const drawn = mvSize ? drawMvCell(chain, mvOpts, x, top) : drawBranch(branch, x, top);
+  const width = mvSize
+    ? Math.max(x + INSTR_DX + 104, x + mvSize.right + 20) + margin
+    : x + INSTR_DX + 104 + margin;
   const bottom = Math.max(drawn.bottom, top);
-  const height = bottom + stub + 34;
+  const height = Math.max(bottom + stub + 34, mvSize ? top + mvSize.height + 20 : 0);
 
   const out: string[] = [];
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" ` +
