@@ -436,6 +436,25 @@ export interface TemplateMechanical {
   hasCt?: boolean;
 }
 
+/**
+ * What the single line needs to know about one part of a template — asked
+ * in the part's own window when it is entered, and editable after. Kept on
+ * the part (`part.sld`). Every key is optional; left out, the drawing reads
+ * the part as it always did.
+ */
+export interface PartSingleLine {
+  /** A second part in a row: an accessory of the device above it (only its
+   *  SIM-TABLE is written, under that device's), or a device of its own. */
+  role?: 'main' | 'accessory';
+  /** A device of its own: on the line (series) or beside it (parallel). */
+  placement?: 'series' | 'parallel';
+  /** A relay: the main one, which the CTs and core-balance CT go into, or an
+   *  auxiliary one. */
+  relayRole?: 'main' | 'auxiliary';
+  /** An auxiliary relay: what it is wired to. */
+  relayConnect?: 'breaker' | 'relay' | 'both';
+}
+
 /** What one core of a CT is for. */
 export type CtCorePurpose = 'protection' | 'measurement' | 'remark';
 

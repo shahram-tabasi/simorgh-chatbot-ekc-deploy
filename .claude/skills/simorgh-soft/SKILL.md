@@ -282,6 +282,18 @@ sealing end, a dummy and the neutral panel are off the bus) and which
 questions it is asked (`mvAsks`). On an MV board only a *feeder* cell can be
 the supply: the old wording test took the coupling and the incoming VT cell.
 
+**Each part answers for itself** (`part.sld`, asked in `PartQuestionsDialog`
+when the part is entered and from its edit button in the parts list). A later
+part in a row is an accessory unless it says it is a main device: an
+accessory is never drawn, its SIM-TABLE is written under its device's. A main
+device can be put in series or in parallel; a relay is main (the CTs go into
+it) or auxiliary, wired to the breaker, the main relay or both. On MV the row
+decides what a part is before its wording does (`MV_ROW_IS`), then the
+office's letters in a spare row (`mvFromLabel`). Every label is broken onto
+lines (`labelLines`, at commas, words, then dashes) and every layout step
+makes room for the lines — a label never runs over the drawing. The line is
+drawn between devices, never under them.
+
 Comments here explain *why*, in prose, and are worth keeping — match that.
 
 ## The PLC page

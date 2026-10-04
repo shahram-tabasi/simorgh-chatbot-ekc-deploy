@@ -8,7 +8,8 @@ import { PartCell } from './PartCell';
 import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
 import { EplanSymbolMap, mvFamily, mvCellType } from '../../utils/eplanSingleLine';
 import { SingleLineQuestions } from './SingleLineQuestions';
-import { TemplateSingleLine, TemplateMechanical } from '../../types/project';
+import { PartQuestionsDialog } from './PartQuestionsDialog';
+import { TemplateSingleLine, TemplateMechanical, PartSingleLine } from '../../types/project';
 import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import { templateMeta } from '../../utils/templateMeta';
 import { type Tier, LAYOUT_OF } from '../../utils/tiers';
@@ -80,6 +81,8 @@ interface PartInfo {
   symbolId?: string;
   /** SIM-TABLE, typed by hand instead of the usual Order Number / Designation 3. */
   simTableOverride?: string;
+  /** The part's own single-line answers — see PartQuestionsDialog. */
+  sld?: PartSingleLine;
   /** Manufacturer, typed by hand instead of read from the part. Dropped
    *  whenever the part itself is replaced — handlePartSelect always builds a
    *  fresh PartInfo, so a new part starts without this and falls back to its
@@ -679,6 +682,30 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   // never blank when there is something to see.
   const shownPart = partRefs.find(ref => sameRef(ref, selectedPart)) ?? partRefs[0] ?? null;
 
+  /** The part whose single-line window is open, and whether it was just entered. */
+  const [questionsFor, setQuestionsFor] = useState<{ ref: PartRef; fresh: boolean } | null>(null);
+
+  /** A part's single-line answers and its symbol, saved together. */
+  const changePartAnswers = (ref: PartRef, sld: PartSingleLine, symbolId: string | undefined) => {
+    const row = properties[ref.slot];
+    if (!row?.parts?.[ref.index]) return;
+    const parts = row.parts.map((part, i) => {
+      if (i !== ref.index) return part;
+      const { symbolId: _was, sld: _old, ...rest } = part;
+      return {
+        ...rest,
+        ...(symbolId ? { symbolId } : {}),
+        // Nothing answered is no key at all: the drawing reads its absence
+        // as "as it always did".
+        ...(Object.keys(sld).length ? { sld } : {}),
+      };
+    });
+    const next = { ...properties, [ref.slot]: { ...row, parts } };
+    setProperties(next);
+    updateTemplate(template.id, next as any);
+    setSelectedPart({ ...ref, part: parts[ref.index] });
+  };
+
   /** Pin a symbol to a part, or clear it and let the drawing work it out. */
   const changePartSymbol = (ref: PartRef, symbolId: string | undefined) => {
     const row = properties[ref.slot];
@@ -865,12 +892,16 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     const isFirstQRow = propertyName === firstQRow;
     const defaultLabel = isFirstQRow ? 'Q' : (part.Designation1 || '');
 
+    // A part replaced in its place keeps what was said about that place —
+    // accessory or device, series or parallel — and is asked again below.
+    const keptAnswers = partIndex !== null ? currentProperty.parts[partIndex]?.sld : undefined;
     const newPart: PartInfo = {
       partNumber: part.PartNumber,
       label: defaultLabel,
       quantity: 1,
       priority: partIndex !== null ? partIndex + 1 : currentProperty.parts.length + 1,
-      fullData: part
+      fullData: part,
+      ...(keptAnswers ? { sld: keptAnswers } : {}),
     };
 
     let updatedParts;
@@ -915,11 +946,15 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     updateTemplate(template.id, updatedProperties as any);
     // Show the part that was just entered, which is the whole point of the
     // panel beside the table: put a part in, see what it draws.
-    setSelectedPart({
+    const entered = {
       slot: propertyName,
       index: partIndex !== null ? partIndex : updatedParts.length - 1,
       part: updatedParts[partIndex !== null ? partIndex : updatedParts.length - 1],
-    });
+    };
+    setSelectedPart(entered);
+    // Ask the single line's questions about it now, while whoever picked it
+    // knows what it is — only where Simorgh Draw is on for the template.
+    if (template.useSimorghDraw !== false) setQuestionsFor({ ref: entered, fresh: true });
   };
 
   const handleRemovePart = async (propertyName: string, partIndex: number) => {
@@ -1343,6 +1378,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           selected={shownPart}
           onSelect={setSelectedPart}
           onSymbolChange={changePartSymbol}
+          onEditQuestions={ref => setQuestionsFor({ ref, fresh: false })}
           onOpenGraphic={setGraphicSymbols}
         />
         {/* What the cell's single line needs and its parts cannot say. MV
@@ -1383,6 +1419,29 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           onClose={() => setGraphicSymbols(null)}
         />
       )}
+
+      {questionsFor && (() => {
+        // Read fresh from the table, so the window edits the part as it is now.
+        const { slot, index } = questionsFor.ref;
+        const live = properties[slot]?.parts?.[index];
+        if (!live) return null;
+        return (
+          <PartQuestionsDialog
+            part={live}
+            slot={slot}
+            slotTitle={getDisplayName(slot)}
+            index={index}
+            tier={template.type}
+            host={index > 0 ? properties[slot]?.parts?.[0] : undefined}
+            fresh={questionsFor.fresh}
+            onClose={() => setQuestionsFor(null)}
+            onSave={(sld, symbolId) => {
+              changePartAnswers({ slot, index, part: live }, sld, symbolId);
+              setQuestionsFor(null);
+            }}
+          />
+        );
+      })()}
 
       <PartSelectionDialog
         isOpen={dialogState.isOpen}

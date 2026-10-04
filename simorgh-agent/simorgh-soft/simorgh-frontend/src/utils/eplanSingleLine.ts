@@ -435,8 +435,16 @@ interface ChainItem {
   slot: string;
   /** The rest of the parts in this slot — written, not drawn. */
   accessories: string[];
+  /** The SIM-TABLE of each accessory, written under the device's own. */
+  accessoryCodes: string[];
   /** Its symbol was picked by hand in the template, not worked out. */
   chosen?: boolean;
+  /** On the line or beside it, when the part's window said so. */
+  placement?: 'series' | 'parallel';
+  /** A relay: the main one the CTs go into, or an auxiliary one. */
+  relayRole?: 'main' | 'auxiliary';
+  /** An auxiliary relay: wired to the breaker, the main relay, or both. */
+  relayConnect?: 'breaker' | 'relay' | 'both';
   eplan?: EplanSymbolInfo;
 }
 
@@ -477,55 +485,65 @@ function chainOfTemplate(
 
   for (const slot of slots) {
     const inSlot = parts[slot];
-    // The device of this slot is its first part; anything after it is an
-    // accessory of that device, not a device of its own.
-    const primary = inSlot[0];
-    const { id, eplan, from } = symbolForPart(primary, slot, symbols, tier);
+    // The device of a row is its first part. Each part after it is an
+    // accessory of the device above it — its SIM-TABLE written under that
+    // device's — unless its window says it is a device of its own, which
+    // then takes its own place in series or in parallel. Unanswered, a later
+    // part is an accessory, which is how a row was always read.
+    let host: ChainItem | undefined;
+    inSlot.forEach((part: any, k: number) => {
+      const sld = part?.sld ?? {};
+      const accessory = k > 0 ? sld.role !== 'main' : sld.role === 'accessory';
+      const hostOf = host ?? out[out.length - 1];
+      if (accessory && hostOf) {
+        hostOf.accessories.push(formatPartEntry(part));
+        const code = partCode(part);
+        if (code) hostOf.accessoryCodes.push(code);
+        return;
+      }
 
-    const label = stripLocaleTags(primary?.label) || SLOT_LETTER[slot] || 'A';
-    counters[label] = (counters[label] ?? 0) + 1;
-    const tag = `-${label}${page}${counters[label] > 1 ? `.${counters[label]}` : ''}`;
+      const { id, eplan, from } = symbolForPart(part, slot, symbols, tier);
+      const label = stripLocaleTags(part?.label) || SLOT_LETTER[slot] || 'A';
+      counters[label] = (counters[label] ?? 0) + 1;
+      const tag = `-${label}${page}${counters[label] > 1 ? `.${counters[label]}` : ''}`;
 
-    // **An accessory is not a device on the branch.**
-    //
-    // Nothing could say what this part is — not the symbol somebody chose for
-    // it, not EPLAN, not its description, not the slot it sits in — so the
-    // drawing fell back to the `accessory` symbol, which is an empty dashed
-    // square on the conductor. That is the software writing "I do not know
-    // what this is" into the middle of a customer's drawing, and this office's
-    // templates have two such slots on every feeder: sixteen empty boxes on an
-    // eight-way board, in the place a reader looks for devices.
-    //
-    // A slot's own rule already says where the parts that are not the device
-    // go — written beside a device rather than drawn as one. These are written
-    // against the **first** device on the branch, which is its principal one:
-    // earthing tools and a power connector belong to the unit the breaker is
-    // in, not to whichever slot happened to be read last. Attaching them to
-    // the last one put the earthing tools against the current transformer,
-    // which is a different claim and a wrong one.
-    //
-    // The tag comes with them, so nothing the sheet used to say is lost — it
-    // is said in the place that is true.
-    //
-    // Unless there is no device yet, because this slot is the first thing on
-    // the branch. Then it is drawn, since a feeder that starts with nothing
-    // is worse than one that starts with a box.
-    if (id === 'accessory' && out.length > 0) {
-      out[0].accessories.push(
-        ...inSlot.map(part => [tag, formatPartEntry(part)].filter(Boolean).join(' ')));
-      continue;
-    }
+      // **An accessory is not a device on the branch.**
+      //
+      // Nothing could say what this part is — not the symbol somebody chose
+      // for it, not EPLAN, not its description, not the slot it sits in — so
+      // the drawing fell back to the `accessory` symbol, an empty dashed
+      // square on the conductor: the software writing "I do not know what
+      // this is" into a customer's drawing. Such a part is written against
+      // the **first** device on the branch, its principal one — earthing
+      // tools and a power connector belong to the unit the breaker is in —
+      // tag and all, so nothing the sheet used to say is lost. Unless there
+      // is no device yet; then it is drawn, since a feeder that starts with
+      // nothing is worse than one that starts with a box. A part somebody
+      // said is a device of its own is drawn whatever it reads as.
+      if (id === 'accessory' && out.length > 0 && sld.role !== 'main') {
+        out[0].accessories.push([tag, formatPartEntry(part)].filter(Boolean).join(' '));
+        const code = partCode(part);
+        if (code) out[0].accessoryCodes.push(code);
+        return;
+      }
 
-    out.push({
-      id,
-      tag,
-      label,
-      simTable: partCode(primary),
-      code: formatPartEntry(primary),
-      slot,
-      accessories: inSlot.slice(1).map(p => formatPartEntry(p)),
-      eplan,
-      chosen: from === 'chosen',
+      const item: ChainItem = {
+        id,
+        tag,
+        label,
+        simTable: partCode(part),
+        code: formatPartEntry(part),
+        slot,
+        accessories: [],
+        accessoryCodes: [],
+        eplan,
+        chosen: from === 'chosen',
+        placement: sld.placement,
+        relayRole: sld.relayRole,
+        relayConnect: sld.relayConnect,
+      };
+      out.push(item);
+      host = item;
     });
   }
 
@@ -736,10 +754,9 @@ const textWidth = (chars: number, size: number): number => chars * size * 0.52;
 const CODE_CHARS = 15;
 
 /** How tall the text beside a device is, from the top of its cell. */
-function textRoom(_item: ChainItem): number {
-  // One line now — the label — where there used to be a tag, a code and up
-  // to three accessories.
-  return TEXT.top + TEXT.gap;
+function textRoom(item: ChainItem): number {
+  // The label, broken onto lines, and the accessories' SIM-TABLE under it.
+  return TEXT.top + (labelLineCount(item, LV_WRAP) - 1) * TEXT.tag * 1.15 + TEXT.gap;
 }
 
 // How much room a device needs down the line: its own cell, and enough for the
@@ -844,12 +861,17 @@ interface Branch {
 function splitBranch(chain: ChainItem[]): Branch {
   // The power path, in the order a cell is drawn rather than the order the
   // template filed its slots.
-  const series = chain.filter(i => !isInstrument(i.id) && !isShunt(i.id))
+  // A part's window can say on the line or beside it; unanswered, its kind
+  // decides, as it always did.
+  const instrumentHere = (i: ChainItem) => i.placement !== 'series' && isInstrument(i.id);
+  const shuntHere = (i: ChainItem) =>
+    (i.placement === 'parallel' ? !isInstrument(i.id) : i.placement === 'series' ? false : isShunt(i.id));
+  const series = chain.filter(i => !instrumentHere(i) && !shuntHere(i))
     .map((item, index) => ({ item, index }))
     .sort((a, b) => powerRank(a.item.id) - powerRank(b.item.id) || a.index - b.index)
     .map(e => e.item);
 
-  const shunts = chain.filter(i => isShunt(i.id))
+  const shunts = chain.filter(shuntHere)
     .sort((a, b) => (SHUNT_RANK[a.id] ?? 99) - (SHUNT_RANK[b.id] ?? 99));
   // A shunt hangs below the last device in the path it comes after.
   const shuntAfter = shunts.map(s => {
@@ -859,7 +881,7 @@ function splitBranch(chain: ChainItem[]): Branch {
     return after;
   });
 
-  const instruments = chain.filter(i => isInstrument(i.id))
+  const instruments = chain.filter(instrumentHere)
     .sort((a, b) => (INSTRUMENT_RANK[a.id] ?? 99) - (INSTRUMENT_RANK[b.id] ?? 99));
 
   const at = (id: SymbolId) => series.findIndex(s => s.id === id);
@@ -1016,42 +1038,72 @@ function labelLines(text_: string, wrap: number): string[] {
   const pieces = text_.split(/\s*,\s*/);
   pieces.forEach((piece, k) => {
     const comma = k < pieces.length - 1 ? ',' : '';
-    const words = `${piece}${comma}`.split(/\s+/).filter(Boolean);
+    // A word longer than the line — an order code — breaks after a dash.
+    const words = `${piece}${comma}`.split(/\s+/).filter(Boolean)
+      .flatMap(w => (w.length > wrap ? w.split(/(?<=-)/) : [w]));
     let chunk = '';
     const chunks: string[] = [];
     for (const w of words) {
-      const next = chunk ? `${chunk} ${w}` : w;
+      const next = chunk ? (chunk.endsWith('-') ? `${chunk}${w}` : `${chunk} ${w}`) : w;
       if (next.length > wrap && chunk) { chunks.push(chunk); chunk = w; } else chunk = next;
     }
     if (chunk) chunks.push(chunk);
     for (const c of chunks) {
-      const next = cur ? `${cur} ${c}` : c;
+      const next = cur ? (cur.endsWith('-') ? `${cur}${c}` : `${cur} ${c}`) : c;
       if (next.length > wrap && cur) { lines.push(cur); cur = c; } else cur = next;
     }
   });
   if (cur) lines.push(cur);
+  // Never leave "Q :" alone on a line: the label stays with what it labels.
+  for (let k = 0; k < lines.length - 1; k++) {
+    if (/:\s*$/.test(lines[k])) { lines.splice(k, 2, `${lines[k]} ${lines[k + 1]}`); k--; }
+  }
   return lines;
 }
 
+/** Where an LV label is broken. */
+const LV_WRAP = 30;
+
+/**
+ * Every line written beside a device: its own `label : SIM-TABLE`, broken,
+ * then each accessory's SIM-TABLE on lines of its own under it.
+ */
+function allLines(item: ChainItem, wrap: number): { text: string; accessory: boolean }[] {
+  return [
+    ...labelLines(labelText(item), wrap).map(text => ({ text, accessory: false })),
+    ...item.accessoryCodes.flatMap(c => labelLines(c, wrap).map(text => ({ text, accessory: true }))),
+  ];
+}
+
+/** How many lines a device's label takes, accessories included. */
+const labelLineCount = (item: ChainItem, wrap: number) => allLines(item, wrap).length;
+
+/** A label broken the way the drawing breaks it — for a screen that shows
+ *  what will be written. */
+export const breakLabel = (text_: string, wrap = 26): string[] => labelLines(text_, wrap);
+
 /** How wide a wrapped label comes out. */
 const labelWidth = (item: ChainItem, size: number, wrap = 0) =>
-  Math.max(...labelLines(labelText(item), wrap).map(l => l.length)) * size * 0.56;
+  Math.max(...allLines(item, wrap).map(l => l.text.length)) * size * 0.56;
 
 function simLabel(
   item: ChainItem, tx: number, y: number, anchor = 'start', size: number = TEXT.tag, wrap = 0,
 ): string {
   const a = anchor === 'start' ? '' : ` text-anchor="${anchor}"`;
   const about = [item.tag, item.code, ...item.accessories].filter(Boolean).join(' · ');
-  const lines = labelLines(labelText(item), wrap);
+  const lines = allLines(item, wrap);
+  // An accessory's SIM-TABLE is written lighter than the device's own, so
+  // the two read as one device and what came with it.
   const body = lines.length === 1
-    ? esc(lines[0])
-    : lines.map((l, n) => `<tspan x="${tx}" dy="${n === 0 ? 0 : size * 1.15}">${esc(l)}</tspan>`).join('');
+    ? esc(lines[0].text)
+    : lines.map((l, n) => `<tspan x="${tx}" dy="${n === 0 ? 0 : size * 1.15}"${
+      l.accessory ? ' font-weight="400"' : ''}>${esc(l.text)}</tspan>`).join('');
   return `<text x="${tx}" y="${y}" font-size="${size}" font-weight="600" fill="#111"${a}>` +
     `${about ? `<title>${esc(about)}</title>` : ''}${body}</text>`;
 }
 
 function deviceText(item: ChainItem, tx: number, y: number, _codeChars = 17, anchor = 'start'): string {
-  return simLabel(item, tx, y, anchor);
+  return simLabel(item, tx, y, anchor, TEXT.tag, LV_WRAP);
 }
 
 /**
@@ -1450,7 +1502,7 @@ function coresOf(answers: TemplateSingleLine | undefined, hasRelay: boolean, has
 }
 
 const synth = (id: SymbolId, label: string): ChainItem =>
-  ({ id, tag: `-${label}`, label, simTable: '', code: '', slot: '', accessories: [] });
+  ({ id, tag: `-${label}`, label, simTable: '', code: '', slot: '', accessories: [], accessoryCodes: [] });
 
 /** Geometry the sheet needs to lay columns out round a cell. */
 /** How MV labels are written: smaller than LV's, and broken onto lines. */
@@ -1551,9 +1603,14 @@ function drawMvCell(
   // resistor unless earthed solidly, to earth.
   const ngr = kind.neutral && answers.neutralEarthing !== 'solid'
     ? take(i => i.id === 'resistor') ?? synth('resistor', 'R') : undefined;
-  const shunts = [...(orphanMagnet ? [orphanMagnet] : []), ...rest.filter(i => LEFT_SHUNTS.includes(i.id))];
-  const instruments = rest.filter(i => isInstrument(i.id));
-  const series = rest.filter(i => !LEFT_SHUNTS.includes(i.id) && !isInstrument(i.id))
+  // A part's window can put it on the line (series) or beside it (parallel)
+  // whatever kind of device it is; unanswered, its kind decides.
+  const besideLine = (i: ChainItem) =>
+    (i.placement === 'parallel' ? !isInstrument(i.id) : i.placement === 'series' ? false : LEFT_SHUNTS.includes(i.id));
+  const offLine = (i: ChainItem) => i.placement !== 'series' && isInstrument(i.id);
+  const shunts = [...(orphanMagnet ? [orphanMagnet] : []), ...rest.filter(besideLine)];
+  const instruments = rest.filter(offLine);
+  const series = rest.filter(i => !besideLine(i) && !offLine(i))
     .map((item, index) => ({ item, index }))
     .sort((a, b) => powerRank(a.item.id) - powerRank(b.item.id) || a.index - b.index)
     .map(e => e.item);
@@ -1614,7 +1671,7 @@ function drawMvCell(
       if (st.role === 'ct') ctY = y;
       y += Math.max(stepFor(st.item), st.role === 'switch' ? CELL + 10 : 0,
         // A long label is broken onto lines; the device keeps room for them.
-        12 + labelLines(labelText(st.item), MV_LABEL.wrap).length * MV_LABEL.size * 1.15 + 8,
+        12 + labelLineCount(st.item, MV_LABEL.wrap) * MV_LABEL.size * 1.15 + 8,
         // Room for what hangs beside the switch, stacked down from its middle.
         st.role === 'switch' ? switchHang(st.item) : 0);
     } else if (st.kind === 'earth') {
@@ -1674,9 +1731,13 @@ function drawMvCell(
       if (st.role === 'switch' || st.role === 'ct' || st.item.id === 'core-balance-ct') {
         // The switch and the CT are labelled on their left, as the office's
         // sheets do: their right is where the 94 / CR / 74 / 86 hang and the
-        // cores leave.
+        // cores leave. The switch's label climbs up beside its top when it
+        // has several lines, so its accessories' SIM-TABLE stays clear of the
+        // operating mechanism drawn on its left.
         const lx = x - symbolLeft(st.item.id) - 6;
-        out.push(simLabel(st.item, lx, sy + 12, 'end', MV_LABEL.size, MV_LABEL.wrap));
+        const climb = st.role === 'switch'
+          ? Math.min(labelLineCount(st.item, MV_LABEL.wrap) - 1, 2) * MV_LABEL.size * 1.15 : 0;
+        out.push(simLabel(st.item, lx, sy + 12 - climb, 'end', MV_LABEL.size, MV_LABEL.wrap));
         reach(lx - labelWidth(st.item, MV_LABEL.size, MV_LABEL.wrap), sy);
         continue;
       }
@@ -1716,7 +1777,7 @@ function drawMvCell(
         out.push(line(sx, sy, x, sy, 1.2), node({ x, y: sy }));
         out.push(drawDevice(st.item, sx, sy));
         if (st.item.id !== 'magnet' && !symbolOverride(st.item.id)?.art) out.push(earth(sx, sy + CELL + 8));
-        out.push(simLabel(st.item, sx + 16, sy + 30, 'start', 9));
+        out.push(simLabel(st.item, sx + 16, sy + 30, 'start', MV_LABEL.size, MV_LABEL.wrap));
         reach(sx - 12, sy + CELL + 14);
       }
     } else {
@@ -1739,7 +1800,7 @@ function drawMvCell(
         vy += CELL;
       }
       out.push(drawDevice(st.item, sx, vy));
-      out.push(simLabel(st.item, sx + 30, vy + 16, 'start', 9));
+      out.push(simLabel(st.item, sx + 30, vy + 16, 'start', MV_LABEL.size, MV_LABEL.wrap));
       reach(sx - 12, vy + CELL);
     }
   }
@@ -1788,8 +1849,8 @@ function drawMvCell(
     const m1 = pinOf(magnet.id, mx, my, '1');
     out.push(dashed([e3, { x: m1.x, y: e3.y }, m1]));
     out.push(drawDevice(magnet, mx, my));
-    out.push(simLabel(magnet, mx - 15, my + 22, 'end', 9));
-    reach(mx - 15 - textWidth(labelText(magnet).length, 9), my + CELL);
+    out.push(simLabel(magnet, mx - 15, my + 22, 'end', MV_LABEL.size, MV_LABEL.wrap));
+    reach(mx - 15 - labelWidth(magnet, MV_LABEL.size, MV_LABEL.wrap), my + CELL);
     // Magnet's 2 out to the feeder it is interlocked with, the name written
     // on the line itself.
     if (answers.downstreamInterlock !== false) {
@@ -1822,37 +1883,58 @@ function drawMvCell(
   }
 
   // ── The secondary side: the CT's cores, and what each one feeds ───────
-  const relay = instruments.find(i => i.id === 'protection-relay');
-  const efRelay = instruments.find(i => i.id === 'earth-fault-relay');
+  // The main relay is the one the CTs and the core-balance CT go into: the
+  // one whose window says so, else the first protection relay that is not
+  // said to be auxiliary. Every other relay is auxiliary, wired to the
+  // breaker, the main relay or both.
+  const relays = instruments.filter(i => i.id === 'protection-relay' || i.id === 'earth-fault-relay');
+  const relay = relays.find(r => r.relayRole === 'main')
+    ?? relays.find(r => r.relayRole !== 'auxiliary' && r.id === 'protection-relay')
+    ?? relays.find(r => r.relayRole !== 'auxiliary');
+  const auxRelays = relays.filter(r => r !== relay);
   const testBlock = instruments.find(i => i.id === 'test-block');
   const meters = instruments.filter(i => METER_IDS.includes(i.id));
   const volts = instruments.filter(i => VOLTAGE_IDS.includes(i.id));
   const others = instruments.filter(i =>
-    i !== relay && i !== efRelay && i !== testBlock && !meters.includes(i) && !volts.includes(i));
+    !relays.includes(i) && i !== testBlock && !meters.includes(i) && !volts.includes(i));
   const ix = x + MV_CELL.instrDx;
   let ty = ctY >= 0 ? ctY : (switchY >= 0 ? switchY : top);
   let relayAt = -1;
-  /** Where a core can come up into the relay from below. */
-  let relayBox = { cx: 0, bottom: 0 };
+  /** Where a core can come up into the relay from below, and how far right
+   *  it and what hangs on it reach. */
+  let relayBox = { cx: 0, bottom: 0, right: 0, reach: 0 };
 
   /** A column of instruments hanging on one line at `ix`, from `y0`. */
   const stack = (items: ChainItem[], y0: number): number => {
     if (items.length === 0) return y0;
-    out.push(line(ix, y0, ix, y0 + items.length * CELL));
-    items.forEach((item, n) => {
-      out.push(drawDevice(item, ix, y0 + n * CELL));
+    // Each one as tall as its label needs, so a long SIM-TABLE never runs
+    // into the next instrument's.
+    const step = (item: ChainItem) =>
+      Math.max(CELL, 17 + labelLineCount(item, MV_LABEL.wrap) * MV_LABEL.size * 1.15);
+    const total = items.reduce((h, item) => h + step(item), 0);
+    out.push(line(ix, y0, ix, y0 + total));
+    let yy = y0;
+    items.forEach(item => {
+      out.push(drawDevice(item, ix, yy));
       const tx = ix + Math.max(34, labelOffset(item));
-      out.push(simLabel(item, tx, y0 + n * CELL + 17, 'start', 9));
-      reach(tx + textWidth(labelText(item).length, 9), y0 + (n + 1) * CELL);
+      out.push(simLabel(item, tx, yy + 17, 'start', MV_LABEL.size, MV_LABEL.wrap));
+      reach(tx + labelWidth(item, MV_LABEL.size, MV_LABEL.wrap), yy + step(item));
+      yy += step(item);
     });
-    return y0 + items.length * CELL;
+    return y0 + total;
   };
 
   const drawRelay = (item: ChainItem, y0: number): number => {
     relayAt = y0;
-    relayBox = { cx: ix + 4 + Math.max(16, symbolRight(item.id) / 2), bottom: y0 + CELL - 8 };
+    relayBox = { cx: ix + 4 + Math.max(16, symbolRight(item.id) / 2), bottom: y0 + CELL - 8,
+      right: ix + symbolRight(item.id), reach: ix + symbolRight(item.id) };
     // Written above the relay's box, whatever height the box comes out.
-    const label = (top_: number) => out.push(simLabel(item, ix + 5, Math.min(y0 + 5, top_ - 3), 'start', 9));
+    // A label of several lines climbs up from the box rather than into it.
+    const label = (top_: number) => {
+      const up = (labelLineCount(item, MV_LABEL.wrap) - 1) * MV_LABEL.size * 1.15;
+      out.push(simLabel(item, ix + 5, Math.min(y0 + 5, top_ - 3) - up, 'start', MV_LABEL.size, MV_LABEL.wrap));
+      reach(ix + 5 + labelWidth(item, MV_LABEL.size, MV_LABEL.wrap), y0);
+    };
     let rx = ix + symbolRight(item.id);
     let h = CELL;
     const fns = item.id === 'protection-relay' && answers.relayMode === 'functions'
@@ -1882,7 +1964,7 @@ function drawMvCell(
       rx = ix + 4 + w;
       h = Math.max(CELL, bh + 12);
       label(by);
-      relayBox = { cx: ix + 4 + w / 2, bottom: by + bh };
+      relayBox = { cx: ix + 4 + w / 2, bottom: by + bh, right: ix + 4 + w, reach: ix + 4 + w };
     } else {
       // EK36's sheets: the functions written in the relay's own box, run
       // together the way the office writes them — "50,50N,51,51N," — and
@@ -1905,10 +1987,11 @@ function drawMvCell(
       rx = ix + 4 + w;
       h = Math.max(CELL, bh + 12);
       label(by);
-      relayBox = { cx: ix + 4 + w / 2, bottom: by + bh };
+      relayBox = { cx: ix + 4 + w / 2, bottom: by + bh, right: ix + 4 + w, reach: ix + 4 + w };
     }
     const k = keyLine({ x: rx, y: y0 + HALF }, answers.relayAttachments ?? []);
     out.push(k.svg);
+    relayBox.reach = Math.max(relayBox.right, k.right);
     reach(Math.max(rx, k.right), Math.max(y0 + h, k.bottom));
     return Math.max(y0 + h, k.bottom + 4);
   };
@@ -1916,7 +1999,7 @@ function drawMvCell(
   // A relay whose functions were answered is on the cell whether or not
   // its part is in the template yet.
   const cores = ct
-    ? coresOf(answers, Boolean(relay || efRelay || answers.relayMode === 'functions'), meters.length > 0)
+    ? coresOf(answers, Boolean(relay || answers.relayMode === 'functions'), meters.length > 0)
     : [];
   if (ct && cores.length) {
     // The cores leave the CT's secondary one under the other and part, each
@@ -1936,7 +2019,7 @@ function drawMvCell(
       let landY: number;
       let next: number;
       if (core.purpose === 'protection') {
-        const item = relay ?? efRelay ?? synth('protection-relay', 'F');
+        const item = relay ?? synth('protection-relay', 'F');
         if (relayAt >= 0) { landY = relayAt + HALF; next = ty; }
         else { landY = ty + HALF; next = drawRelay(item, ty) + 8; }
         out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
@@ -1970,20 +2053,49 @@ function drawMvCell(
         const tbx = lane + 22;
         out.push(`<g ${symbolBlock('test-block', tbx, landY)}><circle cx="${tbx}" cy="${landY}" r="4" fill="#fff" stroke="#111" stroke-width="1.1"/>` +
           `<circle cx="${tbx}" cy="${landY}" r="1.6" fill="#111"/></g>`);
-        if (n === 0) out.push(simLabel(testBlock, tbx + 5, landY - 7, 'end', 8));
+        if (n === 0) out.push(simLabel(testBlock, tbx + 5, landY - 7, 'end', 8, 22));
       }
       ty = Math.max(ty, next);
       reach(ix, landY);
     });
-  } else if (relay || efRelay) {
+  } else if (relay) {
     // No CT on the cell, or no core answered: the relay still stands where
     // it would, joined by a control line from the switch.
-    const item = (relay ?? efRelay)!;
+    const item = relay;
     const from = switchY >= 0 ? switchY + HALF : top + HALF;
     out.push(dashed([{ x: x + 8, y: from }, { x: ix, y: from }]));
     ty = drawRelay(item, Math.max(ty, from - HALF)) + 8;
   }
-  if (efRelay && relay && relayAt >= 0) ty = drawRelay(efRelay, ty) + 8;
+
+  // The auxiliary relays, to the right of the main one and below it, each
+  // wired as its window says: from the main relay, from the breaker, or
+  // both. Unanswered, one beside a main relay hangs on it, as the earth
+  // fault relay always did; one with no main relay to hang on, on the
+  // breaker.
+  if (auxRelays.length) {
+    const ax = (relayAt >= 0 ? relayBox.reach : ix) + 28;
+    let ay = relayAt >= 0 ? relayBox.bottom + 18 : ty;
+    for (const aux of auxRelays) {
+      const connect = aux.relayConnect ?? (relayAt >= 0 ? 'relay' : 'breaker');
+      out.push(drawDevice(aux, ax, ay));
+      const up = (labelLineCount(aux, MV_LABEL.wrap) - 1) * MV_LABEL.size * 1.15;
+      out.push(simLabel(aux, ax + 5, ay + 5 - up, 'start', MV_LABEL.size, MV_LABEL.wrap));
+      const mid = { x: ax, y: ay + HALF };
+      if ((connect === 'relay' || connect === 'both') && relayAt >= 0) {
+        const fx = relayBox.right - 6;
+        out.push(dashed([{ x: fx, y: relayBox.bottom }, { x: fx, y: mid.y }, mid]));
+      }
+      if ((connect === 'breaker' || connect === 'both') && sw && switchY >= 0) {
+        // Round the far side of the relay, clear of its label, into its side.
+        const from = { x: x + symbolRight(sw.id) + 2, y: switchY + 4 };
+        const far = ax + Math.max(symbolRight(aux.id), labelWidth(aux, MV_LABEL.size, MV_LABEL.wrap) + 5) + 12;
+        out.push(dashed([from, { x: far, y: from.y }, { x: far, y: mid.y }, { x: ax + symbolRight(aux.id), y: mid.y }]));
+      }
+      reach(ax + Math.max(symbolRight(aux.id), labelWidth(aux, MV_LABEL.size, MV_LABEL.wrap)) + 8, ay + CELL);
+      ay += CELL + 22;
+    }
+    ty = Math.max(ty, ay);
+  }
 
   // The core-balance CT's core: out of its side, up its own lane — through
   // the test block when the cell has one, the office's XD2 — into the relay.
@@ -2005,7 +2117,7 @@ function drawMvCell(
       const ty_ = (from.y + land.y) / 2;
       out.push(`<g ${symbolBlock('test-block', lane, ty_)}><circle cx="${lane}" cy="${ty_}" r="4" fill="#fff" stroke="#111" stroke-width="1.1"/>` +
         `<circle cx="${lane}" cy="${ty_}" r="1.6" fill="#111"/></g>`);
-      out.push(simLabel(testBlock, lane + 7, ty_ + 3, 'start', 8));
+      out.push(simLabel(testBlock, lane + 7, ty_ + 3, 'start', 8, 22));
     }
     reach(lane + 8, from.y);
   }
@@ -2151,7 +2263,7 @@ function drawSheet(o: {
   // The label is written whole — `Q : <SIM-TABLE>` — so the column is as wide
   // as the longest one on the sheet, and never narrower than it used to be.
   const labelChars = Math.max(0, ...all.flatMap(b => [...b.series, ...b.shunts, ...b.instruments]
-    .map(i => labelText(i).length)));
+    .map(i => Math.max(...allLines(i, LV_WRAP).map(l => l.text.length)))));
   const forText = branchDx + labelReach + Math.max(
     textWidth(CODE_CHARS, TEXT.codeSize), textWidth(labelChars, TEXT.tag)) + 18;
   const colWidth = Math.max(

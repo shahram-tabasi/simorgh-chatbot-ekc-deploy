@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MaximizeIcon, RotateCcwIcon, ChevronRightIcon } from 'lucide-react';
+import { MaximizeIcon, RotateCcwIcon, ChevronRightIcon, SlidersHorizontalIcon } from 'lucide-react';
 import {
   CELL, IEC_SYMBOLS, SYMBOL_GROUPS, SymbolId, drawIecSymbol, symbolHeight,
   symbolLeft, symbolRight,
@@ -38,6 +38,8 @@ interface Props {
   onSymbolChange: (ref: PartRef, symbolId: string | undefined) => void;
   /** Open the one graphic window, on the whole template. */
   onOpenGraphic: (symbols: EplanSymbolMap) => void;
+  /** Open a part's single-line questions, to change its answers. */
+  onEditQuestions?: (ref: PartRef) => void;
   /**
    * Leave off the panel's own title bar and border.
    *
@@ -46,6 +48,18 @@ interface Props {
    * as it did.
    */
   bare?: boolean;
+}
+
+/** What a part's single-line answers say, in a few words for the list. */
+function answersNote(ref: PartRef): string {
+  const sld = ref.part?.sld ?? {};
+  if (ref.index > 0 && sld.role !== 'main') return 'accessory';
+  const out: string[] = [];
+  if (sld.placement) out.push(sld.placement);
+  if (sld.relayRole === 'auxiliary') {
+    out.push(`aux relay → ${sld.relayConnect === 'breaker' ? 'breaker' : sld.relayConnect === 'both' ? 'breaker + relay' : 'main relay'}`);
+  } else if (sld.relayRole === 'main') out.push('main relay');
+  return out.join(' · ');
 }
 
 const WHY: Record<SymbolSource, string> = {
@@ -67,7 +81,7 @@ const SymbolArt: React.FC<{ id: SymbolId; height: number }> = ({ id, height }) =
 );
 
 export const PartSchematicPanel: React.FC<Props> = ({
-  template, tier, parts, selected, onSelect, onSymbolChange, onOpenGraphic, bare,
+  template, tier, parts, selected, onSelect, onSymbolChange, onOpenGraphic, onEditQuestions, bare,
 }) => {
   // Every symbol on this panel is drawn from the library, which lives outside
   // React. Read the version and this panel is drawn again the moment a symbol
@@ -217,11 +231,10 @@ export const PartSchematicPanel: React.FC<Props> = ({
               const item = resolved.get(keyOf(ref));
               const isOn = selected && keyOf(selected) === keyOf(ref);
               return (
-                <li key={keyOf(ref)}>
+                <li key={keyOf(ref)} className={`flex items-center ${isOn ? 'bg-blue-50' : ''}`}>
                   <button
                     onClick={() => onSelect(ref)}
-                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-gray-50 ${
-                      isOn ? 'bg-blue-50' : ''}`}
+                    className="flex-1 min-w-0 flex items-center gap-2 pl-3 pr-1 py-1.5 text-left hover:bg-gray-50"
                   >
                     <span className="w-9 h-9 shrink-0 border border-gray-200 rounded bg-white flex items-center justify-center">
                       {item && <SymbolArt id={item.id} height={34} />}
@@ -234,9 +247,21 @@ export const PartSchematicPanel: React.FC<Props> = ({
                         {ref.slot} · {item ? (IEC_SYMBOLS[item.id]?.title ?? item.id) : ''}
                         {ref.part?.symbolId ? ' · chosen' : ''}
                       </span>
+                      {answersNote(ref) && (
+                        <span className="block text-[10px] text-emerald-700 truncate">{answersNote(ref)}</span>
+                      )}
                     </span>
                     {isOn && <ChevronRightIcon className="w-3.5 h-3.5 text-blue-600 shrink-0" />}
                   </button>
+                  {onEditQuestions && (
+                    <button
+                      onClick={() => onEditQuestions(ref)}
+                      title="Single-line questions for this part"
+                      className="mr-2 p-1.5 rounded text-gray-500 hover:text-blue-700 hover:bg-blue-100 shrink-0"
+                    >
+                      <SlidersHorizontalIcon className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </li>
               );
             })}
