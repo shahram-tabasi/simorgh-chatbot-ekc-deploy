@@ -731,8 +731,25 @@ export function setProjectSymbolOverrides(map: Partial<Record<SymbolId, SymbolOv
   announce();
 }
 
+// ── The office's own new symbols ────────────────────────────────────────────
+//
+// A symbol made with "New symbol" has an id of its own and replaces nothing.
+// A part can still be drawn with one (its window's "Drawing"): the sheet then
+// asks for `office:<id>`, and the office's library answers through here. The
+// library lives in `cad/officeSymbols`, which this module must not import —
+// `useSymbolLibrary` hands it over instead and says when it changes.
+export const OFFICE_PREFIX = 'office:';
+let officeSource: (id: string) => SymbolOverride | undefined = () => undefined;
+export function setOfficeSymbolSource(fn: (id: string) => SymbolOverride | undefined): void {
+  officeSource = fn;
+  announce();
+}
+/** Something outside the three layers changed what a symbol looks like. */
+export const symbolsChanged = (): void => announce();
+
 /** What the library will draw for an id, when something has replaced it. */
 export function symbolOverride(id: string): SymbolOverride | undefined {
+  if (id.startsWith(OFFICE_PREFIX)) return officeSource(id.slice(OFFICE_PREFIX.length));
   return PROJECT_OVERRIDES[id as SymbolId]
     ?? PACK_OVERRIDES[id as SymbolId]
     ?? EPLAN_OVERRIDES[id as SymbolId];

@@ -5,7 +5,7 @@ import { Drawing, Layer, Pen, Pt, Shape, translateShape } from '../../utils/cad/
 import {
   Grip, dimensionShapes, gripsOf, lineMetrics, moveGrip, withWholeBlocks,
 } from '../../utils/cad/geom';
-import { THEMES, Theme, ThemeId, shownIn } from './theme';
+import { THEMES, Theme, ThemeId, shownIn, fillIn } from './theme';
 import { shapeToNode } from '../../utils/cad/svg';
 import {
   Box, boundsOf, boundsOfAll, hitTest, nearestSnap, shapesInBox, snapPoints,
@@ -807,6 +807,8 @@ export const DrawingCanvas: React.FC<Props> = ({
           if (typeof attrs.stroke === 'string') attrs.stroke = shownIn(theme, attrs.stroke);
           if (node.tag === 'text' && typeof attrs.fill === 'string') {
             attrs.fill = shownIn(theme, attrs.fill);
+          } else if (typeof attrs.fill === 'string') {
+            attrs.fill = fillIn(theme, attrs.fill) ?? attrs.fill;
           }
           if (picked) {
             attrs.stroke = SELECTED;

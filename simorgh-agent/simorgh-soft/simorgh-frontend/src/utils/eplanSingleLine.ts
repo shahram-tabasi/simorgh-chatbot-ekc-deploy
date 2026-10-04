@@ -24,7 +24,7 @@ import {
 } from './tierEquipmentMatrix';
 import {
   CELL, HALF, SymbolId, drawIecSymbol, symbolRight, symbolLeft, symbolHeight,
-  overrideBox, buildSymbolCatalogueSvg, IEC_SYMBOLS, symbolOverride, symbolTerminals,
+  overrideBox, buildSymbolCatalogueSvg, IEC_SYMBOLS, symbolOverride, symbolTerminals, OFFICE_PREFIX,
 } from './iecSymbols';
 import { type Tier, LAYOUT_OF } from './tiers';
 import { partCode } from './eplanDataExport';
@@ -473,8 +473,18 @@ interface ChainItem {
   statuses?: string[];
   /** A CT's cores, top to bottom, as its window or its SIM-TABLE says. */
   cores?: CtCore[];
+  /** One of the office's new symbols it is drawn with, by id. */
+  drawAs?: string;
   eplan?: EplanSymbolInfo;
 }
+
+/**
+ * What a device is drawn with: the office's new symbol its window chose, or
+ * the drawing of its kind. Its kind (`id`) still decides how it is connected;
+ * this decides what it looks like and where its points are.
+ */
+const dk = (item: ChainItem): SymbolId =>
+  (item.drawAs ? `${OFFICE_PREFIX}${item.drawAs}` : item.id) as SymbolId;
 
 function chainFor(
   line: DeviceTableRow,
@@ -577,6 +587,7 @@ function chainOfTemplate(
         serialText: sld.serialText,
         statuses: sld.statuses,
         cores: sld.cores,
+        drawAs: sld.drawing,
       };
       out.push(item);
       host = item;
@@ -706,11 +717,11 @@ function drawBlock(id: SymbolId, x: number, y: number): string {
  * placing EPLAN's picture, with none.
  */
 const packUrlOf = (item: ChainItem): string | undefined =>
-  (symbolOverride(item.id)?.art ? undefined : item.eplan?.packUrl);
+  (symbolOverride(dk(item))?.art ? undefined : item.eplan?.packUrl);
 
 function drawDevice(item: ChainItem, x: number, y: number): string {
   const url = packUrlOf(item);
-  const open = `<g ${symbolBlock(item.id, x, y)}>`;
+  const open = `<g ${symbolBlock(dk(item), x, y)}>`;
   if (url) {
     const { w, h, dx } = overrideBox({
       url,
@@ -722,7 +733,7 @@ function drawDevice(item: ChainItem, x: number, y: number): string {
       `<image href="${esc(url)}" x="${x + dx}" y="${y}" width="${w}" height="${h}" ` +
       `preserveAspectRatio="xMidYMid meet"><title>${esc(item.eplan?.symbol || '')}</title></image></g>`;
   }
-  return `${open}${drawIecSymbol(item.id, x, y)}</g>`;
+  return `${open}${drawIecSymbol(dk(item), x, y)}</g>`;
 }
 
 // Where the text beside a device starts: clear of a symbol exported from
@@ -735,7 +746,7 @@ function labelOffset(item: ChainItem): number {
     });
     return Math.max(24, w + dx + 6);
   }
-  return symbolRight(item.id) + 6;
+  return symbolRight(dk(item)) + 6;
 }
 
 // ── The block of text beside a device ───────────────────────────────────────
@@ -799,7 +810,7 @@ function textRoom(item: ChainItem): number {
 // accessory lines written beside it, so one device's text never runs into the
 // next device's tag.
 function stepFor(item: ChainItem): number {
-  return Math.max(symbolHeight(item.id), CELL, textRoom(item));
+  return Math.max(symbolHeight(dk(item)), CELL, textRoom(item));
 }
 
 // ── The order of a cell, and what hangs off it ──────────────────────────────
@@ -1195,8 +1206,8 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
   if (branch.series.length > 0) {
     let cursor = top;
     branch.series.forEach((item, index) => {
-      const p1 = pinOf(item.id, x, ys[index], '1');
-      const p2 = pinOf(item.id, x, ys[index], '2');
+      const p1 = pinOf(dk(item), x, ys[index], '1');
+      const p2 = pinOf(dk(item), x, ys[index], '2');
       if (p1.y > cursor) out.push(line(x, cursor, x, p1.y));
       cursor = Math.max(cursor, p2.y);
     });
@@ -1586,10 +1597,10 @@ export const MV_CELL = {
   /** The magnet stands this far left of them. */
   magnetDx: 42,
   /** The CT's cores run down lanes starting this far right of the line. */
-  laneDx: 190,
+  laneDx: 140,
   laneStep: 12,
   /** Where the relay and the meters stand. */
-  instrDx: 230,
+  instrDx: 178,
 };
 
 /**
@@ -1728,7 +1739,7 @@ function drawMvCell(
   // upstream key reach, so the next device starts clear of them.
   const switchHang = (item: ChainItem) => {
     const n = (answers.breakerAttachments ?? []).map(attachmentText).filter(Boolean).length;
-    return symbolHeight(item.id) / 2 + n * 5.5 + (answers.upstreamInterlock ? 18 : 0) + 14;
+    return symbolHeight(dk(item)) / 2 + n * 5.5 + (answers.upstreamInterlock ? 18 : 0) + 14;
   };
   const sx = x - MV_CELL.shuntDx;
   const labelX = x + Math.max(24, ...[sw, ct, ...series].filter(Boolean)
@@ -1756,9 +1767,9 @@ function drawMvCell(
       if (sw && switchY >= 0) {
         const il = interlock?.id ?? 'mechanical-interlock';
         if (isUpright(pinDirOf(il, '1'))) {
-          const s3y = pinOf(sw.id, x, switchY, '3').y;
+          const s3y = pinOf(dk(sw), x, switchY, '3').y;
           const span = pinOf(il, 0, 0, '2').y - pinOf(il, 0, 0, '1').y;
-          const e2off = pinOf(st.item.id, 0, 0, '2').y;
+          const e2off = pinOf(dk(st.item), 0, 0, '2').y;
           y = Math.max(y, s3y + 10 + Math.abs(span) + 8 - e2off);
           ys.set(st.item, y);
         }
@@ -1818,8 +1829,8 @@ function drawMvCell(
     for (const st of stations) {
       if (st.kind !== 'series') continue;
       const sy = ys.get(st.item)!;
-      const p1 = pinOf(st.item.id, x, sy, '1');
-      const p2 = pinOf(st.item.id, x, sy, '2');
+      const p1 = pinOf(dk(st.item), x, sy, '1');
+      const p2 = pinOf(dk(st.item), x, sy, '2');
       if (p1.y > cursor) out.push(line(x, cursor, x, p1.y));
       cursor = Math.max(cursor, p2.y);
     }
@@ -1845,7 +1856,7 @@ function drawMvCell(
         // cores leave. The switch's label climbs up beside its top when it
         // has several lines, so its accessories' SIM-TABLE stays clear of the
         // operating mechanism drawn on its left.
-        const lx = x - symbolLeft(st.item.id) - 6;
+        const lx = x - symbolLeft(dk(st.item)) - 6;
         // Broken shorter than the rest: the interlock's dashed line runs down
         // the left, and a long CT specification would reach it.
         const wrap = 22;
@@ -1858,7 +1869,7 @@ function drawMvCell(
       out.push(simLabel(st.item, labelX, sy + TEXT.top, 'start', MV_LABEL.size, MV_LABEL.wrap));
       reach(labelX + labelWidth(st.item, MV_LABEL.size, MV_LABEL.wrap), sy);
     } else if (st.kind === 'earth') {
-      const e1 = pinOf(st.item.id, sx, sy, '1');
+      const e1 = pinOf(dk(st.item), sx, sy, '1');
       out.push(solidPath([{ x, y: e1.y }, e1], 1.2), node({ x, y: e1.y }));
       out.push(drawDevice(st.item, sx, sy));
       // Between the earth switch and the line, so broken short enough to
@@ -1872,25 +1883,25 @@ function drawMvCell(
       // The detector and the arrester stand on the right of the line, as on
       // the office's sheets: tapped across, the detector straight into its
       // side, the arrester down into its top with the earth under it.
-      const d1 = pinDirOf(st.item.id, '1');
+      const d1 = pinDirOf(dk(st.item), '1');
       if (st.item.id !== 'magnet') {
-        const off = pinOf(st.item.id, 0, 0, '1');
+        const off = pinOf(dk(st.item), 0, 0, '1');
         const across = d1 === 'left' || d1 === 'right';
         const px = across ? x + 22 - off.x : x + 34 - off.x;
         const py = across ? sy : sy + 10 - off.y;
-        const p1 = pinOf(st.item.id, px, py, '1');
+        const p1 = pinOf(dk(st.item), px, py, '1');
         const tapY = across ? p1.y : sy;
         out.push(solidPath(across ? [{ x, y: tapY }, p1] : [{ x, y: tapY }, { x: p1.x, y: tapY }, p1], 1.2),
           node({ x, y: tapY }));
         out.push(drawDevice(st.item, px, py));
-        if (!symbolOverride(st.item.id)?.art) out.push(earth(px, py + CELL + 8));
-        const lx = px + symbolRight(st.item.id) + 6;
+        if (!symbolOverride(dk(st.item))?.art) out.push(earth(px, py + CELL + 8));
+        const lx = px + symbolRight(dk(st.item)) + 6;
         out.push(simLabel(st.item, lx, py + 18, 'start', MV_LABEL.size, MV_LABEL.wrap));
-        reach(lx + labelWidth(st.item, MV_LABEL.size, MV_LABEL.wrap), py + symbolHeight(st.item.id) + 16);
+        reach(lx + labelWidth(st.item, MV_LABEL.size, MV_LABEL.wrap), py + symbolHeight(dk(st.item)) + 16);
       } else {
         out.push(line(sx, sy, x, sy, 1.2), node({ x, y: sy }));
         out.push(drawDevice(st.item, sx, sy));
-        if (st.item.id !== 'magnet' && !symbolOverride(st.item.id)?.art) out.push(earth(sx, sy + CELL + 8));
+        if (st.item.id !== 'magnet' && !symbolOverride(dk(st.item))?.art) out.push(earth(sx, sy + CELL + 8));
         out.push(simLabel(st.item, sx + 16, sy + 30, 'start', MV_LABEL.size, MV_LABEL.wrap));
         reach(sx - 12, sy + CELL + 14);
       }
@@ -1921,56 +1932,59 @@ function drawMvCell(
 
   // ── The mechanical chain: switch → interlock → earth switch → magnet ──
   if (sw && es && switchY >= 0 && esY >= 0) {
-    const s3 = pinOf(sw.id, x, switchY, '3');
+    const s3 = pinOf(dk(sw), x, switchY, '3');
     const ilItem = interlock ?? synth('mechanical-interlock', '');
-    const e2 = pinOf(es.id, sx, esY, '2');
-    if (isUpright(pinDirOf(ilItem.id, '1'))) {
+    const e2 = pinOf(dk(es), sx, esY, '2');
+    if (isUpright(pinDirOf(dk(ilItem), '1'))) {
       // Drawn upright, as the office drew it: its 1 at the top takes the
       // switch's 3 from above, its 2 at the bottom goes down and across into
       // the earth switch's 2 — from the side that point faces.
-      const off1 = pinOf(ilItem.id, 0, 0, '1');
-      const e2Left = pinDirOf(es.id, '2') !== 'right';
+      const off1 = pinOf(dk(ilItem), 0, 0, '1');
+      const e2Left = pinDirOf(dk(es), '2') !== 'right';
       const col = e2Left ? e2.x - 18 : e2.x + 18;
       const ilX = col - off1.x;
       const ilY = s3.y + 10 - off1.y;
-      const i1 = pinOf(ilItem.id, ilX, ilY, '1');
-      const i2 = pinOf(ilItem.id, ilX, ilY, '2');
+      const i1 = pinOf(dk(ilItem), ilX, ilY, '1');
+      const i2 = pinOf(dk(ilItem), ilX, ilY, '2');
       out.push(dashed([s3, { x: i1.x, y: s3.y }, i1]));
-      out.push(`<g ${symbolBlock(ilItem.id, ilX, ilY)}>${drawIecSymbol(ilItem.id, ilX, ilY)}</g>`);
-      if (interlock) out.push(simLabel(interlock, ilX - symbolLeft(ilItem.id) - 4, ilY + HALF, 'end', 8));
+      out.push(`<g ${symbolBlock(dk(ilItem), ilX, ilY)}>${drawIecSymbol(dk(ilItem), ilX, ilY)}</g>`);
+      if (interlock) out.push(simLabel(interlock, ilX - symbolLeft(dk(ilItem)) - 4, ilY + HALF, 'end', 8));
       out.push(dashed([i2, { x: i2.x, y: e2.y }, e2]));
-      reach(ilX - symbolLeft(ilItem.id), i2.y);
+      reach(ilX - symbolLeft(dk(ilItem)), i2.y);
     } else {
       // Drawn across: level with the switch's 3, halfway out to the earth
       // switch.
       const ilX = x - MV_CELL.shuntDx / 2 + 4;
       const ilY = s3.y - HALF;
-      const i1 = pinOf(ilItem.id, ilX, ilY, '1');
-      const i2 = pinOf(ilItem.id, ilX, ilY, '2');
+      const i1 = pinOf(dk(ilItem), ilX, ilY, '1');
+      const i2 = pinOf(dk(ilItem), ilX, ilY, '2');
       out.push(dashed([s3, { x: i1.x, y: s3.y }, i1]));
-      out.push(`<g ${symbolBlock(ilItem.id, ilX, ilY)}>${drawIecSymbol(ilItem.id, ilX, ilY)}</g>`);
+      out.push(`<g ${symbolBlock(dk(ilItem), ilX, ilY)}>${drawIecSymbol(dk(ilItem), ilX, ilY)}</g>`);
       if (interlock) out.push(simLabel(interlock, ilX, ilY + 4, 'middle', 8));
       out.push(dashed([i2, { x: e2.x, y: i2.y }, e2]));
     }
   }
   if (es && magnet && esY >= 0) {
-    const e3 = pinOf(es.id, sx, esY, '3');
-    const mOff = pinOf(magnet.id, 0, 0, '1');
+    const e3 = pinOf(dk(es), sx, esY, '3');
+    const mOff = pinOf(dk(magnet), 0, 0, '1');
     const mx = sx - MV_CELL.magnetDx - mOff.x;
     // Its 1 faces up: the line from the earth switch's 3 runs across and
     // drops into it from above.
     const my = e3.y + 10 - mOff.y;
-    const m1 = pinOf(magnet.id, mx, my, '1');
+    const m1 = pinOf(dk(magnet), mx, my, '1');
     out.push(dashed([e3, { x: m1.x, y: e3.y }, m1]));
     out.push(drawDevice(magnet, mx, my));
-    out.push(simLabel(magnet, mx - 15, my + 22, 'end', MV_LABEL.size, MV_LABEL.wrap));
-    reach(mx - 15 - labelWidth(magnet, MV_LABEL.size, MV_LABEL.wrap), my + CELL);
+    // Its label on its right, under the earth switch, so the cell does not
+    // spread out to the left for it.
+    const mlx = mx + symbolRight(dk(magnet)) + 6;
+    out.push(simLabel(magnet, mlx, my + 22, 'start', MV_LABEL.size, 16));
+    reach(mx - symbolLeft(dk(magnet)), my + CELL);
     // Magnet's 2 out to the feeder it is interlocked with, the name written
     // on the line itself.
     if (answers.downstreamInterlock !== false) {
       // Magnet's 2 to the feeder it is interlocked with, named along the
       // line, down to the foot of the cell with the other signals.
-      const m2 = pinOf(magnet.id, mx, my, '2');
+      const m2 = pinOf(dk(magnet), mx, my, '2');
       signalDown(m2.x, m2.y, String(answers.downstreamText ?? '').trim() || 'OUTGOING FEEDER');
     }
   }
@@ -1982,7 +1996,7 @@ function drawMvCell(
   // lines down the left of the office's SIMOPRIME sheets.
   const swStatuses = (sw?.statuses ?? []).map(t => t.trim()).filter(Boolean);
   if (sw && switchY >= 0 && swStatuses.length) {
-    const s3 = pinOf(sw.id, x, switchY, '3');
+    const s3 = pinOf(dk(sw), x, switchY, '3');
     const first = left - 14;
     const lanes = swStatuses.map((_, k) => first - k * 16);
     out.push(dashed([s3, { x: lanes[lanes.length - 1], y: s3.y }]));
@@ -1995,7 +2009,7 @@ function drawMvCell(
       ? (String(answers.upstreamText ?? '').trim() || 'INCOMING FEEDER') : undefined;
     // Beside the switch, level with its middle, as the office draws its
     // 94 / CR / 74 / 86.
-    const k = keyLine({ x: x + symbolRight(sw.id) + 2, y: switchY + symbolHeight(sw.id) / 2 },
+    const k = keyLine({ x: x + symbolRight(dk(sw)) + 2, y: switchY + symbolHeight(dk(sw)) / 2 },
       answers.breakerAttachments ?? [], upstream);
     out.push(k.svg);
     reach(k.right, k.bottom);
@@ -2065,30 +2079,34 @@ function drawMvCell(
       + Math.max(0, signalsOf(item).length) * 6;
     let yy = y0;
     let busEnd = y0;
+    // The line starts at the first meter's own point, not above it.
+    let busStart: number | null = null;
     items.forEach(item => {
       let rightEdge: number;
       let tx: number;
-      if (singlePin(item.id)) {
+      if (singlePin(dk(item))) {
         // Tapped off the line at its one point.
-        const off = pinOf(item.id, 0, 0, '1');
+        const off = pinOf(dk(item), 0, 0, '1');
         // Its point on its right: it stands to the left of the line.
-        const o1 = symbolOverride(item.id);
+        const o1 = symbolOverride(dk(item));
         const t1 = o1?.terminals?.find(t => t.name === '1') ?? o1?.terminals?.[0];
-        const goesRight = pinDirOf(item.id, '1') === 'right'
+        const goesRight = pinDirOf(dk(item), '1') === 'right'
           || (!t1?.dir && !!t1 && t1.x >= (o1?.width ?? 1) * 0.7);
         const px = goesRight ? ix - 16 : ix + 16;
         const mx = px - off.x;
         const my = yy + HALF - off.y;
         out.push(line(ix, yy + HALF, px, yy + HALF, 1.1), node({ x: ix, y: yy + HALF }));
         out.push(drawDevice(item, mx, my));
-        rightEdge = mx + symbolRight(item.id);
+        rightEdge = mx + symbolRight(dk(item));
         tx = rightEdge + 6;
         busEnd = yy + HALF;
+        if (busStart == null) busStart = yy + HALF;
       } else {
         out.push(drawDevice(item, ix, yy));
-        rightEdge = ix + symbolRight(item.id);
+        rightEdge = ix + symbolRight(dk(item));
         tx = ix + Math.max(34, labelOffset(item));
         busEnd = yy + CELL;
+        if (busStart == null) busStart = yy;
       }
       out.push(simLabel(item, tx, yy + 17, 'start', MV_LABEL.size, MV_LABEL.wrap));
       reach(tx + labelWidth(item, MV_LABEL.size, MV_LABEL.wrap), yy + step(item));
@@ -2099,14 +2117,14 @@ function drawMvCell(
       });
       yy += step(item);
     });
-    out.push(line(ix, y0, ix, busEnd));
+    if (busEnd > (busStart ?? y0)) out.push(line(ix, busStart ?? y0, ix, busEnd));
     return yy;
   };
 
   const drawRelay = (item: ChainItem, y0: number): number => {
     relayAt = y0;
-    relayBox = { cx: ix + 4 + Math.max(16, symbolRight(item.id) / 2), bottom: y0 + CELL - 8,
-      right: ix + symbolRight(item.id), reach: ix + symbolRight(item.id) };
+    relayBox = { cx: ix + 4 + Math.max(16, symbolRight(dk(item)) / 2), bottom: y0 + CELL - 8,
+      right: ix + symbolRight(dk(item)), reach: ix + symbolRight(dk(item)) };
     // Written above the relay's box, whatever height the box comes out.
     // A label of several lines climbs up from the box rather than into it.
     const label = (top_: number) => {
@@ -2114,7 +2132,7 @@ function drawMvCell(
       out.push(simLabel(item, ix + 5, Math.min(y0 + 5, top_ - 3) - up, 'start', MV_LABEL.size, MV_LABEL.wrap));
       reach(ix + 5 + labelWidth(item, MV_LABEL.size, MV_LABEL.wrap), y0);
     };
-    let rx = ix + symbolRight(item.id);
+    let rx = ix + symbolRight(dk(item));
     let h = CELL;
     // The relay's own window says its functions; the cell's question is the
     // fallback. None: the plain relay, "PROTECTION RELAY" in its box.
@@ -2200,8 +2218,8 @@ function drawMvCell(
     // level with the CT; each later one starts lower and turns down further
     // left, so no core crosses another on its way.
     // Out of the CT's own secondary when it was drawn with one (its 3).
-    const sec = symbolOverride(ct.id)?.terminals?.some(t => t.name === '3')
-      ? pinOf(ct.id, x, ctY, '3') : { x: x + 20, y: ctY + HALF };
+    const sec = symbolOverride(dk(ct))?.terminals?.some(t => t.name === '3')
+      ? pinOf(dk(ct), x, ctY, '3') : { x: x + 20, y: ctY + HALF };
     const cx0 = sec.x;
     const cy = sec.y;
     const coreY = (n: number) => cy + n * 10;
@@ -2223,9 +2241,13 @@ function drawMvCell(
           next = ty;
           out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
         } else if (meters.length) {
-          landY = ty;
-          meterTop = ty;
-          next = stack(meters, ty) + 8;
+          // Straight across into the first meter when it is fed from its
+          // side: the meters hang so its point is level with the core.
+          const side = singlePin(dk(meters[0]));
+          const top_ = side ? Math.max(ty, start.y - HALF) : ty;
+          landY = side ? top_ + HALF : top_;
+          meterTop = side ? top_ + HALF : top_;
+          next = stack(meters, top_) + 8;
           out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
         } else {
           // No meter on the cell to take it: a short arrow straight out of
@@ -2289,11 +2311,11 @@ function drawMvCell(
       }
       if ((connect === 'breaker' || connect === 'both') && sw && switchY >= 0) {
         // Round the far side of the relay, clear of its label, into its side.
-        const from = { x: x + symbolRight(sw.id) + 2, y: switchY + 4 };
-        const far = ax + Math.max(symbolRight(aux.id), labelWidth(aux, MV_LABEL.size, MV_LABEL.wrap) + 5) + 12;
-        out.push(dashed([from, { x: far, y: from.y }, { x: far, y: mid.y }, { x: ax + symbolRight(aux.id), y: mid.y }]));
+        const from = { x: x + symbolRight(dk(sw)) + 2, y: switchY + 4 };
+        const far = ax + Math.max(symbolRight(dk(aux)), labelWidth(aux, MV_LABEL.size, MV_LABEL.wrap) + 5) + 12;
+        out.push(dashed([from, { x: far, y: from.y }, { x: far, y: mid.y }, { x: ax + symbolRight(dk(aux)), y: mid.y }]));
       }
-      reach(ax + Math.max(symbolRight(aux.id), labelWidth(aux, MV_LABEL.size, MV_LABEL.wrap)) + 8, ay + CELL);
+      reach(ax + Math.max(symbolRight(dk(aux)), labelWidth(aux, MV_LABEL.size, MV_LABEL.wrap)) + 8, ay + CELL);
       ay += CELL + 22;
     }
     ty = Math.max(ty, ay);
@@ -2304,8 +2326,8 @@ function drawMvCell(
   const cbct = series.find(i => i.id === 'core-balance-ct');
   if (cbct && relayAt >= 0) {
     const by0 = ys.get(cbct)!;
-    const from = symbolOverride(cbct.id)?.terminals?.some(t => t.name === '3')
-      ? pinOf(cbct.id, x, by0, '3') : { x: x + symbolRight(cbct.id), y: by0 + HALF };
+    const from = symbolOverride(dk(cbct))?.terminals?.some(t => t.name === '3')
+      ? pinOf(dk(cbct), x, by0, '3') : { x: x + symbolRight(dk(cbct)), y: by0 + HALF };
     // Up into the bottom of the relay, as the office draws XD2 — unless
     // meters hang under the relay, then in from the side on its own lane.
     const under = meters.length > 0 || others.length > 0;
@@ -2323,7 +2345,7 @@ function drawMvCell(
     }
     reach(lane + 8, from.y);
   }
-  if (!ct && meters.length) { meterTop = ty; ty = stack(meters, ty) + 8; }
+  if (!ct && meters.length) { meterTop = singlePin(dk(meters[0])) ? ty + HALF : ty; ty = stack(meters, ty) + 8; }
 
   // Every other CT on the line has its cores too, each to what it is for:
   // protection up into the relay, measuring onto the meters' line, a remark
@@ -2334,8 +2356,8 @@ function drawMvCell(
     const oy = ys.get(other);
     if (oy == null) return;
     const own = coresOf(answers, Boolean(relay), meters.length > 0, other);
-    const sec = symbolOverride(other.id)?.terminals?.some(t => t.name === '3')
-      ? pinOf(other.id, x, oy, '3') : { x: x + 20, y: oy + HALF };
+    const sec = symbolOverride(dk(other))?.terminals?.some(t => t.name === '3')
+      ? pinOf(dk(other), x, oy, '3') : { x: x + 20, y: oy + HALF };
     if (own.length > 1) out.push(line(sec.x, sec.y, sec.x, sec.y + (own.length - 1) * 10, 1));
     own.forEach((core, k) => {
       const start = { x: sec.x, y: sec.y + k * 10 };
@@ -2488,7 +2510,7 @@ function drawSheet(o: {
   // A symbol from the pack can reach out to the left — a breaker drawn with
   // its racking does — so the line is set far enough in for the widest of them.
   const reach = Math.max(...all.flatMap(b =>
-    [...b.series, ...b.instruments].map(i => symbolLeft(i.id))), 16);
+    [...b.series, ...b.instruments].map(i => symbolLeft(dk(i)))), 16);
   const mvAll = [...mvCells, ...(mvSupply ? [mvSupply] : [])];
   const branchDx = isMv && mvAll.length
     ? Math.max(34, reach + 10, ...mvAll.map(c => c.size.left + 12))
@@ -2738,7 +2760,7 @@ export function buildTemplateSvg(
 
   // Room for whatever reaches out sideways, the same way a sheet works out how
   // wide a column has to be.
-  const reach = Math.max(16, ...[...branch.series, ...branch.instruments].map(i => symbolLeft(i.id)));
+  const reach = Math.max(16, ...[...branch.series, ...branch.instruments].map(i => symbolLeft(dk(i))));
   const branchDx = mvSize
     ? Math.max(34, reach + 10, mvSize.left + 12)
     : Math.max(branch.shunts.length > 0 ? 130 : 34, reach + 10);

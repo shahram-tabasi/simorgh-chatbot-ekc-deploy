@@ -26,8 +26,9 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import {
   SymbolId, SymbolOverride, onSymbols, setPackSymbolOverrides,
-  setProjectSymbolOverrides, symbolsVersion,
+  setProjectSymbolOverrides, symbolsVersion, setOfficeSymbolSource, symbolsChanged,
 } from '../iecSymbols';
+import { loadOfficeSymbols, officeSymbols, onOfficeSymbols } from './officeSymbols';
 import { loadDxfSymbols, onDxfSymbols } from './dxfSymbols';
 import { toSymbolOverrides } from './projectSymbols';
 import { SymbolArtOverride } from '../../types/project';
@@ -111,4 +112,20 @@ export function useSymbolLibrary(
   useEffect(() => {
     setProjectSymbolOverrides(toSymbolOverrides(projectOverrides));
   }, [projectOverrides]);
+
+  // The office's new symbols, for a part drawn with one of them.
+  useEffect(() => {
+    setOfficeSymbolSource(id => {
+      const s = officeSymbols().find(o => o.id === id);
+      if (!s) return undefined;
+      const t1 = s.terminals.find(t => t.name === '1') ?? s.terminals[0];
+      return {
+        url: '', art: s.art, width: s.width, height: s.height,
+        pinX: t1 && (t1.dir === 'up' || t1.dir === 'down' || !t1.dir) ? t1.x : s.width / 2,
+        terminals: s.terminals, title: s.name,
+      };
+    });
+    loadOfficeSymbols().catch(() => { /* the library draws without them */ });
+    return onOfficeSymbols(() => symbolsChanged());
+  }, []);
 }

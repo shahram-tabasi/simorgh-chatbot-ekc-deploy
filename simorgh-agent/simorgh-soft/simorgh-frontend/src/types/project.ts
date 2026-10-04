@@ -465,6 +465,9 @@ export interface PartSingleLine {
   statuses?: string[];
   /** A CT's cores, top to bottom, and what each one feeds. */
   cores?: CtCore[];
+  /** Drawn with one of the office's new symbols (its id) rather than the
+   *  library's drawing of its kind — still connected as its kind is. */
+  drawing?: string;
 }
 
 /** What one core of a CT is for. */

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { CheckIcon, XIcon, InfoIcon, PlusIcon, TrashIcon } from 'lucide-react';
 import { PartSingleLine, CtCore, CtCorePurpose } from '../../types/project';
 import { IEC_SYMBOLS, SYMBOL_GROUPS, SymbolId } from '../../utils/iecSymbols';
@@ -6,6 +6,10 @@ import { breakLabel, symbolForPart, coresFromText } from '../../utils/eplanSingl
 import { partCode } from '../../utils/eplanDataExport';
 import { stripLocaleTags } from '../../utils/tierEquipmentMatrix';
 import { type Tier } from '../../utils/tiers';
+import {
+  loadOfficeSymbols, officeSymbols, officeVersion, onOfficeSymbols,
+} from '../../utils/cad/officeSymbols';
+import { drawIecSymbol, symbolHeight, symbolLeft, symbolRight, OFFICE_PREFIX } from '../../utils/iecSymbols';
 
 // One part's own questions for the single line.
 //
@@ -129,6 +133,11 @@ export const PartQuestionsDialog: React.FC<Props> = ({
 }) => {
   const [answers, setAnswers] = useState<PartSingleLine>({ ...(part?.sld ?? {}) });
   const [symbolId, setSymbolId] = useState<string>(String(part?.symbolId ?? ''));
+  // The office's new symbols, any of which can be what this part is drawn
+  // with — read once, and the list redraws when it lands.
+  useSyncExternalStore(onOfficeSymbols, officeVersion, officeVersion);
+  useEffect(() => { loadOfficeSymbols().catch(() => undefined); }, []);
+  const newSymbols = officeSymbols().filter(o => o.kind === 'sld');
 
   const auto = useMemo(
     () => symbolForPart({ ...part, symbolId: undefined }, slot, undefined, tier, slotTitle).id,
@@ -224,6 +233,40 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                     </optgroup>
                   ))}
                 </select>
+              </Question>
+
+              <Question n={++n} title="Drawing">
+                <select
+                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
+                  value={answers.drawing ?? ''}
+                  onChange={e => set('drawing', e.target.value || undefined)}
+                >
+                  <option value="">The library’s drawing of {IEC_SYMBOLS[effective]?.title ?? 'its kind'}</option>
+                  {newSymbols.length > 0 && (
+                    <optgroup label="New symbols">
+                      {newSymbols.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                    </optgroup>
+                  )}
+                </select>
+                {answers.drawing && (() => {
+                  const key = `${OFFICE_PREFIX}${answers.drawing}`;
+                  const w = symbolLeft(key) + symbolRight(key);
+                  const h = symbolHeight(key);
+                  return (
+                    <div className="w-full flex items-center gap-2">
+                      <span className="w-14 h-14 border border-gray-200 rounded bg-white flex items-center justify-center shrink-0">
+                        <svg width="48" height="48" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet"
+                          dangerouslySetInnerHTML={{ __html: drawIecSymbol(key as any, symbolLeft(key), 0) }} />
+                      </span>
+                      <span className="text-[11px] text-gray-500">
+                        Drawn with this symbol and its own connection points; still connected as a {IEC_SYMBOLS[effective]?.title ?? 'device'}.
+                      </span>
+                    </div>
+                  );
+                })()}
+                {newSymbols.length === 0 && (
+                  <p className="w-full text-[11px] text-gray-500">No new symbols in the library yet — make one with “New symbol”.</p>
+                )}
               </Question>
 
               <Question n={++n} title="Series or parallel?">

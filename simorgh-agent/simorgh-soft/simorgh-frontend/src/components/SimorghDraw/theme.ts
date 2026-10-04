@@ -85,6 +85,18 @@ export function shownIn(theme: Theme, color: string | undefined): string {
   return luminance(own) < 0.28 ? theme.ink : own;
 }
 
+/**
+ * A filled shape as the theme shows it. White fill is paper — a symbol's box
+ * filled white to blank the lines behind it — so on the dark sheet it is the
+ * dark paper, and the black text drawn in it, turned light, stays readable.
+ * Left white, the box glowed and swallowed its own lettering.
+ */
+export function fillIn(theme: Theme, color: string | undefined): string | undefined {
+  if (!color || color === 'none' || theme.id === 'light') return color;
+  const c = color.trim().toLowerCase() === 'white' ? '#ffffff' : color;
+  return luminance(c) > 0.85 ? theme.paper : color;
+}
+
 const KEY = 'simorgh-draw-theme';
 
 /** The theme last chosen on this machine. Light unless somebody said otherwise. */

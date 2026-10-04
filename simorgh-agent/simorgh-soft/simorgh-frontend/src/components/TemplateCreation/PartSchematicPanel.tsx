@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MaximizeIcon, RotateCcwIcon, ChevronRightIcon, SlidersHorizontalIcon, ExternalLinkIcon } from 'lucide-react';
 import {
   CELL, IEC_SYMBOLS, SYMBOL_GROUPS, SymbolId, drawIecSymbol, symbolHeight,
-  symbolLeft, symbolRight,
+  symbolLeft, symbolRight, OFFICE_PREFIX,
 } from '../../utils/iecSymbols';
 import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import {
@@ -249,7 +249,8 @@ export const PartSchematicPanel: React.FC<Props> = ({
                     className="flex-1 min-w-0 flex items-center gap-2 pl-3 pr-1 py-1.5 text-left hover:bg-gray-50"
                   >
                     <span className="w-9 h-9 shrink-0 border border-gray-200 rounded bg-white flex items-center justify-center">
-                      {item && <SymbolArt id={item.id} height={34} />}
+                      {item && <SymbolArt height={34} id={(ref.part?.sld?.drawing
+                        ? `${OFFICE_PREFIX}${ref.part.sld.drawing}` : item.id) as SymbolId} />}
                     </span>
                     <span className="flex-1 min-w-0">
                       <span className="block text-xs text-gray-800 truncate">
