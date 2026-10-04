@@ -387,6 +387,8 @@ interface ChainItem {
   slot: string;
   /** The rest of the parts in this slot — written, not drawn. */
   accessories: string[];
+  /** Its symbol was picked by hand in the template, not worked out. */
+  chosen?: boolean;
   eplan?: EplanSymbolInfo;
 }
 
@@ -430,7 +432,7 @@ function chainOfTemplate(
     // The device of this slot is its first part; anything after it is an
     // accessory of that device, not a device of its own.
     const primary = inSlot[0];
-    const { id, eplan } = symbolForPart(primary, slot, symbols, tier);
+    const { id, eplan, from } = symbolForPart(primary, slot, symbols, tier);
 
     const label = stripLocaleTags(primary?.label) || SLOT_LETTER[slot] || 'A';
     counters[label] = (counters[label] ?? 0) + 1;
@@ -475,6 +477,7 @@ function chainOfTemplate(
       slot,
       accessories: inSlot.slice(1).map(p => formatPartEntry(p)),
       eplan,
+      chosen: from === 'chosen',
     });
   }
 
@@ -591,8 +594,20 @@ function drawBlock(id: SymbolId, x: number, y: number): string {
 
 // A device is drawn with the symbol exported from EPLAN when the pack has one,
 // and with the library's IEC symbol otherwise.
+/**
+ * EPLAN's picture of a part, unless the symbol has been drawn here.
+ *
+ * A symbol redrawn for the project, or the office's own from the pack, is
+ * what the office decided the device looks like; EPLAN's exported picture of
+ * one part is only what EPLAN happens to hold. It used to win — the office
+ * redrew its breaker with its three connection points and the sheet went on
+ * placing EPLAN's picture, with none.
+ */
+const packUrlOf = (item: ChainItem): string | undefined =>
+  (symbolOverride(item.id)?.art ? undefined : item.eplan?.packUrl);
+
 function drawDevice(item: ChainItem, x: number, y: number): string {
-  const url = item.eplan?.packUrl;
+  const url = packUrlOf(item);
   const open = `<g ${symbolBlock(item.id, x, y)}>`;
   if (url) {
     const { w, h, dx } = overrideBox({
@@ -611,7 +626,7 @@ function drawDevice(item: ChainItem, x: number, y: number): string {
 // Where the text beside a device starts: clear of a symbol exported from
 // EPLAN (they are drawn 36 wide) or of the library symbol's own box.
 function labelOffset(item: ChainItem): number {
-  if (item.eplan?.packUrl) {
+  if (packUrlOf(item) && item.eplan?.packUrl) {
     const { w, dx } = overrideBox({
       url: item.eplan.packUrl,
       width: item.eplan.packWidth, height: item.eplan.packHeight, pinX: item.eplan.packPinX,
@@ -1261,39 +1276,52 @@ const attachmentText = (a: DeviceAttachment) =>
   (String(a.text ?? '').trim() || ATTACHMENT_TEXT[a.kind] || '').toUpperCase();
 
 /**
- * A key interlock's line out of a device, with what hangs on it.
+ * What hangs on a device — 94, CR, 74, 86, serial, link, status — as the
+ * office's sheets draw it: small boxes stacked one under the other right
+ * beside the device, on a bracket from it. And, when it is interlocked with
+ * something upstream, the key on a dashed line under them with what it is
+ * interlocked with.
  *
- * Starts at `from` and runs right: a box per attachment, then — when the
- * device is interlocked with something upstream — the key and what it is
- * interlocked with. Returns the markup and how far right it reached.
+ * Returns the markup and how far right and down it reached.
  */
-function keyLine(from: Pt, attachments: DeviceAttachment[], upstream?: string): { svg: string; right: number } {
+function keyLine(from: Pt, attachments: DeviceAttachment[], upstream?: string): { svg: string; right: number; bottom: number } {
   const items = attachments.map(attachmentText).filter(Boolean);
-  if (items.length === 0 && !upstream) return { svg: '', right: from.x };
+  if (items.length === 0 && !upstream) return { svg: '', right: from.x, bottom: from.y };
   const out: string[] = [];
-  let cx = from.x + 12;
-  const boxes: string[] = [];
-  for (const t of items) {
-    const w = textWidth(t.length, 7.5) + 10;
-    boxes.push(`<rect x="${cx}" y="${from.y - 7}" width="${w}" height="14" fill="#fff" stroke="#111" stroke-width="1"/>` +
-      `<text x="${cx + w / 2}" y="${from.y + 3}" font-size="7.5" text-anchor="middle" fill="#111">${esc(t)}</text>`);
-    cx += w + 8;
+  const bh = 11;
+  const bw = Math.max(16, ...items.map(t => t.length * 7 * 0.66 + 6));
+  const bracket = from.x + 8;
+  const bx = bracket + 5;
+  const top = from.y - (items.length * bh) / 2;
+  let right = from.x;
+  let bottom = from.y;
+  if (items.length) {
+    out.push(line(from.x, from.y, bracket, from.y, 1));
+    out.push(line(bracket, top + bh / 2, bracket, top + (items.length - 0.5) * bh, 1));
+    items.forEach((t, n) => {
+      const cy = top + n * bh + bh / 2;
+      out.push(line(bracket, cy, bx, cy, 1));
+      out.push(`<rect x="${bx}" y="${top + n * bh}" width="${bw}" height="${bh}" fill="#fff" stroke="#111" stroke-width="0.9"/>` +
+        `<text x="${bx + bw / 2}" y="${cy + 2.6}" font-size="7" text-anchor="middle" fill="#111">${esc(t)}</text>`);
+    });
+    right = bx + bw;
+    bottom = top + items.length * bh;
   }
-  let end = cx - 8;
   if (upstream) {
-    // The key: a ring with its bit, on the line.
-    const kx = cx + 6;
-    boxes.push(`<g data-symbol="key-interlock" data-name="Key interlock">` +
-      `<circle cx="${kx}" cy="${from.y}" r="4" fill="#fff" stroke="#111" stroke-width="1.1"/>` +
-      `<line x1="${kx + 4}" y1="${from.y}" x2="${kx + 14}" y2="${from.y}" stroke="#111" stroke-width="1.1"/>` +
-      `<line x1="${kx + 11}" y1="${from.y}" x2="${kx + 11}" y2="${from.y + 4}" stroke="#111" stroke-width="1.1"/>` +
-      `<line x1="${kx + 14}" y1="${from.y}" x2="${kx + 14}" y2="${from.y + 4}" stroke="#111" stroke-width="1.1"/></g>`);
-    boxes.push(`<text x="${kx + 20}" y="${from.y + 3}" font-size="8" fill="#111">${esc(upstream.toUpperCase())}</text>`);
-    end = kx + 20 + textWidth(upstream.length, 8);
+    const ky = bottom + 8;
+    const kx = bx + 6;
+    out.push(dashed([{ x: from.x, y: items.length ? from.y : ky }, { x: bracket, y: items.length ? from.y : ky },
+      { x: bracket, y: ky }, { x: kx - 4, y: ky }]));
+    out.push(`<g data-symbol="key-interlock" data-name="Key interlock">` +
+      `<circle cx="${kx}" cy="${ky}" r="3.5" fill="#fff" stroke="#111" stroke-width="1"/>` +
+      `<line x1="${kx + 3.5}" y1="${ky}" x2="${kx + 12}" y2="${ky}" stroke="#111" stroke-width="1"/>` +
+      `<line x1="${kx + 9}" y1="${ky}" x2="${kx + 9}" y2="${ky + 3.5}" stroke="#111" stroke-width="1"/>` +
+      `<line x1="${kx + 12}" y1="${ky}" x2="${kx + 12}" y2="${ky + 3.5}" stroke="#111" stroke-width="1"/></g>`);
+    out.push(`<text x="${kx + 16}" y="${ky + 3}" font-size="7.5" fill="#111">${esc(upstream.toUpperCase())}</text>`);
+    right = Math.max(right, kx + 16 + upstream.length * 7.5 * 0.66);
+    bottom = ky + 5;
   }
-  out.push(dashed([from, { x: Math.max(from.x + 12, cx - 8), y: from.y }]));
-  out.push(...boxes);
-  return { svg: out.join(''), right: end };
+  return { svg: out.join(''), right, bottom };
 }
 
 /** The cores a CT is drawn with: the ones answered, or what the parts imply. */
@@ -1360,6 +1388,16 @@ function drawMvCell(
   let sw = answers.switchType === 'none' ? undefined : take(i => SWITCH_IDS.includes(i.id));
   if (answers.switchType === 'vcb') sw = { ...(sw ?? synth('vcb', 'Q')), id: 'vcb' };
   if (answers.switchType === 'vc-fuse') sw = { ...(sw ?? synth('vacuum-contactor-fuse', 'Q')), id: 'vacuum-contactor-fuse' };
+  // An MV cell's switch is one of the catalogue's: the vacuum breaker or the
+  // vacuum contactor with its fuses. The part's wording can read as any
+  // breaker — "withdrawable", "truck", "circuit-breaker" — and each of those
+  // is a different symbol the office has not redrawn, so the sheet showed a
+  // stranger where the office's own V.C.B belongs. A symbol picked by hand
+  // stays as picked.
+  if (sw && !sw.chosen && !answers.switchType) {
+    if (['vcb-racking', 'withdrawable-cb', 'circuit-breaker', 'mcb'].includes(sw.id)) sw = { ...sw, id: 'vcb' };
+    else if (['contactor', 'motor-starter'].includes(sw.id)) sw = { ...sw, id: 'vacuum-contactor-fuse' };
+  }
   // A panel that is a switch by what it is — a feeder, a coupling, a link —
   // draws one even before its parts are in.
   if (!sw && answers.switchType !== 'none' && kind.switchDefault) sw = synth(kind.switchDefault, 'Q');
@@ -1417,8 +1455,11 @@ function drawMvCell(
   // EK36: the earth switch straight after the switch, the CT after it. Every
   // other cell: the CT first, then the earth switch and the detector.
   if (opts.family === 'EK36') {
-    earthAndDetectors();
+    // As the EK36 sheets draw it: the earth switch, the CT straight after it,
+    // then the detector and the arrester.
+    if (es) stations.push({ kind: 'earth', item: es });
     if (ct) stations.push({ kind: 'series', item: ct, role: 'ct' });
+    shunts.forEach(item => stations.push({ kind: 'shunt', item }));
   } else {
     if (ct) stations.push({ kind: 'series', item: ct, role: 'ct' });
     earthAndDetectors();
@@ -1431,6 +1472,12 @@ function drawMvCell(
   }
   if (ngr) stations.push({ kind: 'series', item: ngr });
 
+  // How far below the top of the switch its 94 / CR / 74 / 86 and the
+  // upstream key reach, so the next device starts clear of them.
+  const switchHang = (item: ChainItem) => {
+    const n = (answers.breakerAttachments ?? []).map(attachmentText).filter(Boolean).length;
+    return symbolHeight(item.id) / 2 + n * 5.5 + (answers.upstreamInterlock ? 18 : 0) + 14;
+  };
   const sx = x - MV_CELL.shuntDx;
   const labelX = x + Math.max(24, ...[sw, ct, ...series].filter(Boolean)
     .map(i => labelOffset(i as ChainItem)));
@@ -1446,7 +1493,9 @@ function drawMvCell(
     if (st.kind === 'series') {
       if (st.role === 'switch') switchY = y;
       if (st.role === 'ct') ctY = y;
-      y += Math.max(stepFor(st.item), st.role === 'switch' ? CELL + 10 : 0);
+      y += Math.max(stepFor(st.item), st.role === 'switch' ? CELL + 10 : 0,
+        // Room for what hangs beside the switch, stacked down from its middle.
+        st.role === 'switch' ? switchHang(st.item) : 0);
     } else if (st.kind === 'earth') {
       esY = y;
       y += CELL + 10;
@@ -1472,6 +1521,14 @@ function drawMvCell(
     const sy = ys.get(st.item)!;
     if (st.kind === 'series') {
       out.push(drawDevice(st.item, x, sy));
+      if (st.role === 'switch') {
+        // The switch is labelled on its left, as the office's sheets do: its
+        // right is where its 94 / CR / 74 / 86 hang.
+        const lx = x - symbolLeft(st.item.id) - 6;
+        out.push(simLabel(st.item, lx, sy + 12, 'end'));
+        reach(lx - textWidth(labelText(st.item).length, TEXT.tag), sy);
+        continue;
+      }
       const fed = st.role === 'ct';
       out.push(simLabel(st.item, labelX, sy + (fed ? TEXT.topWhenFed : TEXT.top)));
       reach(labelX + textWidth(labelText(st.item).length, TEXT.tag), sy);
@@ -1559,10 +1616,12 @@ function drawMvCell(
   if (sw && switchY >= 0) {
     const upstream = answers.upstreamInterlock
       ? (String(answers.upstreamText ?? '').trim() || 'INCOMING FEEDER') : undefined;
-    // Out of the switch's own side, under its label.
-    const k = keyLine({ x: x + 8, y: switchY + 28 }, answers.breakerAttachments ?? [], upstream);
+    // Beside the switch, level with its middle, as the office draws its
+    // 94 / CR / 74 / 86.
+    const k = keyLine({ x: x + symbolRight(sw.id) + 2, y: switchY + symbolHeight(sw.id) / 2 },
+      answers.breakerAttachments ?? [], upstream);
     out.push(k.svg);
-    reach(k.right, switchY + 36);
+    reach(k.right, k.bottom);
   }
 
   // ── The secondary side: the CT's cores, and what each one feeds ───────
@@ -1592,31 +1651,64 @@ function drawMvCell(
 
   const drawRelay = (item: ChainItem, y0: number): number => {
     relayAt = y0;
-    out.push(drawDevice(item, ix, y0));
-    out.push(simLabel(item, ix + 5, y0 + 5, 'start', 9));
+    // Written above the relay's box, whatever height the box comes out.
+    const label = (top_: number) => out.push(simLabel(item, ix + 5, Math.min(y0 + 5, top_ - 3), 'start', 9));
     let rx = ix + symbolRight(item.id);
     let h = CELL;
-    if (item.id === 'protection-relay' && answers.relayMode === 'functions') {
-      const fns = String(answers.relayFunctions ?? '').split(/[,،;\n]+/).map(f => f.trim()).filter(Boolean);
-      if (fns.length) {
-        const perRow = 4;
-        const rows = Math.ceil(fns.length / perRow);
-        const w = 4 + perRow * 24;
-        const bx = rx + 6;
-        out.push(line(rx, y0 + HALF, bx, y0 + HALF, 1));
-        out.push(`<rect x="${bx}" y="${y0 + 6}" width="${w}" height="${Math.max(28, rows * 11 + 6)}" fill="#fff" stroke="#111" stroke-width="1"/>`);
-        fns.forEach((f, n) => {
-          out.push(`<text x="${bx + 4 + (n % perRow) * 24}" y="${y0 + 15 + Math.floor(n / perRow) * 11}" ` +
-            `font-size="7.5" fill="#111">${esc(f)}</text>`);
-        });
-        rx = bx + w;
-        h = Math.max(CELL, rows * 11 + 14);
+    const fns = item.id === 'protection-relay' && answers.relayMode === 'functions'
+      ? String(answers.relayFunctions ?? '').split(/[,،;\n]+/).map(f => f.trim()).filter(Boolean)
+      : [];
+    if (fns.length === 0) {
+      out.push(drawDevice(item, ix, y0));
+      label(y0 + 8);
+    } else if (opts.family === 'SIMOPRIME') {
+      // SIMOPRIME's sheets: one circle per function, side by side in the
+      // relay's box, two rows at most before it grows.
+      const perRow = Math.min(fns.length, 4);
+      const rows = Math.ceil(fns.length / perRow);
+      const d = 14;
+      const w = perRow * d + 4;
+      const bh = rows * d + 4;
+      const by = y0 + HALF - bh / 2;
+      out.push(`<g ${symbolBlock('protection-relay', ix, y0)}>` +
+        line(ix, y0 + HALF, ix + 4, y0 + HALF, 1) +
+        `<rect x="${ix + 4}" y="${by}" width="${w}" height="${bh}" fill="#fff" stroke="#111" stroke-width="1"/>` +
+        fns.map((f, n) => {
+          const cx = ix + 4 + 2 + (n % perRow) * d + d / 2;
+          const cy = by + 2 + Math.floor(n / perRow) * d + d / 2;
+          return `<circle cx="${cx}" cy="${cy}" r="${d / 2 - 0.8}" fill="#fff" stroke="#111" stroke-width="0.8"/>` +
+            `<text x="${cx}" y="${cy + 2}" font-size="${f.length > 3 ? 4.4 : 5.5}" text-anchor="middle" fill="#111">${esc(f)}</text>`;
+        }).join('') + '</g>');
+      rx = ix + 4 + w;
+      h = Math.max(CELL, bh + 12);
+      label(by);
+    } else {
+      // EK36's sheets: the functions written in the relay's own box, run
+      // together the way the office writes them — "50,50N,51,51N," — and
+      // broken onto as few lines as fit.
+      const lines: string[] = [];
+      let cur = '';
+      for (const f of fns) {
+        const next = cur ? `${cur},${f}` : f;
+        if (next.length > 14 && cur) { lines.push(`${cur},`); cur = f; } else cur = next;
       }
+      if (cur) lines.push(cur);
+      const w = Math.max(...lines.map(l => l.length * 7.5 * 0.6)) + 10;
+      const bh = lines.length * 9.5 + 7;
+      const by = y0 + HALF - bh / 2;
+      out.push(`<g ${symbolBlock('protection-relay', ix, y0)}>` +
+        line(ix, y0 + HALF, ix + 4, y0 + HALF, 1) +
+        `<rect x="${ix + 4}" y="${by}" width="${w}" height="${bh}" fill="#fff" stroke="#111" stroke-width="1"/>` +
+        lines.map((l, n) => `<text x="${ix + 4 + w / 2}" y="${by + 10 + n * 9.5}" font-size="7.5" text-anchor="middle" fill="#111">${esc(l)}</text>`).join('') +
+        '</g>');
+      rx = ix + 4 + w;
+      h = Math.max(CELL, bh + 12);
+      label(by);
     }
     const k = keyLine({ x: rx, y: y0 + HALF }, answers.relayAttachments ?? []);
     out.push(k.svg);
-    reach(Math.max(rx, k.right), y0 + h);
-    return y0 + h;
+    reach(Math.max(rx, k.right), Math.max(y0 + h, k.bottom));
+    return Math.max(y0 + h, k.bottom + 4);
   };
 
   const cores = ct ? coresOf(answers, Boolean(relay || efRelay), meters.length > 0) : [];
