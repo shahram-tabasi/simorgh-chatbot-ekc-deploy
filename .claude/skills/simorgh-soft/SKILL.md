@@ -309,6 +309,14 @@ line writes is checked in the editor too, not only in the preview. A white
 patch is paper there — a line that must not run under its text stops either
 side of it.
 
+**Crossings are bridged, never drawn through.** While an MV cell is drawn,
+`line`/`dashed`/`solidPath` record segments instead of writing them
+(`SEGS`); `writeSegs` then gives every horizontal line a hop over each
+vertical it crosses. A line that ends on another is a junction with a dot, not
+a crossing. Anything new drawn in a cell goes through those three helpers, or
+its crossings go unbridged. Lines in an instrument column run point to point
+(`stack`'s `enter`/`cursor`) and stop at a device with no way out.
+
 **A template's graphic opens in a tab of its own**
 (`?view=template-graphic&projectId&templateId`, `TemplateGraphicPage`). It
 holds no project: the project's tab announces templates, symbols and edits

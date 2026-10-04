@@ -1048,9 +1048,54 @@ const branchHeight = (b: Branch) => layoutBranch(b, 0).bottom;
 const SHUNT_DX = 56;
 const INSTR_DX = 120;
 
-const line = (x1: number, y1: number, x2: number, y2: number, w = 1.3, dash = '') =>
+/**
+ * While an MV cell is drawn, every connecting line is recorded rather than
+ * written, so that once the whole cell is laid out the crossings can be found
+ * and each horizontal line bridged over the vertical it crosses — the
+ * drafting convention for two wires that cross without joining. A junction
+ * (a line ending on another) is not a crossing and gets its dot as before.
+ */
+interface Seg { x1: number; y1: number; x2: number; y2: number; w: number; dash: string }
+let SEGS: Seg[] | null = null;
+
+const rawLine = (x1: number, y1: number, x2: number, y2: number, w: number, dash: string) =>
   `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#111" stroke-width="${w}"${
     dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
+
+const line = (x1: number, y1: number, x2: number, y2: number, w = 1.3, dash = ''): string => {
+  if (!SEGS) return rawLine(x1, y1, x2, y2, w, dash);
+  SEGS.push({ x1, y1, x2, y2, w, dash });
+  return `<!--seg:${SEGS.length - 1}-->`;
+};
+
+/** The recorded lines written out, each horizontal one bridging the
+ *  verticals it crosses. */
+function writeSegs(svg: string, segs: Seg[]): string {
+  const HOP = 3.2;
+  const verticals = segs.filter(v => v.x1 === v.x2 && v.y1 !== v.y2);
+  const render = (sg: Seg): string => {
+    if (sg.y1 !== sg.y2 || sg.x1 === sg.x2) return rawLine(sg.x1, sg.y1, sg.x2, sg.y2, sg.w, sg.dash);
+    const y = sg.y1;
+    const a = Math.min(sg.x1, sg.x2);
+    const b = Math.max(sg.x1, sg.x2);
+    const hops = [...new Set(verticals
+      .filter(v => v.x1 > a + HOP + 0.5 && v.x1 < b - HOP - 0.5
+        && Math.min(v.y1, v.y2) < y - 1 && Math.max(v.y1, v.y2) > y + 1)
+      .map(v => v.x1))].sort((p, q) => p - q);
+    if (hops.length === 0) return rawLine(sg.x1, sg.y1, sg.x2, sg.y2, sg.w, sg.dash);
+    let d = `M ${a} ${y}`;
+    let last = a - HOP * 3;
+    for (const hx of hops) {
+      if (hx - last < HOP * 2.2) continue;
+      d += ` L ${hx - HOP} ${y} A ${HOP} ${HOP} 0 0 1 ${hx + HOP} ${y}`;
+      last = hx;
+    }
+    d += ` L ${b} ${y}`;
+    return `<path d="${d}" fill="none" stroke="#111" stroke-width="${sg.w}"${
+      sg.dash ? ` stroke-dasharray="${sg.dash}"` : ''}/>`;
+  };
+  return svg.replace(/<!--seg:(\d+)-->/g, (_, k) => render(segs[Number(k)]));
+}
 
 /** The earth under a shunt. */
 const earth = (x: number, y: number) => [
@@ -1486,11 +1531,13 @@ function pinDirOf(id: SymbolId, name: string): string | undefined {
 }
 const isUpright = (dir?: string) => dir === 'up' || dir === 'down';
 
-const dashed = (pts: Pt[], w = 1) =>
-  `<polyline points="${pts.map(p => `${p.x},${p.y}`).join(' ')}" fill="none" stroke="#111" ` +
-  `stroke-width="${w}" stroke-dasharray="4 3"/>`;
-const solidPath = (pts: Pt[], w = 1.1) =>
-  `<polyline points="${pts.map(p => `${p.x},${p.y}`).join(' ')}" fill="none" stroke="#111" stroke-width="${w}"/>`;
+const dashed = (pts: Pt[], w = 1) => (SEGS
+  ? pts.slice(1).map((p, i) => line(pts[i].x, pts[i].y, p.x, p.y, w, '4 3')).join('')
+  : `<polyline points="${pts.map(p => `${p.x},${p.y}`).join(' ')}" fill="none" stroke="#111" ` +
+    `stroke-width="${w}" stroke-dasharray="4 3"/>`);
+const solidPath = (pts: Pt[], w = 1.1) => (SEGS
+  ? pts.slice(1).map((p, i) => line(pts[i].x, pts[i].y, p.x, p.y, w)).join('')
+  : `<polyline points="${pts.map(p => `${p.x},${p.y}`).join(' ')}" fill="none" stroke="#111" stroke-width="${w}"/>`);
 const node = (p: Pt) => `<circle cx="${p.x}" cy="${p.y}" r="2.2" fill="#111"/>`;
 const arrowRight = (x: number, y: number) =>
   `<path d="M ${x - 7} ${y - 3.5} L ${x} ${y} L ${x - 7} ${y + 3.5} Z" fill="#111"/>`;
@@ -1611,6 +1658,20 @@ export const MV_CELL = {
  * can size the column round it.
  */
 function drawMvCell(
+  chain: ChainItem[], opts: MvCellOptions, x: number, top: number, floorAt?: number,
+): { svg: string; bottom: number; reachBottom: number; left: number; right: number } {
+  const prev = SEGS;
+  const segs: Seg[] = [];
+  SEGS = segs;
+  try {
+    const drawn = drawMvCellLines(chain, opts, x, top, floorAt);
+    return { ...drawn, svg: writeSegs(drawn.svg, segs) };
+  } finally {
+    SEGS = prev;
+  }
+}
+
+function drawMvCellLines(
   chain: ChainItem[], opts: MvCellOptions, x: number, top: number,
   /** The foot of the cell — level with the arrow its line ends in — where
    *  every signal line (serial link, status, interlock) is run down to. */
@@ -2037,7 +2098,7 @@ function drawMvCell(
   let meterTop = -1;
   /** Where a core can come up into the relay from below, and how far right
    *  it and what hangs on it reach. */
-  let relayBox = { cx: 0, bottom: 0, right: 0, reach: 0 };
+  let relayBox = { cx: 0, bottom: 0, right: 0, reach: 0, left: 0 };
 
   /** A column of instruments hanging on one line at `ix`, from `y0`. */
   /** A device's serial link and status signals, as its window gives them. */
@@ -2070,17 +2131,26 @@ function drawMvCell(
   };
 
   /** A column of instruments hanging on one line at `ix`, from `y0`. */
-  const stack = (items: ChainItem[], y0: number): number => {
+  /**
+   * A column of instruments hanging on one line at `colX`, from `y0`.
+   * `enter` is where the line feeding them reaches the column, when it does.
+   * The line runs from one device's point to the next — into a side-fed one
+   * by a tap, into a top-fed one at its 1 and on from its 2 — and stops at the
+   * last point it has to reach: never run on through a device that has no
+   * way out at the bottom.
+   */
+  const stack = (items: ChainItem[], y0: number, colX = ix, enter?: number): number => {
     if (items.length === 0) return y0;
+    let cursor: number | null = enter ?? null;
+    const lineTo = (to: number) => {
+      if (cursor != null && to > cursor + 0.5) out.push(line(colX, cursor, colX, to));
+    };
     // Each one as tall as its label needs, so a long SIM-TABLE never runs
     // into the next instrument's — and room under it for its signals.
     const step = (item: ChainItem) =>
       Math.max(CELL, 17 + labelLineCount(item, MV_LABEL.wrap) * MV_LABEL.size * 1.15)
       + Math.max(0, signalsOf(item).length) * 6;
     let yy = y0;
-    let busEnd = y0;
-    // The line starts at the first meter's own point, not above it.
-    let busStart: number | null = null;
     items.forEach(item => {
       let rightEdge: number;
       let tx: number;
@@ -2092,21 +2162,27 @@ function drawMvCell(
         const t1 = o1?.terminals?.find(t => t.name === '1') ?? o1?.terminals?.[0];
         const goesRight = pinDirOf(dk(item), '1') === 'right'
           || (!t1?.dir && !!t1 && t1.x >= (o1?.width ?? 1) * 0.7);
-        const px = goesRight ? ix - 16 : ix + 16;
+        const px = goesRight ? colX - 16 : colX + 16;
         const mx = px - off.x;
         const my = yy + HALF - off.y;
-        out.push(line(ix, yy + HALF, px, yy + HALF, 1.1), node({ x: ix, y: yy + HALF }));
+        lineTo(yy + HALF);
+        cursor = yy + HALF;
+        out.push(line(colX, yy + HALF, px, yy + HALF, 1.1), node({ x: colX, y: yy + HALF }));
         out.push(drawDevice(item, mx, my));
         rightEdge = mx + symbolRight(dk(item));
         tx = rightEdge + 6;
-        busEnd = yy + HALF;
-        if (busStart == null) busStart = yy + HALF;
       } else {
-        out.push(drawDevice(item, ix, yy));
-        rightEdge = ix + symbolRight(dk(item));
-        tx = ix + Math.max(34, labelOffset(item));
-        busEnd = yy + CELL;
-        if (busStart == null) busStart = yy;
+        const p1 = pinOf(dk(item), colX, yy, '1');
+        if (cursor == null) cursor = p1.y;
+        lineTo(p1.y);
+        out.push(drawDevice(item, colX, yy));
+        // On from its 2 when it has one; a device with no way out at the
+        // bottom ends the line.
+        const o = symbolOverride(dk(item));
+        const has2 = !(o?.art && o.terminals?.length) || o.terminals.some(t => t.name === '2');
+        cursor = has2 ? pinOf(dk(item), colX, yy, '2').y : null;
+        rightEdge = colX + symbolRight(dk(item));
+        tx = colX + Math.max(34, labelOffset(item));
       }
       out.push(simLabel(item, tx, yy + 17, 'start', MV_LABEL.size, MV_LABEL.wrap));
       reach(tx + labelWidth(item, MV_LABEL.size, MV_LABEL.wrap), yy + step(item));
@@ -2117,14 +2193,13 @@ function drawMvCell(
       });
       yy += step(item);
     });
-    if (busEnd > (busStart ?? y0)) out.push(line(ix, busStart ?? y0, ix, busEnd));
     return yy;
   };
 
   const drawRelay = (item: ChainItem, y0: number): number => {
     relayAt = y0;
     relayBox = { cx: ix + 4 + Math.max(16, symbolRight(dk(item)) / 2), bottom: y0 + CELL - 8,
-      right: ix + symbolRight(dk(item)), reach: ix + symbolRight(dk(item)) };
+      right: ix + symbolRight(dk(item)), reach: ix + symbolRight(dk(item)), left: ix + 5 };
     // Written above the relay's box, whatever height the box comes out.
     // A label of several lines climbs up from the box rather than into it.
     const label = (top_: number) => {
@@ -2163,7 +2238,7 @@ function drawMvCell(
       rx = ix + 4 + w;
       h = Math.max(CELL, bh + 12);
       label(by);
-      relayBox = { cx: ix + 4 + w / 2, bottom: by + bh, right: ix + 4 + w, reach: ix + 4 + w };
+      relayBox = { cx: ix + 4 + w / 2, bottom: by + bh, right: ix + 4 + w, reach: ix + 4 + w, left: ix + 4 };
     } else {
       // EK36's sheets: the functions written in the relay's own box, run
       // together the way the office writes them — "50,50N,51,51N," — and
@@ -2186,7 +2261,7 @@ function drawMvCell(
       rx = ix + 4 + w;
       h = Math.max(CELL, bh + 12);
       label(by);
-      relayBox = { cx: ix + 4 + w / 2, bottom: by + bh, right: ix + 4 + w, reach: ix + 4 + w };
+      relayBox = { cx: ix + 4 + w / 2, bottom: by + bh, right: ix + 4 + w, reach: ix + 4 + w, left: ix + 4 };
     }
     const k = keyLine({ x: rx, y: y0 + HALF }, answers.relayAttachments ?? []);
     out.push(k.svg);
@@ -2247,7 +2322,7 @@ function drawMvCell(
           const top_ = side ? Math.max(ty, start.y - HALF) : ty;
           landY = side ? top_ + HALF : top_;
           meterTop = side ? top_ + HALF : top_;
-          next = stack(meters, top_) + 8;
+          next = stack(meters, top_, ix, landY) + 8;
           out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
         } else {
           // No meter on the cell to take it: a short arrow straight out of
@@ -2352,6 +2427,9 @@ function drawMvCell(
   // as an arrow with its text — and with nothing on the cell to take a core,
   // an arrow saying what it is for.
   const moreCts = series.filter(i => i.id === 'current-transformer' && i !== ct);
+  // The lowest core run across to the secondary side: what hangs under the
+  // relay starts below it, so no core runs through a device.
+  let lowestCore = -Infinity;
   moreCts.forEach((other, j) => {
     const oy = ys.get(other);
     if (oy == null) return;
@@ -2367,7 +2445,16 @@ function drawMvCell(
         out.push(`<text x="${tip + 4}" y="${start.y + 3}" font-size="7.5" fill="#111">${esc(say)}</text>`);
         reach(tip + 4 + say.length * 7.5 * 0.62, start.y);
       };
-      if (core.purpose === 'protection' && relayAt >= 0) {
+      lowestCore = Math.max(lowestCore, start.y);
+      if (core.purpose === 'protection' && relayAt >= 0 && (others.length || meters.length)) {
+        // Something hangs under the relay: in from its side instead, on a
+        // lane of its own left of the instruments.
+        const lane = ix - 24 - (j * 2 + k) * 6;
+        const ly = relayAt + HALF + 6 + (j * 2 + k) * 4;
+        out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: ly }, { x: ix, y: ly }]),
+          node({ x: ix, y: ly }));
+        out.push(line(ix, ly, relayBox.left, ly, 1));
+      } else if (core.purpose === 'protection' && relayAt >= 0) {
         const lane = relayBox.cx - 10 - (j * 2 + k) * 8;
         out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: relayBox.bottom }]),
           node({ x: lane, y: relayBox.bottom }));
@@ -2387,7 +2474,7 @@ function drawMvCell(
     const vt = socketVt ?? loadVt ?? series.find(i => i.id === 'voltage-transformer');
     const vy = vt ? ys.get(vt) : undefined;
     const start = ty;
-    ty = stack(volts, ty) + 8;
+    ty = stack(volts, ty, ix, ty) + 8;
     if (vt && vy != null) {
       const fromX = vt === socketVt ? sx + 28 : x + 28;
       const fromY = vt === socketVt ? vy + CELL + 10 + HALF + 5 : vy + HALF + 5;
@@ -2399,11 +2486,20 @@ function drawMvCell(
   // Everything else — the alarm window, lamps, the LCS — on the relay's
   // control line, or the switch's when there is no relay.
   if (others.length) {
-    const start = ty;
-    ty = stack(others, ty) + 8;
-    const fromY = relayAt >= 0 ? relayAt + CELL : (switchY >= 0 ? switchY + HALF : top);
-    if (relayAt >= 0) out.push(dashed([{ x: ix, y: fromY }, { x: ix, y: start }]));
-    else out.push(dashed([{ x: x + 8, y: fromY }, { x: ix - 10, y: fromY }, { x: ix - 10, y: start }, { x: ix, y: start }]));
+    const start = Math.max(ty, lowestCore + 14);
+    if (relayAt >= 0) {
+      // Wired into the relay's own box: straight down out of its bottom, the
+      // alarm window hung on that line under whatever already hangs there.
+      // The line keeps clear of the CTs' cores coming up into the box's
+      // middle and the signals leaving its right.
+      const colX = relayBox.left + 6;
+      out.push(line(colX, relayBox.bottom, colX, start, 1.1));
+      ty = stack(others, start, colX, start) + 8;
+    } else {
+      ty = stack(others, ty, ix, ty) + 8;
+      const fromY = switchY >= 0 ? switchY + HALF : top;
+      out.push(dashed([{ x: x + 8, y: fromY }, { x: ix - 10, y: fromY }, { x: ix - 10, y: start }, { x: ix, y: start }]));
+    }
   }
   reach(ix, ty);
 
