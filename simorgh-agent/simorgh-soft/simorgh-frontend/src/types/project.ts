@@ -463,6 +463,8 @@ export interface PartSingleLine {
   /** Status signals out of a relay or a breaker — each a dashed line down to
    *  the foot of the cell with its text along it. */
   statuses?: string[];
+  /** A CT's cores, top to bottom, and what each one feeds. */
+  cores?: CtCore[];
 }
 
 /** What one core of a CT is for. */

@@ -6,6 +6,7 @@ import { downloadText, fileSafe } from '../utils/download';
 import { type Tier, TIERS, emptyTiers, withAllTiers } from '../utils/tiers';
 import { mergeProjects, contentKey } from '../utils/projectMerge';
 import { TEMPLATES_CHANNEL } from '../components/TemplateCreation/TemplatesOverview';
+import { TEMPLATE_GRAPHIC_CHANNEL } from '../utils/templateGraphicChannel';
 import { lockService, lockKey, holderId, type LockKind, type LockInfo } from '../services/lockService';
 
 interface ProjectContextType {
@@ -408,6 +409,33 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
   React.useEffect(() => { announceTemplates(); },
     [projectData.templates, projectData.projectName, projectId, announceTemplates]);
 
+  // A template's graphic open in a tab of its own (TemplateGraphicPage)
+  // follows the templates, the project's own symbols and the kept drawing
+  // edits; and its Save comes back here, through the same gate as any edit.
+  const graphicChannel = React.useRef<BroadcastChannel | null>(null);
+  const editableRef = React.useRef(false);
+  const announceGraphic = React.useCallback(() => {
+    const p = projectDataRef.current;
+    graphicChannel.current?.postMessage({
+      type: 'state', projectId: projectIdRef.current ?? 'unsaved',
+      templates: p.templates, symbolOverrides: p.symbolOverrides,
+      drawingEdits: p.drawingEdits, editable: editableRef.current,
+    });
+  }, []);
+  const patchRef = React.useRef<(edits: any) => void>(() => {});
+  React.useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return;
+    const channel = new BroadcastChannel(TEMPLATE_GRAPHIC_CHANNEL);
+    graphicChannel.current = channel;
+    channel.onmessage = e => {
+      const m = e.data;
+      if (m?.projectId !== (projectIdRef.current ?? 'unsaved')) return;
+      if (m.type === 'hello') announceGraphic();
+      else if (m.type === 'save' && m.edits) patchRef.current(m.edits);
+    };
+    return () => { channel.close(); graphicChannel.current = null; };
+  }, [announceGraphic]);
+
   const notifyRevisionLocked = () => {
     setRevisionLockNotice(
       isTpmsMastered
@@ -483,6 +511,12 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       changedOn: new Date().toISOString()
     }));
   };
+  // The graphic tab's Save, and what it is told it may do.
+  patchRef.current = (edits: ProjectData['drawingEdits']) => patchProjectData(() => ({ drawingEdits: edits }));
+  editableRef.current = isCurrentRevisionEditable && !isTpmsMastered;
+  React.useEffect(() => { announceGraphic(); },
+    [projectData.templates, projectData.symbolOverrides, projectData.drawingEdits, projectId,
+      isCurrentRevisionEditable, isTpmsMastered, announceGraphic]);
 
   /** Hand a version back as a file, so whichever one loses is still kept. */
   const keepACopy = (project: ProjectData, whose: string) => {

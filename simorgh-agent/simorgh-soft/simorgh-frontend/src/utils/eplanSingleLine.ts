@@ -49,6 +49,17 @@ const SLOT_LETTER: Record<string, string> = {
 
 const text = (v: any) => (v == null ? '' : String(v).trim());
 
+// The letter a device takes when its part carries none and its row is not
+// one of the standard ones — a renamed spare: "magnet" is MB, not A.
+const KIND_LETTER: Partial<Record<string, string>> = {
+  magnet: 'MB', 'earthing-switch': 'QC', 'capacitive-divider': 'PV', 'surge-arrester': 'FA',
+  'surge-limiter': 'FA', 'test-block': 'XD', 'current-transformer': 'B', 'core-balance-ct': 'B',
+  'voltage-transformer': 'T', 'protection-relay': 'F', 'earth-fault-relay': 'F',
+  'mechanical-interlock': 'M.I', 'key-interlock': 'KI', vcb: 'Q', 'vacuum-contactor-fuse': 'Q',
+  'circuit-breaker': 'Q', disconnector: 'Q', ammeter: 'P', voltmeter: 'P', multimeter: 'P',
+  'kwh-meter': 'P', transducer: 'P', 'alarm-annunciator': 'H', lamp: 'H', 'hrc-fuse': 'F',
+};
+
 const propertyOrder = (tier: Tier) =>
   LAYOUT_OF[tier] === 'MV' ? MV_TEMPLATE_PROPERTIES : LV_TEMPLATE_PROPERTIES;
 
@@ -379,6 +390,8 @@ export function symbolForPart(
   slot: string,
   symbols?: EplanSymbolMap,
   tier?: Tier,
+  /** The row's own name when it was renamed in the template. */
+  rowName?: string,
 ): { id: SymbolId; from: SymbolSource; eplan?: EplanSymbolInfo } {
   const eplan = lookupSymbol(part, symbols);
   const chosen = String(part?.symbolId ?? '').trim();
@@ -388,6 +401,12 @@ export function symbolForPart(
 
   const mv = Boolean(tier && LAYOUT_OF[tier] === 'MV');
   if (mv && MV_ROW_IS[slot]) return { id: MV_ROW_IS[slot], from: 'slot', eplan };
+  // A row renamed for what it holds — "magnet", "Earth switch", "multimeter".
+  const named = String(rowName ?? '').trim();
+  if (mv && named && named.toUpperCase() !== slot.toUpperCase()) {
+    const byRow = MV_ROW_IS[named.toUpperCase()] ?? kindFromFunction(named);
+    if (byRow) return { id: byRow, from: 'slot', eplan };
+  }
   if (mv) {
     const byLabel = mvFromLabel(stripLocaleTags(part?.label), partDescription(part));
     if (byLabel) return { id: byLabel, from: 'description', eplan };
@@ -452,6 +471,8 @@ interface ChainItem {
   serialText?: string;
   /** Status signals out of a relay or a breaker. */
   statuses?: string[];
+  /** A CT's cores, top to bottom, as its window or its SIM-TABLE says. */
+  cores?: CtCore[];
   eplan?: EplanSymbolInfo;
 }
 
@@ -489,6 +510,9 @@ function chainOfTemplate(
 
   const counters: Record<string, number> = {};
   const out: ChainItem[] = [];
+  // A row renamed in the template ("magnet", "Earth switch") says what its
+  // parts are as plainly as the office's standard rows do.
+  const rowNames: Record<string, string> = (template?.properties as any)?.__displayNames ?? {};
 
   for (const slot of slots) {
     const inSlot = parts[slot];
@@ -509,8 +533,8 @@ function chainOfTemplate(
         return;
       }
 
-      const { id, eplan, from } = symbolForPart(part, slot, symbols, tier);
-      const label = stripLocaleTags(part?.label) || SLOT_LETTER[slot] || 'A';
+      const { id, eplan, from } = symbolForPart(part, slot, symbols, tier, rowNames[slot]);
+      const label = stripLocaleTags(part?.label) || SLOT_LETTER[slot] || KIND_LETTER[id] || 'A';
       counters[label] = (counters[label] ?? 0) + 1;
       const tag = `-${label}${page}${counters[label] > 1 ? `.${counters[label]}` : ''}`;
 
@@ -552,6 +576,7 @@ function chainOfTemplate(
         serialLink: sld.serialLink,
         serialText: sld.serialText,
         statuses: sld.statuses,
+        cores: sld.cores,
       };
       out.push(item);
       host = item;
@@ -1051,7 +1076,12 @@ function labelLines(text_: string, wrap: number): string[] {
     const comma = k < pieces.length - 1 ? ',' : '';
     // A word longer than the line — an order code — breaks after a dash.
     const words = `${piece}${comma}`.split(/\s+/).filter(Boolean)
-      .flatMap(w => (w.length > wrap ? w.split(/(?<=-)/) : [w]));
+      .flatMap(w => (w.length > wrap ? w.split(/(?<=-)/) : [w]))
+      // A colon on its own belongs to the word before it: "Transformer :".
+      .reduce<string[]>((acc, w) => {
+        if (w === ':' && acc.length) acc[acc.length - 1] += ' :'; else acc.push(w);
+        return acc;
+      }, []);
     let chunk = '';
     const chunks: string[] = [];
     for (const w of words) {
@@ -1065,9 +1095,12 @@ function labelLines(text_: string, wrap: number): string[] {
     }
   });
   if (cur) lines.push(cur);
-  // Never leave "Q :" alone on a line: the label stays with what it labels.
+  // Never leave a short label — "Q :" — alone on a line: it stays with what
+  // it labels. A long one ("MV Current Transformer :") may end its line.
   for (let k = 0; k < lines.length - 1; k++) {
-    if (/:\s*$/.test(lines[k])) { lines.splice(k, 2, `${lines[k]} ${lines[k + 1]}`); k--; }
+    if (/:\s*$/.test(lines[k]) && lines[k].length <= 6) {
+      lines.splice(k, 2, `${lines[k]} ${lines[k + 1]}`);
+    }
   }
   return lines;
 }
@@ -1503,9 +1536,30 @@ function keyLine(from: Pt, attachments: DeviceAttachment[], upstream?: string): 
   return { svg: out.join(''), right, bottom };
 }
 
-/** The cores a CT is drawn with: the ones answered, or what the parts imply. */
-function coresOf(answers: TemplateSingleLine | undefined, hasRelay: boolean, hasMeters: boolean): CtCore[] {
+/**
+ * What a CT's own SIM-TABLE says its cores are for, top to bottom:
+ * "Core 1: 400-200/1A, CL.5P20, 30VA, Core 2: 400-200/1A, CL.0.2FS5, 15VA"
+ * is a protection core (5P20, 10P10, PX, TPS) and a measuring one (0.2, 0.5,
+ * 1, FS). Nothing to go on is no cores — the cell's own answer, or the
+ * parts, then decide.
+ */
+export function coresFromText(text_: string): CtCore[] {
+  const pieces = String(text_ ?? '').split(/core\s*\d+\s*[:=-]/i).slice(1);
+  return pieces.map(piece => (
+    /\b\d+\s*P\s*\d+|\bP\s*X\b|\bTP[SXYZ]\b|protect/i.test(piece)
+      ? { purpose: 'protection' as const }
+      : { purpose: 'measurement' as const }));
+}
+
+/** The cores a CT is drawn with: its own window's, the cell's answer, what
+ *  its SIM-TABLE says, or what the parts imply. */
+function coresOf(
+  answers: TemplateSingleLine | undefined, hasRelay: boolean, hasMeters: boolean, ct?: ChainItem,
+): CtCore[] {
+  if (ct?.cores?.length) return ct.cores;
   if (answers?.ctCores?.length) return answers.ctCores;
+  const read = ct ? (coresFromText(ct.simTable).length ? coresFromText(ct.simTable) : coresFromText(ct.code)) : [];
+  if (read.length) return read;
   const cores: CtCore[] = [];
   if (hasRelay) cores.push({ purpose: 'protection' });
   if (hasMeters) cores.push({ purpose: 'measurement' });
@@ -1521,7 +1575,7 @@ const MV_LABEL = { size: 9, wrap: 26 };
 
 export const MV_CELL = {
   /** The earth switch and the magnet stand this far left of the line. */
-  shuntDx: 120,
+  shuntDx: 140,
   /** The magnet stands this far left of them. */
   magnetDx: 42,
   /** The CT's cores run down lanes starting this far right of the line. */
@@ -1685,7 +1739,7 @@ function drawMvCell(
       if (st.role === 'ct') ctY = y;
       y += Math.max(stepFor(st.item), st.role === 'switch' ? CELL + 10 : 0,
         // A long label is broken onto lines; the device keeps room for them.
-        12 + labelLineCount(st.item, MV_LABEL.wrap) * MV_LABEL.size * 1.15 + 8,
+        12 + labelLineCount(st.item, st.role ? 22 : MV_LABEL.wrap) * MV_LABEL.size * 1.15 + 8,
         // Room for what hangs beside the switch, stacked down from its middle.
         st.role === 'switch' ? switchHang(st.item) : 0);
     } else if (st.kind === 'earth') {
@@ -1730,12 +1784,17 @@ function drawMvCell(
     const end = Math.max(floor, ...signals.map(sg => sg.fromY + textLen(sg.name) + 24));
     for (const { x: sx_, fromY, name } of signals) {
       const tw = textLen(name);
-      out.push(dashed([{ x: sx_, y: fromY }, { x: sx_, y: end }]), arrowDown(sx_, end));
+      const mid = (fromY + end) / 2;
+      // The line stops either side of its text rather than running under a
+      // white patch: the patch is paper, and is not there once the graphic
+      // is opened in the editor or sent out as DXF.
       if (name) {
-        const mid = (fromY + end) / 2;
+        out.push(dashed([{ x: sx_, y: fromY }, { x: sx_, y: mid - tw / 2 - 3 }]));
+        out.push(dashed([{ x: sx_, y: mid + tw / 2 + 3 }, { x: sx_, y: end }]), arrowDown(sx_, end));
         out.push(`<g transform="rotate(-90 ${sx_} ${mid})">` +
-          `<rect x="${sx_ - tw / 2 - 3}" y="${mid - 5.5}" width="${tw + 6}" height="10" fill="#fff"/>` +
           `<text x="${sx_}" y="${mid + 2.8}" font-size="7.5" text-anchor="middle" fill="#111">${esc(name)}</text></g>`);
+      } else {
+        out.push(dashed([{ x: sx_, y: fromY }, { x: sx_, y: end }]), arrowDown(sx_, end));
       }
       reach(sx_ - 6, end);
       reach(sx_ + 6, end);
@@ -1779,10 +1838,13 @@ function drawMvCell(
         // has several lines, so its accessories' SIM-TABLE stays clear of the
         // operating mechanism drawn on its left.
         const lx = x - symbolLeft(st.item.id) - 6;
+        // Broken shorter than the rest: the interlock's dashed line runs down
+        // the left, and a long CT specification would reach it.
+        const wrap = 22;
         const climb = st.role === 'switch'
-          ? Math.min(labelLineCount(st.item, MV_LABEL.wrap) - 1, 2) * MV_LABEL.size * 1.15 : 0;
-        out.push(simLabel(st.item, lx, sy + 12 - climb, 'end', MV_LABEL.size, MV_LABEL.wrap));
-        reach(lx - labelWidth(st.item, MV_LABEL.size, MV_LABEL.wrap), sy);
+          ? Math.min(labelLineCount(st.item, wrap) - 1, 2) * MV_LABEL.size * 1.15 : 0;
+        out.push(simLabel(st.item, lx, sy + 12 - climb, 'end', MV_LABEL.size, wrap));
+        reach(lx - labelWidth(st.item, MV_LABEL.size, wrap), sy);
         continue;
       }
       out.push(simLabel(st.item, labelX, sy + TEXT.top, 'start', MV_LABEL.size, MV_LABEL.wrap));
@@ -1954,23 +2016,70 @@ function drawMvCell(
   let relayBox = { cx: 0, bottom: 0, right: 0, reach: 0 };
 
   /** A column of instruments hanging on one line at `ix`, from `y0`. */
+  /** A device's serial link and status signals, as its window gives them. */
+  const signalsOf = (item: ChainItem): string[] => [
+    ...(item.serialLink ? [String(item.serialText ?? '').trim() || 'SERIAL LINK'] : []),
+    ...(item.statuses ?? []).map(t => t.trim()).filter(Boolean),
+  ];
+  /**
+   * The relay's and the meters' signals, collected and laid out together
+   * once everything on the secondary side is drawn: each one leaves its
+   * device, runs across to a lane of its own out to the right of everything,
+   * and down to the foot of the cell. A signal that leaves higher up takes a
+   * lane further out, so none crosses another on its way.
+   */
+  const instrSignals: { lead: Pt[]; y: number; text: string }[] = [];
+
+  /** A meter drawn with one connection point, out to its side — it hangs off
+   *  the core's line by that point rather than sitting in it. */
+  const singlePin = (id: SymbolId) => {
+    const o = symbolOverride(id);
+    if (!o?.art || !o.terminals?.length) return false;
+    return !o.terminals.some(t => t.name === '2');
+  };
+
+  /** A column of instruments hanging on one line at `ix`, from `y0`. */
   const stack = (items: ChainItem[], y0: number): number => {
     if (items.length === 0) return y0;
     // Each one as tall as its label needs, so a long SIM-TABLE never runs
-    // into the next instrument's.
+    // into the next instrument's — and room under it for its signals.
     const step = (item: ChainItem) =>
-      Math.max(CELL, 17 + labelLineCount(item, MV_LABEL.wrap) * MV_LABEL.size * 1.15);
-    const total = items.reduce((h, item) => h + step(item), 0);
-    out.push(line(ix, y0, ix, y0 + total));
+      Math.max(CELL, 17 + labelLineCount(item, MV_LABEL.wrap) * MV_LABEL.size * 1.15)
+      + Math.max(0, signalsOf(item).length) * 6;
     let yy = y0;
+    let busEnd = y0;
     items.forEach(item => {
-      out.push(drawDevice(item, ix, yy));
-      const tx = ix + Math.max(34, labelOffset(item));
+      let rightEdge: number;
+      let tx: number;
+      if (singlePin(item.id)) {
+        // Tapped off the line at its one point.
+        const off = pinOf(item.id, 0, 0, '1');
+        const goesRight = pinDirOf(item.id, '1') === 'right';
+        const px = goesRight ? ix - 16 : ix + 16;
+        const mx = px - off.x;
+        const my = yy + HALF - off.y;
+        out.push(line(ix, yy + HALF, px, yy + HALF, 1.1), node({ x: ix, y: yy + HALF }));
+        out.push(drawDevice(item, mx, my));
+        rightEdge = mx + symbolRight(item.id);
+        tx = rightEdge + 6;
+        busEnd = yy + HALF;
+      } else {
+        out.push(drawDevice(item, ix, yy));
+        rightEdge = ix + symbolRight(item.id);
+        tx = ix + Math.max(34, labelOffset(item));
+        busEnd = yy + CELL;
+      }
       out.push(simLabel(item, tx, yy + 17, 'start', MV_LABEL.size, MV_LABEL.wrap));
       reach(tx + labelWidth(item, MV_LABEL.size, MV_LABEL.wrap), yy + step(item));
+      // Its signals leave under its label, one under the other.
+      signalsOf(item).forEach((t, k) => {
+        const sy = yy + step(item) - 6 - (signalsOf(item).length - 1 - k) * 6;
+        instrSignals.push({ lead: [{ x: rightEdge, y: sy }], y: sy, text: t });
+      });
       yy += step(item);
     });
-    return y0 + total;
+    out.push(line(ix, y0, ix, busEnd));
+    return yy;
   };
 
   const drawRelay = (item: ChainItem, y0: number): number => {
@@ -2050,28 +2159,19 @@ function drawMvCell(
     // runs down to the foot of the cell with its text along it. The first
     // goes furthest out and the later ones turn lower and nearer in, so no
     // two of them cross.
-    const signals = [
-      ...(item.serialLink ? [String(item.serialText ?? '').trim() || 'SERIAL LINK'] : []),
-      ...(item.statuses ?? []).map(t => t.trim()).filter(Boolean),
-    ];
-    if (signals.length) {
-      const n = signals.length;
-      const lanes = signals.map((_, k) => relayBox.reach + 16 + (n - 1 - k) * 16);
-      signals.forEach((t, k) => {
-        const sx_ = Math.max(relayBox.cx + 8, relayBox.right - 6 - k * 7);
-        const turn = relayBox.bottom + 6 + k * 6;
-        out.push(dashed([{ x: sx_, y: relayBox.bottom }, { x: sx_, y: turn }, { x: lanes[k], y: turn }]));
-        signalDown(lanes[k], turn, t);
-      });
-      relayBox.reach = lanes[0] + 8;
-    }
-    return Math.max(y0 + h, k.bottom + 4);
+    const signals = signalsOf(item);
+    signals.forEach((t, k) => {
+      const sx_ = Math.max(relayBox.cx + 8, relayBox.right - 6 - k * 7);
+      const turn = relayBox.bottom + 6 + k * 6;
+      instrSignals.push({ lead: [{ x: sx_, y: relayBox.bottom }, { x: sx_, y: turn }], y: turn, text: t });
+    });
+    return Math.max(y0 + h, k.bottom + 4 + signals.length * 6);
   };
 
   // A relay whose functions were answered is on the cell whether or not
   // its part is in the template yet.
   const cores = ct
-    ? coresOf(answers, Boolean(relay || answers.relayMode === 'functions'), meters.length > 0)
+    ? coresOf(answers, Boolean(relay || answers.relayMode === 'functions'), meters.length > 0, ct)
     : [];
   if (ct && cores.length) {
     // The cores leave the CT's secondary one under the other and part, each
@@ -2220,6 +2320,16 @@ function drawMvCell(
   }
   reach(ix, ty);
 
+  // The secondary side's signals, to lanes out past everything drawn.
+  if (instrSignals.length) {
+    const base = right + 16;
+    const order = [...instrSignals].sort((a, b) => a.y - b.y);
+    order.forEach((sg, i) => {
+      const lane = base + (order.length - 1 - i) * 16;
+      out.push(dashed([...sg.lead, { x: lane, y: sg.y }]));
+      signalDown(lane, sg.y, sg.text);
+    });
+  }
   drawSignals();
   return { svg: out.join('\n'), bottom, reachBottom: Math.max(reachBottom, bottom), left, right };
 }

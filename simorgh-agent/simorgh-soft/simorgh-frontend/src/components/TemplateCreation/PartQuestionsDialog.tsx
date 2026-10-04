@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { CheckIcon, XIcon, InfoIcon, PlusIcon, TrashIcon } from 'lucide-react';
-import { PartSingleLine } from '../../types/project';
+import { PartSingleLine, CtCore, CtCorePurpose } from '../../types/project';
 import { IEC_SYMBOLS, SYMBOL_GROUPS, SymbolId } from '../../utils/iecSymbols';
-import { breakLabel, symbolForPart } from '../../utils/eplanSingleLine';
+import { breakLabel, symbolForPart, coresFromText } from '../../utils/eplanSingleLine';
 import { partCode } from '../../utils/eplanDataExport';
 import { stripLocaleTags } from '../../utils/tierEquipmentMatrix';
 import { type Tier } from '../../utils/tiers';
@@ -39,6 +39,16 @@ interface Props {
 }
 
 const RELAYS: SymbolId[] = ['protection-relay', 'earth-fault-relay'];
+/** Measuring devices: they get a serial link and statuses too. */
+const METERS: SymbolId[] = [
+  'ammeter', 'voltmeter', 'multimeter', 'watt-meter', 'var-meter', 'power-factor-meter',
+  'frequency-meter', 'hour-meter', 'kwh-meter', 'kvarh-meter', 'transducer',
+];
+const CORE_PURPOSES: { id: CtCorePurpose; label: string }[] = [
+  { id: 'protection', label: 'Protection → relay' },
+  { id: 'measurement', label: 'Measuring → meters' },
+  { id: 'remark', label: 'Remark (arrow + text)' },
+];
 const SWITCHES: SymbolId[] = [
   'vcb', 'vcb-racking', 'withdrawable-cb', 'vacuum-contactor-fuse', 'circuit-breaker',
   'contactor', 'disconnector', 'switch-disconnector', 'mcb', 'motor-starter',
@@ -121,8 +131,8 @@ export const PartQuestionsDialog: React.FC<Props> = ({
   const [symbolId, setSymbolId] = useState<string>(String(part?.symbolId ?? ''));
 
   const auto = useMemo(
-    () => symbolForPart({ ...part, symbolId: undefined }, slot, undefined, tier).id,
-    [part, slot, tier]);
+    () => symbolForPart({ ...part, symbolId: undefined }, slot, undefined, tier, slotTitle).id,
+    [part, slot, tier, slotTitle]);
   const effective = (symbolId || auto) as SymbolId;
 
   const set = <K extends keyof PartSingleLine>(key: K, value: PartSingleLine[K] | undefined) =>
@@ -138,6 +148,11 @@ export const PartQuestionsDialog: React.FC<Props> = ({
   const [simTable, setSimTable] = useState<string>(partCode(part));
   const code = simTable.trim();
   const isSwitch = SWITCHES.includes(effective);
+  const isMeter = METERS.includes(effective);
+  const isCt = effective === 'current-transformer';
+  // A CT's cores: its window's own, else what its SIM-TABLE says.
+  const cores: CtCore[] = answers.cores ?? coresFromText(code);
+  const setCores = (next: CtCore[]) => set('cores', next.length ? next : undefined);
   const asksRole = index > 0;
   const isAccessory = asksRole ? answers.role !== 'main' : answers.role === 'accessory';
   const isRelay = RELAYS.includes(effective);
@@ -251,10 +266,46 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                 </Question>
               )}
 
-              {isRelay && (
+              {isCt && (
+                <Question n={++n} title="CT cores, top to bottom">
+                  <p className="w-full text-[11px] text-gray-500">
+                    {answers.cores
+                      ? 'Each core goes out of the CT in this order: protection into the relay, measuring into the meters.'
+                      : cores.length
+                        ? 'Read from its SIM-TABLE (5P/10P → protection, 0.2/0.5/FS → measuring). Change any of them here.'
+                        : 'Nothing in its SIM-TABLE says — add its cores.'}
+                  </p>
+                  <div className="w-full space-y-1.5">
+                    {cores.map((core, k) => (
+                      <div key={k} className="flex items-center gap-1.5">
+                        <span className="text-[11px] text-gray-500 w-12 shrink-0">Core {k + 1}</span>
+                        <select className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white shrink-0"
+                          value={core.purpose}
+                          onChange={e => setCores(cores.map((c, i) => (i === k ? { ...c, purpose: e.target.value as CtCorePurpose } : c)))}>
+                          {CORE_PURPOSES.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                        </select>
+                        {core.purpose === 'remark' && (
+                          <input className={input} value={core.text ?? ''} placeholder="Written at the arrow"
+                            onChange={e => setCores(cores.map((c, i) => (i === k ? { ...c, text: e.target.value } : c)))} />
+                        )}
+                        <button type="button" title="Remove this core" onClick={() => setCores(cores.filter((_, i) => i !== k))}
+                          className="ml-auto p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50">
+                          <TrashIcon className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    <button type="button" onClick={() => setCores([...cores, { purpose: 'measurement' }])}
+                      className="flex items-center gap-1 px-2 py-1 rounded border border-dashed border-gray-300 text-xs text-gray-600 hover:border-blue-400 hover:text-blue-700">
+                      <PlusIcon className="w-3.5 h-3.5" /> Add a core
+                    </button>
+                  </div>
+                </Question>
+              )}
+
+              {(isRelay || isMeter) && (
                 <Question n={++n} title="Serial link?">
                   <Choice on={answers.serialLink === true} title="Yes"
-                    note="A dashed line from the relay down to the foot of the cell, its text along it."
+                    note="A dashed line from the device down to the foot of the cell, its text along it."
                     onClick={() => set('serialLink', true)} />
                   <Choice on={answers.serialLink !== true} title="No"
                     onClick={() => { set('serialLink', undefined); set('serialText', undefined); }} />
@@ -265,17 +316,18 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                 </Question>
               )}
 
-              {(isRelay || isSwitch) && (
-                <Question n={++n} title={isRelay ? 'Status signals from the relay' : 'Status signals from the breaker'}>
+              {(isRelay || isSwitch || isMeter) && (
+                <Question n={++n} title={isRelay ? 'Status signals from the relay'
+                  : isMeter ? 'Status signals from the meter' : 'Status signals from the breaker'}>
                   <p className="w-full text-[11px] text-gray-500">
-                    {isRelay
-                      ? 'Each one a dashed line from the relay, beside the serial link, down to the foot of the cell with its text along it.'
+                    {isRelay || isMeter
+                      ? 'Each one a dashed line from the device, beside the serial link, down to the foot of the cell with its text along it.'
                       : 'Each one carries on the mechanical interlock’s dashed line and runs down to the foot of the cell with its text along it.'}
                   </p>
                   <StatusList
                     value={answers.statuses}
                     onChange={v => set('statuses', v)}
-                    hint={isRelay ? 'e.g. TRIP TO UPSTREAM' : 'e.g. CB OPEN/CLOSE TO DCS'}
+                    hint={isRelay ? 'e.g. TRIP TO UPSTREAM' : isMeter ? 'e.g. ALARM TO DCS' : 'e.g. CB OPEN/CLOSE TO DCS'}
                   />
                 </Question>
               )}

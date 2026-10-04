@@ -297,16 +297,37 @@ function readPath(d: Drawing, el: Element, m: Matrix, group?: BlockRef) {
 
 // ── Elements ────────────────────────────────────────────────────────────────
 
-function readElement(d: Drawing, el: Element, m: Matrix, parent?: BlockRef) {
+/**
+ * A `rotate(a cx cy)` on a group — the text written along a signal line is
+ * drawn that way. The matrix above holds only translate and scale, so the
+ * turn is carried down to the text it holds, which keeps a rotation of its
+ * own (`rot`, anticlockwise).
+ */
+interface Turn { a: number; cx: number; cy: number }
+function parseRotate(value: string | null): Turn | undefined {
+  const hit = /rotate\(\s*(-?[\d.]+)(?:[\s,]+(-?[\d.]+)[\s,]+(-?[\d.]+))?\s*\)/.exec(value ?? '');
+  if (!hit) return undefined;
+  return { a: Number(hit[1]), cx: Number(hit[2] ?? 0), cy: Number(hit[3] ?? 0) };
+}
+function turnPoint(t: Turn | undefined, x: number, y: number): Pt {
+  if (!t) return [x, y];
+  const r = (t.a * Math.PI) / 180;
+  const dx = x - t.cx, dy = y - t.cy;
+  return [t.cx + dx * Math.cos(r) - dy * Math.sin(r), t.cy + dx * Math.sin(r) + dy * Math.cos(r)];
+}
+
+function readElement(d: Drawing, el: Element, m: Matrix, parent?: BlockRef, turn?: Turn) {
   const here = compose(m, parseTransform(el.getAttribute('transform')));
   const tag = el.tagName.toLowerCase();
   const group = blockOf(el, parent);
 
   switch (tag) {
     case 'g':
-    case 'svg':
-      for (const child of Array.from(el.children)) readElement(d, child, here, group);
+    case 'svg': {
+      const t = parseRotate(el.getAttribute('transform')) ?? turn;
+      for (const child of Array.from(el.children)) readElement(d, child, here, group, t);
       return;
+    }
 
     case 'line': {
       const pen = inBlock(penOf(el, here), group);
@@ -348,23 +369,61 @@ function readElement(d: Drawing, el: Element, m: Matrix, parent?: BlockRef) {
       readPath(d, el, here, group);
       return;
 
+    // The single line's elbows — a CT core out to its lane, the interlock's
+    // dashed run, a signal to the foot of the cell — are polylines. Dropped,
+    // the graphic opened in the editor lost every connection that turns a
+    // corner.
+    case 'polyline':
+    case 'polygon': {
+      const nums = (el.getAttribute('points') ?? '').trim().split(/[\s,]+/).map(Number);
+      const pts: Pt[] = [];
+      for (let i = 0; i + 1 < nums.length; i += 2) {
+        if (Number.isFinite(nums[i]) && Number.isFinite(nums[i + 1])) pts.push(apply(here, nums[i], nums[i + 1]));
+      }
+      if (pts.length < 2) return;
+      const { widthRaw: _w, ...pen } = penOf(el, here);
+      d.poly(pts, { ...inBlock(pen, group), close: tag === 'polygon' });
+      return;
+    }
+
     case 'text': {
       const size = num(el.getAttribute('font-size'), 10) * scaleOf(here);
-      const [x, y] = apply(here, num(el.getAttribute('x')), num(el.getAttribute('y')));
       const anchor = el.getAttribute('text-anchor');
       const weight = el.getAttribute('font-weight');
       // A <title> child is the tooltip, not part of the line.
       const title = el.querySelector('title')?.textContent ?? undefined;
+      const isBold = (w: string | null) => w === '700' || w === '600' || w === 'bold';
+      const write = (lx: number, ly: number, shown: string, bold: boolean, withTitle: boolean) => {
+        const [tx, ty] = turnPoint(turn, lx, ly);
+        const [x, y] = apply(here, tx, ty);
+        d.text(x, y, shown, size, inBlock({
+          layer: layerFor(el, 'text', 0, false),
+          color: el.getAttribute('fill') ?? undefined,
+          anchor: anchor === 'middle' ? 'middle' : anchor === 'end' ? 'end' : 'start',
+          bold,
+          title: withTitle ? title : undefined,
+          ...(turn && turn.a ? { rot: -turn.a } : {}),
+        } as Parameters<Drawing['text']>[4], group));
+      };
+      const x0 = num(el.getAttribute('x')), y0 = num(el.getAttribute('y'));
+      // A label broken onto lines is one <tspan> a line, each stepped down by
+      // its `dy`. Read as one string they were run together, or — with no
+      // text of their own outside the tspans — dropped altogether.
+      const spans = Array.from(el.children).filter(c => c.tagName.toLowerCase() === 'tspan');
+      if (spans.length) {
+        let ly = y0;
+        spans.forEach((span, k) => {
+          ly += num(span.getAttribute('dy'), 0);
+          const lx = span.getAttribute('x') != null ? num(span.getAttribute('x')) : x0;
+          const shown = (span.textContent ?? '').trim();
+          if (shown) write(lx, ly, shown, isBold(span.getAttribute('font-weight') ?? weight), k === 0);
+        });
+        return;
+      }
       const shown = Array.from(el.childNodes)
         .filter(node => node.nodeType === 3)
         .map(node => node.textContent ?? '').join('').trim();
-      d.text(x, y, shown, size, inBlock({
-        layer: layerFor(el, 'text', 0, false),
-        color: el.getAttribute('fill') ?? undefined,
-        anchor: anchor === 'middle' ? 'middle' : anchor === 'end' ? 'end' : 'start',
-        bold: weight === '700' || weight === '600' || weight === 'bold',
-        title,
-      }, group));
+      write(x0, y0, shown, isBold(weight), true);
       return;
     }
 
@@ -381,7 +440,7 @@ function readElement(d: Drawing, el: Element, m: Matrix, parent?: BlockRef) {
     }
 
     default:
-      for (const child of Array.from(el.children)) readElement(d, child, here, group);
+      for (const child of Array.from(el.children)) readElement(d, child, here, group, turn);
   }
 }
 

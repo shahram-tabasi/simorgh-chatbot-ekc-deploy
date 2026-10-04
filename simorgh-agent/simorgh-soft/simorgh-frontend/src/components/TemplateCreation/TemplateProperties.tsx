@@ -726,6 +726,14 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     setSelectedPart({ ...ref, part: parts[ref.index] });
   };
 
+  /** The template's graphic, large and editable, in a browser tab of its own. */
+  const openGraphicInTab = () => {
+    const url = new URL(window.location.href);
+    url.search = `?view=template-graphic&projectId=${encodeURIComponent((projectData as any)._id || 'unsaved')}`
+      + `&templateId=${encodeURIComponent(template.id)}`;
+    window.open(url.toString(), '_blank');
+  };
+
   /** Keep the template's own drawing with the project. */
   const saveTemplateGraphic = (next: Record<string, any>) =>
     patchProjectData(() => ({ drawingEdits: next }));
@@ -1384,6 +1392,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           onSelect={setSelectedPart}
           onSymbolChange={changePartSymbol}
           onEditQuestions={ref => setQuestionsFor({ ref, fresh: false })}
+          onOpenInTab={openGraphicInTab}
           onOpenGraphic={setGraphicSymbols}
         />
         {/* What the cell's single line needs and its parts cannot say. MV
@@ -1422,6 +1431,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           canEdit={isCurrentRevisionEditable}
           onSaveEdits={saveTemplateGraphic}
           onClose={() => setGraphicSymbols(null)}
+          onOpenInTab={openGraphicInTab}
         />
       )}
 

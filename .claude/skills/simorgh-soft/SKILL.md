@@ -301,6 +301,21 @@ line) and the magnet's line are collected by `signalDown` and drawn last by
 of the cell's own final arrow (`floorAt`). A relay's functions from its
 window are written in its box in place of PROTECTION RELAY.
 
+**What the generator writes, `fromSvg` has to read.** The sheets and the
+template graphic reach the editor through `cad/fromSvg`: a `<polyline>`, a
+`<tspan>` line or a `rotate()`d label it does not read is simply missing from
+the editor and every export. It reads all three now; anything new the single
+line writes is checked in the editor too, not only in the preview. A white
+patch is paper there — a line that must not run under its text stops either
+side of it.
+
+**A template's graphic opens in a tab of its own**
+(`?view=template-graphic&projectId&templateId`, `TemplateGraphicPage`). It
+holds no project: the project's tab announces templates, symbols and edits
+on `TEMPLATE_GRAPHIC_CHANNEL`, and a Save there comes back as a message that
+ProjectContext applies through `patchProjectData` — the same edit gate.
+With the project's tab closed it is read-only from the server.
+
 Comments here explain *why*, in prose, and are worth keeping — match that.
 
 ## The PLC page

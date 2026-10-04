@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
-import { XIcon } from 'lucide-react';
+import { XIcon, ExternalLinkIcon } from 'lucide-react';
+import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import { DrawingEdits } from '../../types/project';
 import { EplanSymbolMap, TemplateLike, buildTemplateSvg } from '../../utils/eplanSingleLine';
 import { drawingFromSvg } from '../../utils/cad/fromSvg';
@@ -28,16 +29,23 @@ interface Props {
   onSaveEdits?: (next: DrawingEdits) => void;
   canEdit?: boolean;
   onClose: () => void;
+  /** Drawn as a whole browser page (its own tab) rather than a window. */
+  page?: boolean;
+  /** Open this graphic in a tab of its own; the button shows when given. */
+  onOpenInTab?: () => void;
 }
 
 /** Where a template's own drawing is kept in the project. */
 export const templateSheetKey = (templateId: string) => `template#${templateId}`;
 
 export const TemplateGraphicEditor: React.FC<Props> = ({
-  template, tier, symbols, savedEdits, onSaveEdits, canEdit = true, onClose,
+  template, tier, symbols, savedEdits, onSaveEdits, canEdit = true, onClose, page, onOpenInTab,
 }) => {
+  // Drawn again whenever a symbol changes — the project's own symbols arrive
+  // a moment after the window opens, and without this it kept the library's.
+  const symbolVersion = useSymbolVersion();
   const built = useMemo(
-    () => buildTemplateSvg(template, tier, symbols), [template, tier, symbols]);
+    () => buildTemplateSvg(template, tier, symbols), [template, tier, symbols, symbolVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sheets = useMemo<EditorSheet[]>(() => [{
     name: template.name || 'Template',
@@ -47,9 +55,12 @@ export const TemplateGraphicEditor: React.FC<Props> = ({
   }], [built.svg, template.id, template.name]);
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[210]" onClick={onClose}>
+    <div className={page ? 'h-screen w-screen flex' : 'fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[210]'}
+      onClick={page ? undefined : onClose}>
       <div
-        className="bg-white rounded-lg shadow-2xl w-[1220px] max-w-[96vw] h-[94vh] flex flex-col overflow-hidden"
+        className={page
+          ? 'bg-white w-full h-full flex flex-col overflow-hidden'
+          : 'bg-white rounded-lg shadow-2xl w-[1220px] max-w-[96vw] h-[94vh] flex flex-col overflow-hidden'}
         onClick={e => e.stopPropagation()}
       >
         <div className="bg-slate-700 text-white px-5 py-3 flex items-center justify-between">
@@ -60,9 +71,19 @@ export const TemplateGraphicEditor: React.FC<Props> = ({
               {' '}drawn the way a feeder built on this template will be
             </p>
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-white/20">
-            <XIcon className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {onOpenInTab && (
+              <button onClick={onOpenInTab} title="Open the graphic large, in a tab of its own"
+                className="flex items-center gap-1 px-2 py-1 rounded text-xs hover:bg-white/20">
+                <ExternalLinkIcon className="w-3.5 h-3.5" /> New tab
+              </button>
+            )}
+            {!page && (
+              <button onClick={onClose} className="p-1 rounded hover:bg-white/20">
+                <XIcon className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex-1 min-h-0 bg-gray-100">

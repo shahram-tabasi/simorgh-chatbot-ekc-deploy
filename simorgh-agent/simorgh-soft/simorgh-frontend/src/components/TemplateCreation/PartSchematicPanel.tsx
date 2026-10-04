@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MaximizeIcon, RotateCcwIcon, ChevronRightIcon, SlidersHorizontalIcon } from 'lucide-react';
+import { MaximizeIcon, RotateCcwIcon, ChevronRightIcon, SlidersHorizontalIcon, ExternalLinkIcon } from 'lucide-react';
 import {
   CELL, IEC_SYMBOLS, SYMBOL_GROUPS, SymbolId, drawIecSymbol, symbolHeight,
   symbolLeft, symbolRight,
@@ -40,6 +40,8 @@ interface Props {
   onOpenGraphic: (symbols: EplanSymbolMap) => void;
   /** Open a part's single-line questions, to change its answers. */
   onEditQuestions?: (ref: PartRef) => void;
+  /** Open the graphic large, editable, in a browser tab of its own. */
+  onOpenInTab?: () => void;
   /**
    * Leave off the panel's own title bar and border.
    *
@@ -81,7 +83,7 @@ const SymbolArt: React.FC<{ id: SymbolId; height: number }> = ({ id, height }) =
 );
 
 export const PartSchematicPanel: React.FC<Props> = ({
-  template, tier, parts, selected, onSelect, onSymbolChange, onOpenGraphic, onEditQuestions, bare,
+  template, tier, parts, selected, onSelect, onSymbolChange, onOpenGraphic, onEditQuestions, onOpenInTab, bare,
 }) => {
   // Every symbol on this panel is drawn from the library, which lives outside
   // React. Read the version and this panel is drawn again the moment a symbol
@@ -124,8 +126,9 @@ export const PartSchematicPanel: React.FC<Props> = ({
 
   const resolved = useMemo(
     () => new Map(parts.map(ref =>
-      [`${ref.slot}#${ref.index}`, symbolForPart(ref.part, ref.slot, symbols, tier)])),
-    [parts, symbols, tier]);
+      [`${ref.slot}#${ref.index}`, symbolForPart(ref.part, ref.slot, symbols, tier,
+        (template.properties as any)?.__displayNames?.[ref.slot])])),
+    [parts, symbols, tier, template.properties]);
 
   const keyOf = (ref: PartRef) => `${ref.slot}#${ref.index}`;
   const current = selected ? resolved.get(keyOf(selected)) : undefined;
@@ -156,7 +159,16 @@ export const PartSchematicPanel: React.FC<Props> = ({
       {/* In bare mode the frame outside owns the title, but Open belongs to
           this panel — the symbols it opens with are fetched in here. */}
       {bare && (
-        <div className="px-3 pb-2 flex justify-end">
+        <div className="px-3 pb-2 flex justify-end gap-1.5">
+          {onOpenInTab && (
+            <button
+              onClick={onOpenInTab}
+              title="Open the graphic large, in a tab of its own — editable, and it follows every change made here"
+              className="flex items-center gap-1 px-2 py-1.5 rounded border border-slate-300 text-slate-700 text-xs font-medium hover:bg-slate-100"
+            >
+              <ExternalLinkIcon className="w-3.5 h-3.5" /> New tab
+            </button>
+          )}
           <button
             onClick={() => onOpenGraphic(symbols)}
             title="Open the graphic in its own window, where it can be edited"
@@ -203,7 +215,7 @@ export const PartSchematicPanel: React.FC<Props> = ({
                 >
                   <option value="">
                     automatic — {IEC_SYMBOLS[symbolForPart({ ...selected.part, symbolId: undefined },
-                      selected.slot, symbols, tier).id]?.title ?? '—'}
+                      selected.slot, symbols, tier, (template.properties as any)?.__displayNames?.[selected.slot]).id]?.title ?? '—'}
                   </option>
                   {SYMBOL_GROUPS.map(group => (
                     <optgroup key={group} label={group}>
