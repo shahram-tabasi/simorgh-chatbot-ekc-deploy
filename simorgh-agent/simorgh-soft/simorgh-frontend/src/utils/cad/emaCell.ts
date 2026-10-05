@@ -251,7 +251,9 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   const earth = take(i => i.id === 'earthing-switch');
   const left = [...earth, ...take(i => i.id === 'magnet')];
   const right = take(i => ['capacitive-divider', 'surge-arrester', 'surge-limiter', 'voltage-transformer'].includes(i.id));
-  const cts = take(i => i.id === 'current-transformer' || i.id === 'core-balance-ct');
+  // The CT the cores leave first, the core-balance CT after it — the order
+  // the sheet draws them in.
+  const cts = [...take(i => i.id === 'current-transformer'), ...take(i => i.id === 'core-balance-ct')];
   const relays = take(i => RELAYS.includes(i.id));
   const relay = relays.find(r => r.relayRole === 'main') ?? relays.find(r => r.relayRole !== 'auxiliary') ?? relays[0];
   const testBlock = chain.find(i => i.id === 'test-block');
@@ -268,13 +270,12 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   page.conn(64, 0, 0, 0);
   let y = -10;
   /** A device on the line: its top point at `y`, the line on from its bottom. */
-  const onLine = (item: ChainItem, n: number, v: number): number | null => {
+  const onLine = (item: ChainItem, n: number, v: number, lx = -14, ly = 0): number | null => {
     const pins = pinsOf(n, v);
     const top = pins?.find(p => p.dir === UP);
     if (!pins || !top) { skipped(item); return null; }
     const insY = y - top.y;
-    const lx = -14;
-    page.device('SLD', n, v, 0, insY, [page.textXml(lx, insY, labelOf(item, 22), 6)]);
+    page.device('SLD', n, v, 0, insY, [page.textXml(lx, insY + ly, labelOf(item, 22), ly ? 9 : 6)]);
     const bottom = pins.find(p => p.dir === DOWN);
     y = (bottom ? insY + bottom.y : insY - 8) - 10;
     return insY;
@@ -285,24 +286,34 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   let swMid: number | null = null;
   let esMid: number | null = null;
   let mbAt: { x: number; y: number } | null = null;
-  if (sw) swMid = onLine(sw, ...(EPLAN_OF[sw.id] ?? [1, 1]));
+  // The switch's label stands clear of its operating mechanism on its left,
+  // as the office's macros place it.
+  // Above it, the interlock's dashed line leaves under it.
+  if (sw) {
+    const at = onLine(sw, ...(EPLAN_OF[sw.id] ?? [1, 1]), -12, 8);
+    swMid = at == null ? null : at - 4;
+  }
 
   // What hangs to the left: the earth switch down from a corner, the magnet
   // beside it.
+  // The earth switch's label on its right, between it and the line; the
+  // magnet beside it on its left, its label further left.
+  const ES_X = -30;
   for (const item of earth) {
     page.conn(67, 0, 0, y);
-    page.conn(70, 0, -24, y);
+    page.conn(70, 0, ES_X, y);
     const [n, v] = EPLAN_OF[item.id]!;
     const top = pinsOf(n, v)?.find(p => p.dir === UP);
     const insY = y - 10 - (top?.y ?? 0);
-    page.device('SLD', n, v, -24, insY, [page.textXml(-30, insY, labelOf(item, 18), 6)]);
-    esMid = insY - 2;
-    y -= 26;
+    esMid = insY - 3;
+    page.device('SLD', n, v, ES_X, insY, [page.textXml(ES_X + 4, esMid, labelOf(item, 13), 4, 1.6)]);
+    y -= 28;
   }
   for (const item of take(i => i.id === 'magnet')) {
     const [n, v] = EPLAN_OF[item.id]!;
-    page.device('SLD', n, v, -48, y + 14, [page.textXml(-54, y + 14, labelOf(item, 16), 6)]);
-    mbAt = { x: -48, y: y + 14 };
+    const my = esMid ?? y + 14;
+    page.device('SLD', n, v, ES_X - 16, my, [page.textXml(ES_X - 22, my, labelOf(item, 14), 6, 1.6)]);
+    mbAt = { x: ES_X - 16, y: my };
   }
 
   // What is tapped off to the right: the detector, the arrester and its
@@ -353,7 +364,28 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   // first core straight into its connection point, each other one round two
   // corners into a connection point of its own on the same box.
   const protection = relay ? rows.filter(r => r.purpose === 'protection') : [];
-  const relayX = Math.max(0, ...protection.map(r => r.x + 12 + (testBlock ? 22 : 0))) + 4 + protection.length * 3;
+  // What each row carries, worked out first: the relay stands right of the
+  // longest of them, so no core on its way to it crosses another row.
+  const span = (item: ChainItem) => {
+    const pins = pinsOf(...(EPLAN_OF[item.id] ?? [0, 0]));
+    const l = pins?.find(p => p.dir === LEFT);
+    const r = pins?.find(p => p.dir === RIGHT);
+    return l ? (r ? r.x : 6) - l.x + 14 : 0;
+  };
+  let measPlan = 0;
+  const carries = new Map(rows.map(row => {
+    const list: ChainItem[] = [];
+    if (row.purpose !== 'remark' && row.purpose !== 'voltage' && testBlock) list.push(testBlock);
+    if (row.purpose === 'measurement') {
+      const j = measPlan++;
+      list.push(...(j === measuring - 1 ? meters.slice(j) : meters.slice(j, j + 1)));
+    }
+    if (row.purpose === 'voltage') list.push(...volts);
+    return [row, list] as const;
+  }));
+  const rowEnd = (row: typeof rows[number]) =>
+    row.x + 12 + (carries.get(row) ?? []).reduce((w, i) => w + span(i), 0) + (row.purpose === 'remark' ? 40 : 0);
+  const relayX = Math.max(0, ...rows.map(rowEnd)) + 4 + protection.length * 3;
   const relayY = protection[0]?.y ?? 0;
   const DCP_STEP = 3;
   let relayBox: { x: number; y: number } | null = null;
@@ -416,7 +448,12 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   }
   // The relay's serial link and statuses, down from the bottom of its box.
   if (relayBox && relay) {
-    deviceSignals(relay).forEach((t, k) => signals.push({ x: relayBox!.x + 28 - k * 4, from: relayBox!.y - 12, text: t }));
+    // Out of the box's right side, clear of what hangs under it.
+    const sigs = deviceSignals(relay);
+    const out = relayBox.x + 32;
+    const sy = relayBox.y - 8;
+    if (sigs.length) page.dashedPath([[out, sy], [out + 4 + (sigs.length - 1) * 4, sy]]);
+    sigs.forEach((t, k) => signals.push({ x: out + 4 + k * 4, from: sy, text: t }));
   }
 
   // ── Beside the breaker: 94 / CR / 74 / 86 ─────────────────────────────
@@ -433,11 +470,13 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   }
   // The mechanical interlock: from the switch to the earth switch and on to
   // the magnet, and the magnet's own line to the feeder below.
+  // Out of the switch's operating mechanism on its left, down between the
+  // magnet and the earth switch, across into both.
+  const spine = ES_X - 8;
   if (swMid != null && (esMid != null || mbAt)) {
-    const spine = -36;
     const lowest = mbAt ? mbAt.y : esMid!;
-    page.dashedPath([[-8, swMid + 2], [spine, swMid + 2], [spine, lowest]]);
-    if (esMid != null) page.dashedPath([[spine, esMid], [-28, esMid]]);
+    page.dashedPath([[-12, swMid], [spine, swMid], [spine, lowest]]);
+    if (esMid != null) page.dashedPath([[spine, esMid], [ES_X - 3, esMid]]);
     if (mbAt) page.dashedPath([[spine, mbAt.y], [mbAt.x + 4, mbAt.y]]);
   }
   if (mbAt && answers.downstreamInterlock !== false) {
@@ -447,10 +486,13 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   // everything, each down to the foot.
   const swStatuses = (sw?.statuses ?? []).map(t => t.trim()).filter(Boolean);
   if (sw && swMid != null && swStatuses.length) {
-    const first = Math.min(page.box.l, -60) - 6;
-    const lanes = swStatuses.map((_, k) => first - k * 5);
-    page.dashedPath([[-8, swMid - 2], [lanes[lanes.length - 1], swMid - 2]]);
-    swStatuses.forEach((t, k) => signals.push({ x: lanes[k], from: swMid! - 2, text: t }));
+    // The interlock's line carries on out to the left, just past everything
+    // on that side, and each status drops from it.
+    const first = page.box.l - 4;
+    const lanes = swStatuses.map((_, k) => first - k * 4);
+    const from = (esMid != null || mbAt) ? spine : -12;
+    page.dashedPath([[from, swMid], [lanes[lanes.length - 1], swMid]]);
+    swStatuses.forEach((t, k) => signals.push({ x: lanes[k], from: swMid!, text: t }));
   }
   // Every signal ends on one floor, low enough for the longest text.
   if (signals.length) {
