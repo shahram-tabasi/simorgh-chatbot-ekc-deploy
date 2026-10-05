@@ -37,7 +37,7 @@ Everything is under `simorgh-agent/simorgh-soft/`:
 |---|---|
 | `simorgh-frontend/src/components/SimorghDraw/` | the editor, page tree, symbol library, symbol pages |
 | `simorgh-frontend/src/components/Eplanix/EplanixTab.tsx` | the Simorgh Draw tab — the way in |
-| `simorgh-frontend/src/utils/cad/` | geometry, shapes, DXF/SVG/PDF back-ends, pages, symbol sources |
+| `simorgh-frontend/src/utils/cad/` | geometry, shapes, DXF/SVG/PDF/EPLAN .ema back-ends, pages, symbol sources |
 | `simorgh-frontend/src/utils/iecSymbols.ts` | the built-in single-line library |
 | `simorgh-frontend/src/utils/cad/wdSymbols.ts` | the wiring-diagram library |
 | `simorgh-frontend/src/components/PLC/` | the PLC page — tree, editors, instruction catalogue, assistant |
@@ -428,3 +428,10 @@ somebody using it exactly like a command that does nothing.
 are all edited in place — `moveTemplate` — because the device rows in Device
 Selection point at that id. Rebuilding a template to correct one answer
 detaches every row built on it.
+
+**EPLAN window macro (.ema).** `utils/cad/ema.ts` writes a sheet as an EPLAN
+2.9 window macro: the frame (`emaSkeleton.ts`) is one of the office's own
+macros with its names and paths taken out, and every object is written the
+way the office's macros write it (O31 line, O34 polyline, O89 rectangle, O30
+text). Graphics only — the devices are not EPLAN functions yet. Never invent
+an object type or attribute: copy it from a macro the office saved.

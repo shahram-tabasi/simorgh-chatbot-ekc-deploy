@@ -35,6 +35,7 @@ import {
 import { readDxf } from '../../utils/cad/readDxf';
 import { renderSvg } from '../../utils/cad/svg';
 import { renderDxf } from '../../utils/cad/dxf';
+import { renderEma } from '../../utils/cad/ema';
 import { LEGIBLE_MM, PaperChoice, textHeightOn } from '../../utils/cad/paper';
 import { renderPdf } from '../../utils/cad/pdf';
 import {
@@ -2063,6 +2064,11 @@ export const DrawingEditor: React.FC<Props> = ({
     downloadText(`${fileSafe(fileBase)}_${fileSafe(sheet.name)}.dxf`,
       renderDxf(drawing, { mmPerUnit, paper, titleBlock: [...titleBlock, sheet.name] }), 'image/vnd.dxf');
   };
+  // The sheet as an EPLAN window macro, inserted with Insert → Window macro.
+  const exportEma = () => {
+    downloadText(`${fileSafe(fileBase)}_${fileSafe(sheet.name)}.ema`,
+      renderEma(editedDrawing(index), { name: sheet.name || fileBase }), 'application/xml');
+  };
   const exportPdf = () => {
     downloadBlob(`${fileSafe(fileBase)}.pdf`,
       renderPdf(sheets.map((_, i) => editedDrawing(i)), { mmPerUnit, paper, titleBlock }));
@@ -2707,6 +2713,13 @@ export const DrawingEditor: React.FC<Props> = ({
                   className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md bg-teal-700 text-white text-sm font-medium hover:bg-teal-800"
                 >
                   <DownloadIcon className="w-4 h-4" /> DXF
+                </button>
+                <button
+                  onClick={exportEma}
+                  className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md bg-indigo-700 text-white text-sm font-medium hover:bg-indigo-800"
+                  title="EPLAN window macro (.ema) — in EPLAN: Insert → Window macro"
+                >
+                  <DownloadIcon className="w-4 h-4" /> EPLAN .ema
                 </button>
                 <button
                   onClick={exportPdf}
