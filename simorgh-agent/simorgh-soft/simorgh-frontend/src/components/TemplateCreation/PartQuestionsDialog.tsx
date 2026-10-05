@@ -193,7 +193,8 @@ export const PartQuestionsDialog: React.FC<Props> = ({
   const isAccessory = asksRole ? answers.role !== 'main' : answers.role === 'accessory';
   const isRelay = RELAYS.includes(effective);
   const isBreaker = BREAKERS.includes(effective);
-  const isMagnet = effective === 'magnet';
+  // The magnet by its kind, or by what its row or the part is called.
+  const isMagnet = effective === 'magnet' || /magnet|\bMB\d*\b/i.test(`${slotTitle} ${stripLocaleTags(part?.label) || ''}`);
   const isVt = effective === 'voltage-transformer';
   // What an auxiliary relay is wired to: its list, else the older one-answer.
   const connects: string[] = answers.connects
@@ -385,13 +386,16 @@ export const PartQuestionsDialog: React.FC<Props> = ({
               {isMagnet && (
                 <Question n={++n} title="Interlock with downstream?">
                   <Choice on={answers.downstreamInterlock !== false} title="Yes"
-                    note="A dashed line from the magnet, the feeder's name along it."
+                    note="A dashed line from the magnet down to the foot of the cell, this text along it."
                     onClick={() => set('downstreamInterlock', undefined)} />
                   <Choice on={answers.downstreamInterlock === false} title="No"
                     onClick={() => { set('downstreamInterlock', false); set('downstreamText', undefined); }} />
                   {answers.downstreamInterlock !== false && (
-                    <input className={input} value={answers.downstreamText ?? ''} placeholder="OUTGOING FEEDER"
-                      onChange={e => set('downstreamText', e.target.value || undefined)} />
+                    <label className="w-full">
+                      <span className="block text-[11px] text-gray-500 mb-0.5">Text along the line</span>
+                      <input className={input} value={answers.downstreamText ?? 'OUTGOING FEEDER'}
+                        onChange={e => set('downstreamText', e.target.value === 'OUTGOING FEEDER' ? undefined : e.target.value)} />
+                    </label>
                   )}
                 </Question>
               )}

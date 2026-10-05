@@ -291,7 +291,9 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   // Above it, the interlock's dashed line leaves under it.
   if (sw) {
     const at = onLine(sw, ...(EPLAN_OF[sw.id] ?? [1, 1]), -12, 8);
-    swMid = at == null ? null : at - 4;
+    // Its operating mechanism, where the office's macros take the
+    // mechanical interlock from: 11 mm under its insertion point.
+    swMid = at == null ? null : at - 11;
   }
 
   // What hangs to the left: the earth switch down from a corner, the magnet
@@ -305,15 +307,20 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     const [n, v] = EPLAN_OF[item.id]!;
     const top = pinsOf(n, v)?.find(p => p.dir === UP);
     const insY = y - 10 - (top?.y ?? 0);
-    esMid = insY - 3;
-    page.device('SLD', n, v, ES_X, insY, [page.textXml(ES_X + 4, esMid, labelOf(item, 13), 4, 1.6)]);
-    y -= 28;
+    // Where the interlock comes into its side, as the office's macros
+    // have it: 2 mm under its insertion point.
+    esMid = insY - 2;
+    page.device('SLD', n, v, ES_X, insY, [page.textXml(ES_X + 4, insY - 4, labelOf(item, 13), 4, 1.6)]);
+    y -= 34;
   }
+  // The magnet under the earth switch and to its left: the earth switch's
+  // contact lets it open the door.
   for (const item of take(i => i.id === 'magnet')) {
     const [n, v] = EPLAN_OF[item.id]!;
-    const my = esMid ?? y + 14;
-    page.device('SLD', n, v, ES_X - 16, my, [page.textXml(ES_X - 22, my, labelOf(item, 14), 6, 1.6)]);
-    mbAt = { x: ES_X - 16, y: my };
+    const mx = ES_X - 10;
+    const my = (esMid ?? y + 30) - 18;
+    page.device('SLD', n, v, mx, my, [page.textXml(mx - 6, my, labelOf(item, 14), 6, 1.6)]);
+    mbAt = { x: mx, y: my };
   }
 
   // What is tapped off to the right: the detector, the arrester and its
@@ -472,12 +479,19 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   // the magnet, and the magnet's own line to the feeder below.
   // Out of the switch's operating mechanism on its left, down between the
   // magnet and the earth switch, across into both.
-  const spine = ES_X - 8;
-  if (swMid != null && (esMid != null || mbAt)) {
-    const lowest = mbAt ? mbAt.y : esMid!;
-    page.dashedPath([[-12, swMid], [spine, swMid], [spine, lowest]]);
-    if (esMid != null) page.dashedPath([[spine, esMid], [ES_X - 3, esMid]]);
-    if (mbAt) page.dashedPath([[spine, mbAt.y], [mbAt.x + 4, mbAt.y]]);
+  // As the office's macros draw it: out of the switch's operating mechanism
+  // to the left, down through the interlock's triangle, and into the earth
+  // switch's side — the two change over together. Then from the earth
+  // switch's contact down to the magnet.
+  const spine = ES_X - 15;
+  if (swMid != null && esMid != null) {
+    page.dashedPath([[-4, swMid], [spine, swMid], [spine, esMid], [ES_X - 4, esMid]]);
+    const mid = swMid - 8;
+    page.poly([[spine - 2, mid + 4], [spine - 2, mid], [spine - 2, mid - 4], [spine + 4, mid], [spine - 2, mid + 4]]);
+  }
+  if (mbAt) {
+    const from = esMid != null ? esMid - 6 : (swMid ?? mbAt.y + 10);
+    page.dashedPath([[esMid != null ? ES_X - 4 : -4, from], [mbAt.x, from], [mbAt.x, mbAt.y + 4]]);
   }
   if (mbAt && answers.downstreamInterlock !== false) {
     signals.push({ x: mbAt.x, from: mbAt.y - 4, text: String(answers.downstreamText || 'OUTGOING FEEDER') });
@@ -490,7 +504,7 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     // on that side, and each status drops from it.
     const first = page.box.l - 4;
     const lanes = swStatuses.map((_, k) => first - k * 4);
-    const from = (esMid != null || mbAt) ? spine : -12;
+    const from = esMid != null ? spine : -4;
     page.dashedPath([[from, swMid], [lanes[lanes.length - 1], swMid]]);
     swStatuses.forEach((t, k) => signals.push({ x: lanes[k], from: swMid!, text: t }));
   }
