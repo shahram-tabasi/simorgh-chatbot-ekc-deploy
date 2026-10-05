@@ -95,6 +95,41 @@ const START_STOP_PART = {
 const isSfd = (row: DeviceTableRow): boolean =>
   /^\s*SFD\b/i.test(String(row.sfdHfd ?? ''));
 
+/** Everything a part says about itself, as one string to search. */
+const partText = (part: any): string => {
+  const d = part?.fullData ?? {};
+  return [part?.label, part?.partNumber, d.OrderNumber, d.TypeNumber, d.Designation1,
+    d.Designation2, d.Designation3, d.Description]
+    .map(v => stripLocaleTags(v)).join(' | ');
+};
+
+/**
+ * A Siemens 3SU part (pushbutton, lamp, selector) already on the line.
+ *
+ * A project that came from BPMS may carry one the engineer put there; the
+ * line then gets no second one — one per line is the rule.
+ */
+const has3su = (parts: any[]): boolean => parts.some(p => /\b3SU/i.test(partText(p)));
+
+/**
+ * What a GIS cell carries that is not ordered with it.
+ *
+ * The 3AH4 breaker, the current and voltage transformers, the capacitive
+ * voltage indicator and the two- and three-position disconnectors all come
+ * inside the GIS panel from its maker, so they stay off its BPMS sheet. A part
+ * is known by the template slot it sits in, or by what it says it is.
+ */
+const GIS_BUILT_IN_SLOTS = new Set(['CT RATING', 'COREBALANCE CT', 'PT RATING', 'VOLTAGE INDICATOR']);
+function isGisBuiltIn(slot: string, part: any): boolean {
+  if (GIS_BUILT_IN_SLOTS.has(slot.trim().toUpperCase())) return true;
+  const t = partText(part);
+  return /\b3AH4/i.test(t)
+    || /current\s*transformer|core[\s-]*balance/i.test(t)
+    || /(voltage|potential)\s*transformer/i.test(t)
+    || /capacitive[^|]*(voltage|indicat)|voltage\s*(detecting|presence)\s*(system|indicat)/i.test(t)
+    || /\b(2|3|two|three)[\s-]*pos(ition)?s?\b[^|]*discon/i.test(t);
+}
+
 /** Rows above the table, and the row the headings are on. */
 export const BPMS_HEADER_ROW = 2;
 
@@ -106,6 +141,8 @@ const text = (v: any): string => (v == null ? '' : String(v));
 export function templatePartsInOrder(
   template: TemplateItem | undefined,
   properties: string[] = LV_TEMPLATE_PROPERTIES,
+  /** Parts to leave out, by the slot they sit in and the part itself. */
+  skip?: (slot: string, part: any) => boolean,
 ): any[] {
   if (!template) return [];
   const props = (template.properties ?? {}) as Record<string, any>;
@@ -117,7 +154,7 @@ export function templatePartsInOrder(
   const out: any[] = [];
   for (const key of [...named, ...extra]) {
     const parts = props[key]?.parts;
-    if (Array.isArray(parts)) out.push(...parts);
+    if (Array.isArray(parts)) out.push(...(skip ? parts.filter(p => !skip(key, p)) : parts));
   }
   return out;
 }
@@ -230,11 +267,14 @@ export function buildBpmsSheets(data: ProjectData, meta: BpmsMeta = {}): BpmsShe
     let no = 1;
     for (const row of eq.devices ?? []) {
       const line = lineColumns(row);
+      const onTemplate = templatePartsInOrder(
+        row.templateId ? templates.get(row.templateId) : undefined, PROPERTIES[tier],
+        eq.type === 'GIS' ? isGisBuiltIn : undefined);
       const parts = [
-        ...templatePartsInOrder(
-          row.templateId ? templates.get(row.templateId) : undefined, PROPERTIES[tier]),
-        // The door's pushbutton, on every SFD line and on no template.
-        ...(tier === 'LV' && isSfd(row) ? [START_STOP_PART] : []),
+        ...onTemplate,
+        // The door's pushbutton, on every SFD line and on no template — unless
+        // the line already has its 3SU part.
+        ...(tier === 'LV' && isSfd(row) && !has3su(onTemplate) ? [START_STOP_PART] : []),
       ];
       if (parts.length === 0) {
         // A line without parts is still a line — keep it, with the part

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { projectService } from './services/projectService';
 import { TabNavigation } from './components/Tabs/TabNavigation';
 import { ProjectDefinitionTab } from './components/ProjectDefinition/ProjectDefinitionTab';
@@ -14,10 +14,11 @@ import { buildLabel, buildStamp } from './utils/buildStamp';
 import { PanelsProvider, usePanelRegistry } from './context/PanelsContext';
 import logoMark from './assets/logo-mark.png';
 import { useTheme } from './useTheme';
-import { SunIcon, MoonIcon, CpuIcon } from 'lucide-react';
+import { SunIcon, MoonIcon, PencilRulerIcon } from 'lucide-react';
 import { SaveNeedsYou } from './services/projectService';
 import { Chatbot } from './components/Chatbot/Chatbot';
 import { LogicWorkspace } from './components/SimorghLogic/LogicWorkspace';
+import { readPages } from './utils/cad/pages';
 import { fileSafe } from './utils/download';
 import { RevisionLockedModal } from './components/shared/RevisionLockedModal';
 import { FeederDuplicateModal } from './components/DeviceSelection/FeederDuplicateModal';
@@ -881,6 +882,8 @@ const MainApp: React.FC = () => {
   const [activeTab,               setActiveTab]               = useState(0);
   // Simorgh Logic takes the whole window while it is open — see the button.
   const [logicOpen,               setLogicOpen]               = useState(false);
+  // The header's Simorgh Draw button: bumped to have that tab open its pages.
+  const [drawRequest,             setDrawRequest]             = useState(0);
   const [navigatingToTemplateId,  setNavigatingToTemplateId]  = useState<string | null>(null);
   // Controls which sub-tab ProjectDefinitionTab opens on
   const [projDefSubTab, setProjDefSubTab] = useState<'project-data' | 'device-library'>('project-data');
@@ -964,6 +967,9 @@ const MainApp: React.FC = () => {
     if (tabId === 0) { setProjDefSubTab('project-data'); setNavigatingToDeviceId(undefined); }
     setActiveTab(tabId);
   };
+
+  const drawPageCount = useMemo(
+    () => readPages(projectData.drawingPages).length, [projectData.drawingPages]);
 
   const requestTab = (tabId: number) => {
     const leavingDeviceSelection = activeTab === DEVICE_SELECTION_TAB && tabId !== DEVICE_SELECTION_TAB;
@@ -1170,7 +1176,7 @@ const MainApp: React.FC = () => {
     {
       id: 4,
       title: `Simorgh Draw`,
-      component: <EplanixTab />
+      component: <EplanixTab openRequest={drawRequest} onOpenHandled={() => setDrawRequest(0)} />
     },
     {
       id: 5,
@@ -1378,20 +1384,17 @@ const MainApp: React.FC = () => {
                 {projectData.devices.length} scopes
               </div>
 
-              {/* Simorgh Logic — a door, not a tab.
-                  Ladder is a different job from drawing a panel: a different
-                  vocabulary, a different unit of work, often a different person
-                  at the keyboard. As one more tab it would put a PLC toolbar on
-                  every switchgear drawing and leave every program one mis-click
-                  from the busbar, so it takes the whole window and hands it
-                  back on the way out. */}
+              {/* Simorgh Draw — straight into the project's pages, from any
+                  tab: the same button as on the Simorgh Draw tab. */}
               <button
-                onClick={() => setLogicOpen(true)}
-                title="Ladder programming — its own workspace"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                onClick={() => { requestTab(SIMORGH_DRAW_TAB); setDrawRequest(n => n + 1); }}
+                disabled={!isCurrentRevisionEditable && drawPageCount === 0}
+                title="Open Simorgh Draw on this project's pages — wiring diagrams, single lines and layouts, with the page tree on the ribbon"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
               >
-                <CpuIcon className="w-4 h-4" />
-                Simorgh Logic
+                <PencilRulerIcon className="w-4 h-4" />
+                Simorgh Draw
+                <span className="text-[11px] font-normal text-blue-100">{drawPageCount || 'new'}</span>
               </button>
             </div>
           </div>
@@ -1650,6 +1653,7 @@ const MainApp: React.FC = () => {
 
 // Device Selection's position in the tab strip.
 const DEVICE_SELECTION_TAB = 2;
+const SIMORGH_DRAW_TAB = 4;
 
 // Marks that the loading screen has already played for this run of the app.
 const SPLASH_SHOWN_KEY = 'simorgh-splash-shown';

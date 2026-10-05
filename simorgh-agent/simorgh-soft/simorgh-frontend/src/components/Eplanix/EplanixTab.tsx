@@ -125,7 +125,11 @@ function exportMechanicalExcel(data: ProjectData, equipments: Equipment[]) {
   XLSX.writeFile(wb, `${data.projectName || 'project'}_Mechanical_items.xlsx`);
 }
 
-export const EplanixTab: React.FC = () => {
+export const EplanixTab: React.FC<{
+  /** Bumped by the Simorgh Draw button in the app's header: open the pages. */
+  openRequest?: number;
+  onOpenHandled?: () => void;
+}> = ({ openRequest = 0, onOpenHandled }) => {
   const { projectData, currentRevision, patchProjectData, isCurrentRevisionEditable, revisions } = useProject();
   // The set's sign-off and reports — see DrawingDocs.
   const [showSignoff, setShowSignoff] = useState(false);
@@ -323,6 +327,15 @@ export const EplanixTab: React.FC = () => {
     }
     setEditing(true);
   };
+
+  // The header's Simorgh Draw button lands here, and opens what this tab's
+  // own button opens.
+  useEffect(() => {
+    if (!openRequest) return;
+    if (isCurrentRevisionEditable || drawPages.length > 0) openPages();
+    onOpenHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRequest]);
 
   /**
    * The page set as sheets the editor can page through.
