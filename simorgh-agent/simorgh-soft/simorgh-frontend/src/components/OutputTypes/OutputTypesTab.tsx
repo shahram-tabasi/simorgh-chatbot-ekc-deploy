@@ -1343,7 +1343,7 @@ export const OutputTypesTab: React.FC = () => {
               </button>
               <div className="flex gap-2">
                 <button
-                  className="px-4 py-2 border border-emerald-300 text-emerald-800 rounded text-sm hover:bg-emerald-50 disabled:opacity-40"
+                  className="px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50 disabled:opacity-40"
                   disabled={!diff}
                   onClick={downloadComparison}
                 >

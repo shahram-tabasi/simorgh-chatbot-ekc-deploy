@@ -347,7 +347,7 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
           </button>
           {isEditable && (
             <button
-              className="px-4 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700 flex items-center gap-1"
+              className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 flex items-center gap-1"
               onClick={handleSave}
             >
               <SaveIcon className="w-4 h-4" /> Save
@@ -924,7 +924,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                             <span className="text-xs text-gray-500 truncate">{facts.switchgearType}</span>
                           )}
                           {item.source === 'tpms' && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 shrink-0">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200 shrink-0">
                               TPMS
                             </span>
                           )}
@@ -1165,8 +1165,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
         ))}
         {tpmsLink?.projectMainId ? (
           <button
-            className="ml-auto mb-1.5 shrink-0 px-3 py-1.5 border border-purple-300 bg-purple-50 text-purple-800 rounded text-xs
-                       hover:bg-purple-100 disabled:opacity-50 flex items-center gap-1.5"
+            className="ml-auto mb-1.5 shrink-0 px-3 py-1.5 border border-gray-300 bg-white text-gray-700 rounded text-xs
+                       hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5"
             onClick={runTpmsUpdate}
             disabled={tpmsUpdate.busy}
             title="Bring across what TPMS has changed — project data, technical settings and each panel's specification — and leave your own work alone"
@@ -1185,7 +1185,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[80vh] flex flex-col">
             <div className="flex items-center gap-2 px-6 py-4 border-b">
-              <DatabaseIcon className="w-5 h-5 text-purple-600" />
+              <DatabaseIcon className="w-5 h-5 text-gray-600" />
               <h3 className="font-semibold">Update from TPMS — project data and scope specifications</h3>
               <button className="ml-auto text-gray-400 hover:text-gray-600" onClick={closeTpmsUpdate}>
                 <XIcon className="w-5 h-5" />
@@ -1263,7 +1263,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
               </button>
               {tpmsUpdate.result && tpmsUpdate.result.changes.length > 0 && (
                 <button
-                  className="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 flex items-center gap-1"
+                  className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 flex items-center gap-1"
                   onClick={applyTpmsUpdate}
                 >
                   <CheckIcon className="w-4 h-4" /> Apply {tpmsUpdate.result.changes.length} change(s)

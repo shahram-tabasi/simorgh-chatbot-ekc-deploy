@@ -162,7 +162,7 @@ export const TitleBlockDialog: React.FC<Props> = ({ value, canEdit, onSave, onCl
           <button onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-100">Cancel</button>
           <button
             onClick={() => { onSave(draft); onClose(); }} disabled={!canEdit}
-            className="px-4 py-1.5 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40"
+            className="px-4 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
           >
             Save
           </button>

@@ -241,7 +241,7 @@ export const PlcProjectTree: React.FC<Props> = ({
         <Folder
           id="device"
           depth={0}
-          icon={<CpuIcon className="w-4 h-4 text-emerald-600 shrink-0" />}
+          icon={<CpuIcon className="w-4 h-4 text-gray-600 shrink-0" />}
           label={`${project.device.name} [${project.device.cpu}]`}
         >
           {/* Program blocks */}
@@ -363,7 +363,7 @@ export const PlcProjectTree: React.FC<Props> = ({
           <Folder
             id="types"
             depth={1}
-            icon={<LayersIcon className="w-4 h-4 text-purple-500 shrink-0" />}
+            icon={<LayersIcon className="w-4 h-4 text-gray-600 shrink-0" />}
             label={t.plcDataTypes}
             count={(byKind.get('UDT') ?? []).length}
           >
@@ -389,7 +389,7 @@ export const PlcProjectTree: React.FC<Props> = ({
                   setMenu({ x: e.clientX, y: e.clientY, blockId: b.id });
                 }}
               >
-                <LayersIcon className="w-3.5 h-3.5 shrink-0 text-purple-500" />
+                <LayersIcon className="w-3.5 h-3.5 shrink-0 text-gray-600" />
                 <span className="truncate">{b.name}</span>
               </button>
             ))}

@@ -844,7 +844,7 @@ export const SymbolLibrary: React.FC<Props> = ({
                     <button
                       onClick={() => { setEditing(null); setNewInGroup(group); setMaking(true); }}
                       title={`Add a symbol to ${group}`}
-                      className="px-2 text-gray-400 hover:text-violet-700 hover:bg-gray-100 border-s"
+                      className="px-2 text-gray-400 hover:text-blue-700 hover:bg-gray-100 border-s"
                     >
                       <FilePlusIcon className="w-3.5 h-3.5" />
                     </button>

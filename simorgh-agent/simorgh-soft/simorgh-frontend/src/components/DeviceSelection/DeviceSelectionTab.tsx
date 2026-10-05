@@ -151,19 +151,19 @@ const TemplatePropertiesModal: React.FC<TemplatePropertiesModalProps> = ({ templ
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-xl w-[80%] max-h-[85%] flex flex-col">
         {/* Header */}
-        <div className="bg-blue-600 text-white px-6 py-4 rounded-t-lg flex justify-between items-center">
+        <div className="bg-gray-50 border-b border-gray-200 text-gray-900 px-6 py-4 rounded-t-lg flex justify-between items-center">
           <div>
             <h2 className="text-xl font-semibold">Template Properties</h2>
-            <p className="text-sm text-blue-100 mt-1">
+            <p className="text-sm text-gray-600 mt-1">
               {template.name}
-              {templateMeta(template) && <span className="ml-2 text-blue-200">· {templateMeta(template)}</span>}
+              {templateMeta(template) && <span className="ml-2 text-gray-500">· {templateMeta(template)}</span>}
             </p>
           </div>
           <div className="flex items-center gap-3">
             <span className={`px-3 py-1 rounded-full text-sm font-semibold ${getTypeColor(template.type)}`}>
               {template.type}
             </span>
-            <button onClick={onClose} className="text-white hover:bg-blue-700 rounded-full p-1">
+            <button onClick={onClose} className="text-gray-500 hover:bg-gray-200 rounded-full p-1">
               <XIcon className="w-5 h-5" />
             </button>
           </div>
@@ -426,7 +426,7 @@ const ColumnFilterDropdown: React.FC<ColumnFilterDropdownProps> = ({
         style={{ top, left, width: dropdownWidth }}
         onClick={e => e.stopPropagation()}
       >
-        <div className="px-3 py-2 border-b bg-gradient-to-r from-blue-50 to-indigo-50">
+        <div className="px-3 py-2 border-b bg-gray-50">
           <p className="font-semibold text-gray-700 truncate" title={columnHeader}>
             Filter: {columnHeader}
           </p>
@@ -531,7 +531,7 @@ const ColorFilterDropdown: React.FC<ColorFilterDropdownProps> = ({
         style={{ top: anchorRect.bottom + 4, left, width }}
         onClick={e => e.stopPropagation()}
       >
-        <div className="px-3 py-2 border-b bg-gradient-to-r from-pink-50 to-amber-50 font-semibold text-gray-700">
+        <div className="px-3 py-2 border-b bg-gray-50 font-semibold text-gray-700">
           Filter by row colour
         </div>
         <div className="max-h-60 overflow-y-auto">
@@ -1844,7 +1844,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           return (
             <td
               key={`tmpl-${propName}`}
-              className="px-3 py-2 border-b text-xs text-gray-700 whitespace-pre bg-indigo-50/40"
+              className="px-3 py-2 border-b text-xs text-gray-700 whitespace-pre bg-gray-50"
               style={stickyStyle(colIdx, '#eef2ff', rowIndex)}
             >
               {getTemplatePropertyText(row, propName)}
@@ -1935,7 +1935,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
               {importPlan.plan.removed.length > 0 && (
                 <div className="rounded border border-gray-200 bg-gray-50 border-l-4 border-l-rose-500 overflow-hidden">
                   <p className="px-3 py-2 font-medium text-gray-800 border-b border-gray-200">
-                    <span className="inline-block px-1.5 py-0.5 mr-2 rounded bg-rose-600 text-white text-xs font-semibold">
+                    <span className="inline-block px-1.5 py-0.5 mr-2 rounded bg-red-50 text-red-700 border border-red-200 text-xs font-semibold">
                       {importPlan.plan.removed.length}
                     </span>
                     row(s) will be removed — they are not in the file
@@ -1965,7 +1965,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
               {importPlan.plan.added > 0 && (
                 <div className="rounded border border-gray-200 bg-gray-50 border-l-4 border-l-emerald-500 overflow-hidden">
                   <p className="px-3 py-2 font-medium text-gray-800 border-b border-gray-200">
-                    <span className="inline-block px-1.5 py-0.5 mr-2 rounded bg-emerald-600 text-white text-xs font-semibold">
+                    <span className="inline-block px-1.5 py-0.5 mr-2 rounded bg-green-50 text-green-700 border border-green-200 text-xs font-semibold">
                       {importPlan.plan.added}
                     </span>
                     row(s) will be added
@@ -2175,7 +2175,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                     Cancel
                   </button>
                   <button
-                    className="px-3 py-1.5 text-sm rounded bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-40"
+                    className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
                     disabled={m.updates.length === 0}
                     onClick={applySimaris}
                   >
@@ -2311,7 +2311,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         <div
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded border font-medium ${
             freezeCount > 0
-              ? 'bg-amber-500 text-white border-amber-600'
+              ? 'bg-gray-100 text-gray-900 border-gray-400'
               : 'bg-white text-gray-700 border-gray-300'
           }`}
           title="Freeze this many columns from the left (including #) so they stay put while you scroll the rest horizontally"
@@ -2336,7 +2336,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           onClick={() => setFreezeHeader(v => !v)}
           className={`px-3 py-1.5 rounded border flex items-center gap-1.5 font-medium ${
             freezeHeader
-              ? 'bg-amber-500 text-white border-amber-600 hover:bg-amber-600'
+              ? 'bg-gray-100 text-gray-900 border-gray-400 hover:bg-gray-200'
               : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
           }`}
           title="Keep the heading row on screen while the rows scroll"
@@ -2348,7 +2348,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         <div
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded border font-medium ${
             freezeRows > 0
-              ? 'bg-amber-500 text-white border-amber-600'
+              ? 'bg-gray-100 text-gray-900 border-gray-400'
               : 'bg-white text-gray-700 border-gray-300'
           }`}
           title="Freeze this many rows from the top, with the heading, so they stay put while you scroll down"
@@ -2396,7 +2396,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             }}
             className={`px-3 py-1.5 rounded border flex items-center gap-1.5 font-medium ${
               colorFilter
-                ? 'bg-pink-600 text-white border-pink-700 hover:bg-pink-700'
+                ? 'bg-gray-100 text-gray-900 border-gray-400 hover:bg-gray-200'
                 : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
             }`}
             title="Filter rows by background colour"
@@ -2422,7 +2422,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                 : `${heldByEdit} edited rows no longer match the filter and are kept on screen until you confirm`}
             </span>
             <button
-              className="px-2 py-0.5 rounded bg-amber-600 text-white hover:bg-amber-700"
+              className="px-2 py-0.5 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
               onClick={() => setFilterTick(t => t + 1)}
               title="Done editing — apply the filter again, so the edited rows that no longer match leave"
             >
@@ -2525,7 +2525,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
                   <th
                     key={`tmpl-${propName}`}
                     ref={el => { colHeaderRefs.current[colIdx] = el; }}
-                    className="px-3 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap bg-indigo-50"
+                    className="px-3 py-2 text-left font-medium text-gray-600 border-b whitespace-nowrap bg-gray-100"
                     style={stickyStyle(colIdx, '#eef2ff', -1)}
                     title={`Template item — read-only (${selectedEquipment.type})`}
                   >
@@ -2699,8 +2699,8 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
               menu, which sets it on every selected row when the cell is one
               of them. This menu is for the rows themselves. */}
           {/* Row color palette */}
-          <div className="px-4 py-2 border-b bg-pink-50">
-            <p className="text-xs font-semibold text-pink-700 mb-1.5">Row Color</p>
+          <div className="px-4 py-2 border-b bg-gray-50">
+            <p className="text-xs font-semibold text-gray-700 mb-1.5">Row Color</p>
             <div className="flex flex-wrap gap-1.5">
               {ROW_COLOR_PALETTE.map(c => (
                 <button

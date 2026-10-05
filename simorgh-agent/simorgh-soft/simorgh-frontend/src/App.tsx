@@ -150,7 +150,7 @@ const SaveFailedModal: React.FC<{
             {saving ? 'Trying…' : 'Try now'}
           </button>
           <button
-            className="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700"
+            className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
             onClick={() => { onDownload(); setSaved(true); }}
           >
             {saved ? 'Save another copy' : 'Save a copy to disk'}
@@ -864,7 +864,7 @@ const ProjectConflictModal: React.FC<{
           <button
             disabled={busy}
             onClick={async () => { setBusy(true); try { await onKeepMine(); } finally { setBusy(false); } }}
-            className="px-4 py-2 text-sm bg-amber-700 text-white rounded hover:bg-amber-800 disabled:opacity-50"
+            className="px-4 py-2 text-sm border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 rounded disabled:opacity-50"
             title="Save your version over theirs. Theirs is downloaded as a .json file first."
           >
             {busy ? 'Saving…' : 'Keep mine (theirs is downloaded)'}
@@ -1388,7 +1388,7 @@ const MainApp: React.FC = () => {
               <button
                 onClick={() => setLogicOpen(true)}
                 title="Ladder programming — its own workspace"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-violet-700 text-white hover:bg-violet-800"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
               >
                 <CpuIcon className="w-4 h-4" />
                 Simorgh Logic
@@ -1409,8 +1409,8 @@ const MainApp: React.FC = () => {
       {/* Read-only banner — TPMS owns this project until a revision is raised
           here. */}
       {isTpmsMastered && (
-        <div className="bg-purple-50 border-b border-purple-300 px-4 py-2">
-          <div className="w-full flex items-center gap-2 text-sm text-purple-900">
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2">
+          <div className="w-full flex items-center gap-2 text-sm text-amber-900">
             <span>🗄️</span>
             <span>
               Read-only — this project is read from <strong>TPMS</strong>
@@ -1418,7 +1418,7 @@ const MainApp: React.FC = () => {
               opens. Raise a revision to take it over and edit it here.
             </span>
             <button
-              className="ml-auto px-3 py-1 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-50"
+              className="ml-auto px-3 py-1 border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 rounded text-xs disabled:opacity-50"
               onClick={() => { setNewRevisionName(`Revision ${getNextRevisionNumber()}`); setShowCreateRevisionModal(true); }}
             >
               + New Revision
@@ -1563,7 +1563,7 @@ const MainApp: React.FC = () => {
                 Cancel
               </button>
               <button
-                className="px-4 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={handleConfirmCreateRevision}
                 disabled={creatingRevision}
               >

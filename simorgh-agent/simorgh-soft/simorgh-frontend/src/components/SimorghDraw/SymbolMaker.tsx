@@ -486,7 +486,7 @@ export const SymbolMaker: React.FC<Props> = ({
                     value={group}
                     onChange={e => setGroup(e.target.value)}
                     placeholder={t.libNewGroupName}
-                    className="mt-1.5 w-full border border-violet-300 rounded px-2 py-1.5 text-sm"
+                    className="mt-1.5 w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
                   />
                 )}
               </div>

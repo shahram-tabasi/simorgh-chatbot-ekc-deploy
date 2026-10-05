@@ -499,7 +499,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
       {section && (
         <>
           <ChevronRightIcon className="w-3 h-3 text-gray-400" />
-          <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium">
+          <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 font-medium">
             {section.label}
           </span>
         </>
@@ -601,7 +601,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-5 py-3 flex items-center justify-between">
+        <div className="bg-gray-50 border-b border-gray-200 text-gray-800 px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <SparklesIcon className="w-5 h-5" />
             <h2 className="text-base font-semibold">
@@ -610,7 +610,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
                 : `New ${tier} Template${section ? ` — ${section.label}` : ''}`}
             </h2>
           </div>
-          <button onClick={onCancel} className="p-1 rounded hover:bg-white/20">
+          <button onClick={onCancel} className="p-1 rounded text-gray-500 hover:bg-gray-200">
             <XIcon className="w-4 h-4" />
           </button>
         </div>
@@ -624,7 +624,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
             the parts arriving with the template are the reason to paste it
             and are the one thing the steps below never show. */}
         {startFrom && (
-          <div className="px-5 py-2 border-b bg-indigo-50/70 text-[11px] text-indigo-900">
+          <div className="px-5 py-2 border-b bg-gray-50 text-[11px] text-gray-700">
             {many ? (
               <>
                 Moving <span className="font-semibold">{moveCount} templates</span> — the path picked
@@ -638,7 +638,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
               ? ' — its parts stay as they are; the path, the leaf and the parameters below are what is being changed.'
               : ' — its parts, parameters and mechanical answers come with it.'}
             {(tier === 'LV' ? !seed.root : tier === 'MV' && !seed.cellType) && (
-              <span className="block text-indigo-700">
+              <span className="block text-gray-600">
                 Its path is not one this section files, so pick the new one below.
               </span>
             )}
@@ -827,7 +827,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
                         }
                         handleCreate(s.template.id);
                       }}
-                      className="px-3 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700"
+                      className="px-3 py-1 text-xs border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 rounded"
                       disabled={candidateLeafKinds.length > 0 && !leafKind}
                       title={candidateLeafKinds.length === 0 || leafKind ? 'Clone this template into a new one' : 'Pick an equipment kind first'}
                     >
@@ -894,8 +894,8 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
                 picked above — each part's own questions are asked as the
                 part is entered. Optional, like Mechanical. */}
             {useSimorghDraw && mvLike(tier) && structuralPathComplete && cellAsks(cellType ?? '', cellSub ?? '') && (
-              <div className="mt-2 rounded border border-indigo-200 bg-indigo-50/40">
-                <p className="px-3 pt-2 text-xs font-semibold text-indigo-800">
+              <div className="mt-2 rounded border border-gray-200 bg-gray-50">
+                <p className="px-3 pt-2 text-xs font-semibold text-gray-700">
                   About the cell{cellType ? ` — ${cellType}${cellSub ? ` · ${cellSub}` : ''}` : ''}
                 </p>
                 <SingleLineQuestions

@@ -227,7 +227,7 @@ export const PlcAssistant: React.FC<Props> = ({
         {(stage === 'ask' || stage === 'working' || stage === 'failed') && (
           <>
             <textarea
-              className="w-full h-28 px-2 py-2 rounded border border-gray-300 resize-none focus:border-violet-400 focus:outline-none"
+              className="w-full h-28 px-2 py-2 rounded border border-gray-300 resize-none focus:border-blue-500 focus:outline-none"
               value={task}
               readOnly={stage === 'working'}
               placeholder={block ? `${t.askPlaceholder} — "${block.name}"` : t.askPlaceholder}
@@ -239,7 +239,7 @@ export const PlcAssistant: React.FC<Props> = ({
                 <button
                   key={s.label}
                   className="px-2 py-1 rounded border border-gray-200 text-[11px]
-                    hover:border-violet-400 hover:text-purple-700"
+                    hover:border-gray-400 hover:bg-gray-50"
                   onClick={() => setTask(s.task(block))}
                 >
                   {s.label}
@@ -280,7 +280,7 @@ export const PlcAssistant: React.FC<Props> = ({
 
             <button
               className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded
-                bg-violet-600 text-white font-medium hover:bg-purple-700 disabled:opacity-40"
+                bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-40"
               disabled={task.trim().length < 3 || stage === 'working' || readOnly}
               onClick={() => ask()}
             >
@@ -318,7 +318,7 @@ export const PlcAssistant: React.FC<Props> = ({
               {t.questionsIntro}
             </p>
             {questions.map((q, qi) => (
-              <div key={qi} className="rounded border border-purple-200 p-2">
+              <div key={qi} className="rounded border border-gray-200 p-2">
                 <p className="font-medium">{q.ask}</p>
                 {q.why && <p className="text-[11px] text-gray-500 mt-0.5">{q.why}</p>}
                 <div className="mt-2 space-y-1">
@@ -328,8 +328,8 @@ export const PlcAssistant: React.FC<Props> = ({
                       <button
                         key={o.label}
                         className={`w-full text-left px-2 py-1.5 rounded border text-[11.5px]
-                          ${on ? 'border-purple-500 bg-purple-50'
-                          : 'border-gray-200 hover:border-purple-300'}`}
+                          ${on ? 'border-blue-600 bg-blue-50'
+                          : 'border-gray-200 hover:border-gray-400'}`}
                         onClick={() => setPicked(prev => {
                           const now = prev[qi] ?? [];
                           if (q.multi) {
@@ -352,7 +352,7 @@ export const PlcAssistant: React.FC<Props> = ({
             ))}
             <div className="flex gap-2">
               <button
-                className="flex-1 px-3 py-2 rounded bg-violet-600 text-white font-medium disabled:opacity-40"
+                className="flex-1 px-3 py-2 rounded bg-blue-600 text-white font-medium disabled:opacity-40"
                 disabled={!allAnswered}
                 onClick={answerQuestions}
               >
@@ -457,7 +457,7 @@ export const PlcAssistant: React.FC<Props> = ({
             <div className="flex gap-2">
               <button
                 className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded
-                  bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-40"
+                  bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-40"
                 disabled={readOnly || (plan.added.length === 0 && plan.replaced.length === 0
                   && (!takeTags || plan.newTags.length === 0))}
                 onClick={apply}

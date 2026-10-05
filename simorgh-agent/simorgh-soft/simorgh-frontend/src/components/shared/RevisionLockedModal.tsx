@@ -18,16 +18,16 @@ export const RevisionLockedModal: React.FC<RevisionLockedModalProps> = ({ notice
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]">
         <div className="bg-white rounded-lg shadow-2xl w-[540px] flex flex-col">
-          <div className="flex items-start justify-between px-6 py-4 border-b bg-purple-50 rounded-t-lg">
+          <div className="flex items-start justify-between px-6 py-4 border-b bg-amber-50 rounded-t-lg">
             <div className="flex items-start gap-3">
-              <LockIcon className="w-6 h-6 text-purple-600 flex-shrink-0 mt-0.5" />
+              <LockIcon className="w-6 h-6 text-amber-700 flex-shrink-0 mt-0.5" />
               <div>
-                <h3 className="font-semibold text-lg text-purple-900">This project is read from TPMS</h3>
-                <p className="text-sm text-purple-800 mt-0.5">Changes were not applied.</p>
+                <h3 className="font-semibold text-lg text-gray-900">This project is read from TPMS</h3>
+                <p className="text-sm text-amber-800 mt-0.5">Changes were not applied.</p>
               </div>
             </div>
-            <button className="p-1 hover:bg-purple-100 rounded" onClick={onClose}>
-              <XIcon className="w-5 h-5 text-purple-600" />
+            <button className="p-1 hover:bg-amber-100 rounded" onClick={onClose}>
+              <XIcon className="w-5 h-5 text-gray-500" />
             </button>
           </div>
 

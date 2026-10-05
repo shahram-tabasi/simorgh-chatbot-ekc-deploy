@@ -535,7 +535,7 @@ export const SymbolGraphicEditor: React.FC<Props> = ({
             <button
               onClick={() => save.current?.()}
               disabled={!unsaved}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-500 text-white text-xs font-semibold hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-default"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-40 disabled:cursor-default"
               title={unsaved ? t.symSaveTip : t.symSaveNothing}
             >
               <SaveIcon className="w-3.5 h-3.5" /> {t.symSave}

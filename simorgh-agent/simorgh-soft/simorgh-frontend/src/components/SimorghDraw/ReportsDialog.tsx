@@ -82,7 +82,7 @@ export const ReportsDialog: React.FC<Props> = ({ value, canEdit, onSave, onClose
           <button onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-gray-300 hover:bg-gray-100">Cancel</button>
           <button
             onClick={() => { onSave(all.filter(k => chosen.has(k))); onClose(); }} disabled={!canEdit}
-            className="flex items-center gap-1.5 px-4 py-1.5 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40"
+            className="flex items-center gap-1.5 px-4 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
           >
             <FileTextIcon className="w-4 h-4" /> Generate
           </button>

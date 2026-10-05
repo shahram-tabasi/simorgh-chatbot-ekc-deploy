@@ -234,7 +234,7 @@ export const DocumentViewer: React.FC<Props> = ({ document: doc, onClose, onChan
                 />
                 <div className="flex justify-end gap-2 mt-2">
                   <button className="px-3 py-1 text-xs border rounded hover:bg-gray-50" onClick={() => { setDraft(null); setDraftComment(''); }}>Cancel</button>
-                  <button className="px-3 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700" onClick={commitDraftHighlight}>Save highlight</button>
+                  <button className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700" onClick={commitDraftHighlight}>Save highlight</button>
                 </div>
               </div>
             )}

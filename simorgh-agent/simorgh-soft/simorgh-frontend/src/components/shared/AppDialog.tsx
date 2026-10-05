@@ -127,7 +127,7 @@ export function appChoose(
 
 const TONE: Record<Tone, { icon: React.ReactNode; ring: string; button: string }> = {
   info:    { icon: <InfoIcon className="w-5 h-5 text-blue-600" />,        ring: 'bg-blue-50',   button: 'bg-blue-600 hover:bg-blue-700' },
-  success: { icon: <InfoIcon className="w-5 h-5 text-emerald-600" />,     ring: 'bg-emerald-50', button: 'bg-emerald-600 hover:bg-emerald-700' },
+  success: { icon: <InfoIcon className="w-5 h-5 text-green-700" />,       ring: 'bg-green-50',   button: 'bg-blue-600 hover:bg-blue-700' },
   warning: { icon: <HelpCircleIcon className="w-5 h-5 text-amber-600" />, ring: 'bg-amber-50',  button: 'bg-blue-600 hover:bg-blue-700' },
   danger:  { icon: <AlertTriangleIcon className="w-5 h-5 text-red-600" />, ring: 'bg-red-50',   button: 'bg-red-600 hover:bg-red-700' },
 };

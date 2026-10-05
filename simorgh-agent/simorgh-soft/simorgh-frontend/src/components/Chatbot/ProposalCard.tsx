@@ -66,11 +66,11 @@ export const ProposalCard: React.FC<ProposalCardProps> = ({ title, actions, ctx,
   if (done) {
     return (
       <div className={`mt-2 border rounded p-3 text-xs ${
-        done.applied > 0 ? 'border-emerald-200 bg-emerald-50' : 'border-gray-200 bg-gray-50'
+        done.applied > 0 ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'
       }`}>
         <div className="flex items-center gap-2">
           {done.applied > 0
-            ? <CheckCircleIcon className="w-4 h-4 text-emerald-600" />
+            ? <CheckCircleIcon className="w-4 h-4 text-green-700" />
             : <XIcon className="w-4 h-4 text-gray-500" />}
           <span className="font-semibold">
             {done.applied > 0
@@ -84,7 +84,7 @@ export const ProposalCard: React.FC<ProposalCardProps> = ({ title, actions, ctx,
   }
 
   return (
-    <div className="mt-2 border border-amber-200 bg-gradient-to-br from-amber-50 to-white rounded-lg overflow-hidden">
+    <div className="mt-2 border border-amber-200 bg-amber-50 rounded-lg overflow-hidden">
       <div className="px-3 py-2 bg-amber-100/60 border-b border-amber-200 flex items-center justify-between">
         <div className="flex items-center gap-2 text-amber-900">
           <ListChecksIcon className="w-4 h-4" />
@@ -140,7 +140,7 @@ export const ProposalCard: React.FC<ProposalCardProps> = ({ title, actions, ctx,
         <button
           onClick={handleApply}
           disabled={busy || noneChecked}
-          className="px-3 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-40 inline-flex items-center gap-1"
+          className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40 inline-flex items-center gap-1"
         >
           {busy
             ? <><Loader2Icon className="w-3 h-3 animate-spin" /> Applying…</>

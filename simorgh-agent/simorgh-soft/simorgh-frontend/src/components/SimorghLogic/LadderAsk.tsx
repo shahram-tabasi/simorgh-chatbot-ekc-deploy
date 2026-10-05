@@ -193,7 +193,7 @@ export const LadderAsk: React.FC<Props> = ({ compact = false, onProgram, footnot
           onClick={() => ask()}
           disabled={working || !chosen || task.trim().length < 3}
           data-ladder-go
-          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-violet-700 text-white text-sm font-medium hover:bg-violet-800 disabled:opacity-40"
+          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-40"
         >
           <SendIcon className="w-4 h-4" />
           {working ? 'Writing…' : 'Write the program'}
@@ -234,8 +234,8 @@ export const LadderAsk: React.FC<Props> = ({ compact = false, onProgram, footnot
       )}
 
       {questions && (
-        <div className="rounded border border-violet-300 bg-violet-50 p-3 space-y-3">
-          <p className="text-[12px] text-violet-900">
+        <div className="rounded border border-gray-200 bg-gray-50 p-3 space-y-3">
+          <p className="text-[12px] text-gray-800">
             Before writing it, {questions.length === 1 ? 'one thing' : `${questions.length} things`} that
             would change the program:
           </p>
@@ -261,12 +261,12 @@ export const LadderAsk: React.FC<Props> = ({ compact = false, onProgram, footnot
                       })}
                       className={`w-full text-start px-2.5 py-1.5 rounded border text-[12px] flex items-start gap-2 ${
                         on
-                          ? 'border-violet-500 bg-white text-violet-900'
-                          : 'border-gray-300 bg-white text-gray-800 hover:border-violet-400'}`}
+                          ? 'border-blue-600 bg-blue-50 text-blue-900'
+                          : 'border-gray-300 bg-white text-gray-800 hover:border-gray-400'}`}
                     >
                       <span className={`mt-0.5 w-3.5 h-3.5 shrink-0 flex items-center justify-center border ${
                         q.multi ? 'rounded-sm' : 'rounded-full'
-                      } ${on ? 'border-violet-600 bg-violet-600 text-white' : 'border-gray-400'}`}>
+                      } ${on ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-400'}`}>
                         {on && <CheckIcon className="w-2.5 h-2.5" />}
                       </span>
                       <span className="min-w-0">
@@ -284,7 +284,7 @@ export const LadderAsk: React.FC<Props> = ({ compact = false, onProgram, footnot
           <button
             onClick={answerQuestions}
             disabled={!allAnswered || working}
-            className="w-full px-3 py-2 rounded-md bg-violet-700 text-white text-sm font-medium hover:bg-violet-800 disabled:opacity-40"
+            className="w-full px-3 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-40"
           >
             {allAnswered ? 'Carry on with these' : 'Pick one of each to carry on'}
           </button>
@@ -321,7 +321,7 @@ const Chip: React.FC<{
         className={`flex items-center gap-1.5 px-2 py-1 rounded-md border text-[12px] max-w-[15rem] ${
           value
             ? 'border-gray-300 bg-white text-gray-800'
-            : 'border-dashed border-violet-400 bg-violet-50 text-violet-800'}`}
+            : 'border-dashed border-gray-400 bg-white text-gray-700'}`}
       >
         <Icon className="w-3.5 h-3.5 shrink-0 opacity-70" />
         <span className="truncate">{shown}</span>
@@ -339,8 +339,8 @@ const Chip: React.FC<{
               <li key={o}>
                 <button
                   onClick={() => { onChange(o); setOpen(false); }}
-                  className={`w-full text-start px-3 py-1.5 text-[12.5px] hover:bg-violet-50 ${
-                    o === value ? 'text-violet-800 font-medium' : 'text-gray-800'}`}
+                  className={`w-full text-start px-3 py-1.5 text-[12.5px] hover:bg-gray-50 ${
+                    o === value ? 'text-blue-700 font-medium' : 'text-gray-800'}`}
                 >
                   {display ? display(o) : o}
                 </button>

@@ -315,16 +315,15 @@ const TABS: {
 /**
  * What a button is painted in.
  *
- * `plain` is nearly everything; the colours are reserved for the four commands
- * that produce something — a file, or a draft from the model — because a
- * command with a consequence should not look like one that toggles a grid.
+ * One neutral look for every command, as the simorgh-ui skill asks: a file
+ * type is not a status. Only `alarm` keeps a colour, because it is one.
  */
 const TONES = {
   plain: 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100',
-  ai: 'bg-violet-700 border-violet-700 text-white hover:bg-violet-800',
-  dxf: 'bg-teal-700 border-teal-700 text-white hover:bg-teal-800',
-  pdf: 'bg-rose-700 border-rose-700 text-white hover:bg-rose-800',
-  live: 'bg-emerald-700 border-emerald-700 text-white hover:bg-emerald-800',
+  ai: 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100',
+  dxf: 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100',
+  pdf: 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100',
+  live: 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100',
   alarm: 'bg-red-700 border-red-700 text-white hover:bg-red-800',
 };
 
@@ -562,7 +561,7 @@ const AskPanel: React.FC<{
             data-ask-mode={id}
             className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[12px] border-b-2 ${
               mode === id
-                ? 'border-violet-600 text-violet-800 font-medium bg-white'
+                ? 'border-blue-600 text-blue-700 font-medium bg-white'
                 : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
             <Icon className="w-3.5 h-3.5" />
@@ -592,14 +591,14 @@ const AskPanel: React.FC<{
         onChange={e => onText(e.target.value)}
         rows={3}
         placeholder={t.askPlaceholder}
-        className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-violet-400"
+        className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500"
       />
       <p className="text-[11px] text-gray-500 mt-1.5">{t.askNote}</p>
       <div className="flex justify-end mt-2">
         <button
           onClick={onGo}
           disabled={asking || text.trim().length < 3}
-          className="px-3 py-1.5 rounded bg-violet-700 text-white text-sm font-medium hover:bg-violet-800 disabled:opacity-40"
+          className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-40"
         >
           {asking ? t.askWorking : t.askGo}
         </button>
@@ -2265,8 +2264,8 @@ export const DrawingEditor: React.FC<Props> = ({
               onClick={() => setAskOpen(o => !o)}
               title={T.askTip}
               data-tool="ask"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium text-white ${
-                askOpen ? 'bg-violet-900' : 'bg-violet-700 hover:bg-violet-800'}`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium border ${
+                askOpen ? 'bg-gray-100 border-gray-400 text-gray-900' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100'}`}
             >
               {/* Our own mark, not a generic sparkle. Every product on the
                   market puts the same star on its AI button; this one is the
@@ -2657,7 +2656,7 @@ export const DrawingEditor: React.FC<Props> = ({
                     key={t.id}
                     onClick={() => updateXlsx(t.id)}
                     title={`${T.xlsxUpdateTip} — ${t.name}`}
-                    className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md bg-emerald-700 text-white text-sm font-medium hover:bg-emerald-800"
+                    className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium"
                   >
                     <RefreshCwIcon className="w-4 h-4" />
                     {T.xlsxUpdate}: {t.name.length > 18 ? `${t.name.slice(0, 16)}…` : t.name}
@@ -2717,20 +2716,20 @@ export const DrawingEditor: React.FC<Props> = ({
               <RibbonPanel name={T.panExport}>
                 <button
                   onClick={exportDxf}
-                  className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md bg-teal-700 text-white text-sm font-medium hover:bg-teal-800"
+                  className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium"
                 >
                   <DownloadIcon className="w-4 h-4" /> DXF
                 </button>
                 <button
                   onClick={exportEma}
-                  className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md bg-indigo-700 text-white text-sm font-medium hover:bg-indigo-800"
+                  className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium"
                   title="EPLAN window macro (.ema) — in EPLAN: Insert → Window macro"
                 >
                   <DownloadIcon className="w-4 h-4" /> EPLAN .ema
                 </button>
                 <button
                   onClick={exportPdf}
-                  className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md bg-rose-700 text-white text-sm font-medium hover:bg-rose-800"
+                  className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium"
                   title="Vector PDF, one page per sheet. Latin text only — use Print / PDF for Persian."
                 >
                   <DownloadIcon className="w-4 h-4" /> PDF
@@ -2975,7 +2974,7 @@ export const DrawingEditor: React.FC<Props> = ({
               it is a column beside the canvas, further down. */}
           {askOpen && askDock === 'float' && (
             <div
-              className="absolute z-30 w-[24rem] rounded-lg border border-violet-300 bg-white shadow-xl"
+              className="absolute z-30 w-[24rem] rounded-lg border border-gray-300 bg-white shadow-xl"
               style={askAt
                 ? { left: askAt.x, top: askAt.y }
                 : { left: 8, top: 8 }}

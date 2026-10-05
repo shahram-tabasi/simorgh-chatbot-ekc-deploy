@@ -66,7 +66,7 @@ const ModeCard: React.FC<{
   <button
     onClick={() => onSelect(id)}
     className={`flex-1 text-left border-2 rounded-lg p-4 transition ${
-      mode === id ? 'border-emerald-600 bg-emerald-50' : 'border-gray-200 bg-white hover:border-gray-300'
+      mode === id ? 'border-blue-600 bg-blue-50' : 'border-gray-200 bg-white hover:border-gray-300'
     }`}
   >
     <div className="flex items-center gap-2 mb-1">{icon}<span className="font-semibold text-gray-800">{title}</span></div>
@@ -78,9 +78,9 @@ const ModeCard: React.FC<{
 // active-state classes are a fixed lookup rather than built from a `color`
 // prop at runtime.
 const GEN_CARD_ACTIVE_CLASS: Record<GenerationType, string> = {
-  sld: 'border-blue-500 bg-blue-50',
-  old: 'border-amber-500 bg-amber-50',
-  sldold: 'border-emerald-500 bg-emerald-50',
+  sld: 'border-blue-600 bg-blue-50',
+  old: 'border-blue-600 bg-blue-50',
+  sldold: 'border-blue-600 bg-blue-50',
 };
 
 const GenCard: React.FC<{
@@ -596,9 +596,9 @@ export const SendToEplanTab: React.FC = () => {
         <>
           {/* ── Project vs Mechanical ── */}
           <div className="flex gap-3 mb-5">
-            <ModeCard mode={mode} onSelect={setMode} id="project" icon={<ZapIcon className="w-4 h-4 text-emerald-700" />} title="Project"
+            <ModeCard mode={mode} onSelect={setMode} id="project" icon={<ZapIcon className="w-4 h-4 text-gray-600" />} title="Project"
               note="Single line and/or outline drawings, sent to EPLAN" />
-            <ModeCard mode={mode} onSelect={setMode} id="mechanical" icon={<ClipboardIcon className="w-4 h-4 text-amber-700" />} title="Mechanical"
+            <ModeCard mode={mode} onSelect={setMode} id="mechanical" icon={<ClipboardIcon className="w-4 h-4 text-gray-600" />} title="Mechanical"
               note="Mechanical items list — Load and Export only, nothing is sent to EPLAN" />
           </div>
 
@@ -618,7 +618,7 @@ export const SendToEplanTab: React.FC = () => {
                 <button
                   onClick={exportMechanicalExcel}
                   disabled={mechanical.cells === 0}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm bg-amber-700 text-white hover:bg-amber-800 disabled:opacity-40"
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40"
                 >
                   <DownloadIcon className="w-4 h-4" /> Export Mechanical Excel
                 </button>
@@ -726,7 +726,7 @@ export const SendToEplanTab: React.FC = () => {
 
                   <div className="mt-3 text-right">
                     <button onClick={saveSupplementaryFields}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-emerald-700 text-white hover:bg-emerald-800 ml-auto">
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 ml-auto">
                       <SaveIcon className="w-3.5 h-3.5" /> Save {suppType} supplementary fields
                     </button>
                   </div>
@@ -737,11 +737,11 @@ export const SendToEplanTab: React.FC = () => {
               <div className="border border-gray-200 rounded-lg p-4">
                 <p className="text-sm font-semibold text-gray-700 mb-3">Drawing Options</p>
                 <div className="flex gap-3 mb-4">
-                  <GenCard generationType={generationType} onSelect={setGenerationType} id="sld" icon={<ZapIcon className="w-5 h-5 text-blue-600" />} title="Generate SLD"
+                  <GenCard generationType={generationType} onSelect={setGenerationType} id="sld" icon={<ZapIcon className="w-5 h-5 text-gray-600" />} title="Generate SLD"
                     note="Single Line Diagram" />
-                  <GenCard generationType={generationType} onSelect={setGenerationType} id="old" icon={<DatabaseIcon className="w-5 h-5 text-amber-600" />} title="Generate OLD"
+                  <GenCard generationType={generationType} onSelect={setGenerationType} id="old" icon={<DatabaseIcon className="w-5 h-5 text-gray-600" />} title="Generate OLD"
                     note="Outline Drawing" />
-                  <GenCard generationType={generationType} onSelect={setGenerationType} id="sldold" icon={<LayersIcon className="w-5 h-5 text-emerald-600" />} title="Generate SLD & OLD"
+                  <GenCard generationType={generationType} onSelect={setGenerationType} id="sldold" icon={<LayersIcon className="w-5 h-5 text-gray-600" />} title="Generate SLD & OLD"
                     note="Both Diagrams" />
                 </div>
 
@@ -853,7 +853,7 @@ export const SendToEplanTab: React.FC = () => {
                   a new row included, rather than taken on trust. */}
               <details className="border border-gray-200 rounded-lg" open>
                 <summary className="px-4 py-2.5 cursor-pointer text-sm font-semibold text-gray-700 flex items-center gap-2">
-                  <ListChecksIcon className="w-4 h-4 text-emerald-700" />
+                  <ListChecksIcon className="w-4 h-4 text-gray-600" />
                   EPLAN draft table — {records.length} feeder(s), as Eplanix sends it
                   <span className="ml-auto text-[11px] font-normal text-gray-500">
                     Source: Simorgh project{currentRevision ? ` · REV ${currentRevision.revisionNumber}` : ''} (same data as the Output tab)
@@ -944,7 +944,7 @@ export const SendToEplanTab: React.FC = () => {
                   <button
                     onClick={handleSend}
                     disabled={!canSend}
-                    className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg shadow-sm font-medium text-sm bg-red-600 text-white hover:bg-red-700 disabled:opacity-40"
+                    className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg shadow-sm font-medium text-sm bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
                   >
                     <SendIcon className="w-4 h-4" /> {sending ? 'Sending…' : 'Create Project'}
                   </button>

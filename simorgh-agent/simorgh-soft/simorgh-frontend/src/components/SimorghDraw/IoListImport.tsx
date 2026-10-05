@@ -241,7 +241,7 @@ export const IoListImport: React.FC<Props> = ({ pages, edits, onDone, onClose })
           <button
             onClick={create}
             disabled={points.length === 0}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40"
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
           >
             {pageCount > 0 ? `Draw ${pageCount} page${pageCount === 1 ? '' : 's'}` : 'Draw the pages'}
           </button>

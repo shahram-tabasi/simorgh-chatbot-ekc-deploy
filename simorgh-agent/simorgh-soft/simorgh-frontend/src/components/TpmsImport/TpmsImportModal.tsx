@@ -197,7 +197,7 @@ export const TpmsImportModal: React.FC<TpmsImportModalProps> = ({ onClose, onImp
 
           {!preview && (
             <button
-              className="px-4 py-2 bg-sky-700 text-white rounded text-sm hover:bg-sky-800 disabled:opacity-40"
+              className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-40"
               disabled={!ready || loading === 'preview'}
               onClick={loadPreview}
             >

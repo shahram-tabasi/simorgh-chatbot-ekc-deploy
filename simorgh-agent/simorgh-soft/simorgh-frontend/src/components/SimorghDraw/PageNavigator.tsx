@@ -50,9 +50,9 @@ import { appConfirm } from '../shared/AppDialog';
 // it is rearranged.
 
 const SWATCH: Record<PageType, string> = {
-  sld: 'bg-blue-100 text-blue-800 border-blue-200',
-  wd: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-  old: 'bg-amber-100 text-amber-800 border-amber-200',
+  sld: 'bg-gray-100 text-gray-700 border-gray-200',
+  wd: 'bg-gray-100 text-gray-700 border-gray-200',
+  old: 'bg-gray-100 text-gray-700 border-gray-200',
 };
 
 /** A path as one key. The separator cannot be typed, so it cannot collide. */

@@ -148,9 +148,9 @@ export const NewBlockDialog: React.FC<Props> = ({
         className="bg-white rounded-lg shadow-2xl w-[720px] max-w-full max-h-[92vh] flex flex-col overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
-        <div className="bg-gradient-to-r from-slate-700 to-slate-800 text-white px-5 py-3 flex items-center justify-between shrink-0">
+        <div className="bg-gray-50 border-b border-gray-200 text-gray-900 px-5 py-3 flex items-center justify-between shrink-0">
           <h2 className="text-base font-semibold">{t.newBlockTitle}</h2>
-          <button onClick={onCancel} className="p-1 rounded hover:bg-white/20">
+          <button onClick={onCancel} className="p-1 rounded text-gray-500 hover:bg-gray-200">
             <XIcon className="w-4 h-4" />
           </button>
         </div>

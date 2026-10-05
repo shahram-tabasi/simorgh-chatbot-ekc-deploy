@@ -50,7 +50,7 @@ function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
     const start = t.match.index || 0;
     if (start > cursor) out.push(text.slice(cursor, start));
     const k = `${keyPrefix}-${i}`;
-    if (t.type === 'code')   out.push(<code key={k} className="px-1 py-0.5 rounded bg-gray-100 text-pink-700 font-mono text-[11px]">{t.match[1]}</code>);
+    if (t.type === 'code')   out.push(<code key={k} className="px-1 py-0.5 rounded bg-gray-100 text-gray-800 font-mono text-[11px]">{t.match[1]}</code>);
     else if (t.type === 'bold' || t.type === 'under') out.push(<strong key={k} className="font-semibold">{t.match[1]}</strong>);
     else if (t.type === 'italic') out.push(<em key={k}>{t.match[1]}</em>);
     else if (t.type === 'link')   out.push(<a key={k} href={t.match[2]} target="_blank" rel="noreferrer noopener" className="text-blue-600 underline hover:no-underline">{t.match[1]}</a>);

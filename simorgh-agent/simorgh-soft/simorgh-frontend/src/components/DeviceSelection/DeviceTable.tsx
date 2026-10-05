@@ -167,15 +167,15 @@ export const DeviceTable: React.FC<DeviceTableProps> = ({ devices, onDevicesUpda
           <button className="px-3 py-1 bg-blue-600 text-white rounded-md text-sm flex items-center" onClick={handleAddRow}>
             <PlusIcon className="w-4 h-4 mr-1" /> Add Scope
           </button>
-          <button className="px-3 py-1 bg-green-600 text-white rounded-md text-sm flex items-center" onClick={() => fileInputRef.current?.click()}>
+          <button className="px-3 py-1 border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 rounded-md text-sm flex items-center" onClick={() => fileInputRef.current?.click()}>
             <UploadIcon className="w-4 h-4 mr-1" /> Import Excel
           </button>
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleImportExcel} className="hidden" />
-          <button className="px-3 py-1 bg-purple-600 text-white rounded-md text-sm flex items-center"
+          <button className="px-3 py-1 border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 rounded-md text-sm flex items-center"
             onClick={() => setShowMoveDialog(true)} disabled={selectedRows.size === 0}>
             <MoveIcon className="w-4 h-4 mr-1" /> Move Selected ({selectedRows.size})
           </button>
-          <button className="px-3 py-1 bg-red-600 text-white rounded-md text-sm flex items-center"
+          <button className="px-3 py-1 border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 rounded-md text-sm flex items-center"
             onClick={handleDeleteSelected} disabled={selectedRows.size === 0}>
             <Trash2Icon className="w-4 h-4 mr-1" /> Delete Selected
           </button>

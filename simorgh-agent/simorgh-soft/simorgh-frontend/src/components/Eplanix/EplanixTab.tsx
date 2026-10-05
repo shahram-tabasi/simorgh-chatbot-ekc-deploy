@@ -461,7 +461,7 @@ export const EplanixTab: React.FC = () => {
             onClick={openPages}
             disabled={!isCurrentRevisionEditable && drawPages.length === 0}
             title="Open Simorgh Draw on this project's pages — wiring diagrams, single lines and layouts, with the page tree on the ribbon"
-            className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-40"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
           >
             <PencilRulerIcon className="w-4 h-4" />
             Simorgh Draw
@@ -532,7 +532,7 @@ export const EplanixTab: React.FC = () => {
                 title={preview
                   ? 'Open this single line in Simorgh Draw — move, retype, draw lines and text, and write DXF / PDF / SVG'
                   : 'Add feeder lines in Scope Selection first'}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-40"
+                className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40"
               >
                 <PencilRulerIcon className="w-4 h-4" />
                 Edit drawing
@@ -574,7 +574,7 @@ export const EplanixTab: React.FC = () => {
               )}
               <Btn
                 onClick={() => exportSingleLineDxf(projectData, chosenWithLines, perPage, paper, symbols)}
-                className="bg-teal-700 text-white hover:bg-teal-800"
+                className="border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
                 disabled={chosenWithLines.length === 0}
               >
                 DXF (CAD)
@@ -700,7 +700,7 @@ export const EplanixTab: React.FC = () => {
         <div className="border border-gray-200 rounded-lg">
           <div className="px-4 py-3 bg-gray-50 border-b space-y-2.5">
             <div className="flex items-start gap-3 min-w-0">
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-violet-600">LAYOUT</span>
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">LAYOUT</span>
               <div className="min-w-0">
                 <p className="font-medium text-sm text-gray-800">
                   {layout ? `${layout.equipment.name} — ${layout.columns.length} column(s), tallest ${layout.tallest}${layout.unit}` : 'No switchgear with feeder lines'}
@@ -722,7 +722,7 @@ export const EplanixTab: React.FC = () => {
               </Btn>
               <Btn
                 onClick={() => exportLayoutExcel(projectData, chosenWithLines)}
-                className="bg-violet-600 text-white hover:bg-violet-700"
+                className="border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
                 disabled={chosenWithLines.length === 0}
               >
                 Layout Excel
@@ -732,7 +732,7 @@ export const EplanixTab: React.FC = () => {
                   `${fileSafe(projectData.projectName)}_layout.dxf`,
                   buildLayoutDxf(projectData, chosenWithLines.map(eq => buildPanelLayout(projectData, eq))),
                   'image/vnd.dxf')}
-                className="bg-teal-700 text-white hover:bg-teal-800"
+                className="border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
                 disabled={chosenWithLines.length === 0}
               >
                 DXF (CAD)
@@ -757,7 +757,7 @@ export const EplanixTab: React.FC = () => {
         <div className="border border-gray-200 rounded-lg">
           <div className="px-4 py-3 bg-gray-50 border-b space-y-2.5">
             <div className="flex items-start gap-3 min-w-0">
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-amber-700">MECH</span>
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">MECH</span>
               <div className="min-w-0">
                 <p className="font-medium text-sm text-gray-800">
                   {mechanical.length} item{mechanical.length === 1 ? '' : 's'} across {chosen.length} switchgear(s)
@@ -769,7 +769,7 @@ export const EplanixTab: React.FC = () => {
             </div>
             <Btn
               onClick={() => exportMechanicalExcel(projectData, chosen)}
-              className="bg-amber-700 text-white hover:bg-amber-800"
+              className="border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
               disabled={mechanical.length === 0}
             >
               Mechanical Excel
@@ -779,7 +779,7 @@ export const EplanixTab: React.FC = () => {
           {mechanical.length > 0 ? (
             <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
               <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-amber-700 text-white">
+                <thead className="sticky top-0 bg-gray-100 text-gray-700">
                   <tr>
                     {MECHANICAL_HEADERS.map(h => (
                       <th key={h} className="px-3 py-2 text-left font-medium whitespace-nowrap">{h}</th>

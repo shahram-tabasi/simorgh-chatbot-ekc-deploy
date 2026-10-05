@@ -61,7 +61,7 @@ export const DrawingReportsModal: React.FC<Props> = ({ pages, fileBase, onClose 
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={download}
-              className="flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium bg-emerald-600 hover:bg-emerald-700"
+              className="flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium bg-blue-600 text-white hover:bg-blue-700"
             >
               <DownloadIcon className="w-4 h-4" /> All four to Excel
             </button>

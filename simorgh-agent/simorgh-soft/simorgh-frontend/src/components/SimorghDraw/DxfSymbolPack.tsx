@@ -134,7 +134,7 @@ export const DxfSymbolPack: React.FC<Props> = ({ symbols, onChange, onPackChange
           <button
             onClick={() => input.current?.click()}
             disabled={busy}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-700 text-white text-sm font-medium hover:bg-teal-800 disabled:opacity-40"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-40"
           >
             <UploadIcon className="w-4 h-4" />
             {busy ? 'Reading…' : 'Add DXF'}

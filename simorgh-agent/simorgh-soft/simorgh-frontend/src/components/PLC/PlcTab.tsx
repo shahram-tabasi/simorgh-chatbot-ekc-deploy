@@ -284,14 +284,14 @@ export const PlcTab: React.FC = () => {
     return (
       <div className="h-full flex items-center justify-center p-8">
         <div className="max-w-xl text-center">
-          <CpuIcon className="w-12 h-12 mx-auto text-emerald-600" />
+          <CpuIcon className="w-12 h-12 mx-auto text-gray-500" />
           <h2 className="mt-4 text-xl font-semibold">{t.startTitle}</h2>
           <p className="mt-2 text-sm text-gray-600 leading-relaxed">{t.startWhat}</p>
           <button
             onClick={start}
             disabled={!editable}
-            className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded bg-emerald-600 text-white
-                       font-medium hover:bg-emerald-700 disabled:opacity-40"
+            className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded bg-blue-600 text-white
+                       font-medium hover:bg-blue-700 disabled:opacity-40"
           >
             <PlayIcon className="w-4 h-4" /> {t.startButton}
           </button>
@@ -323,7 +323,7 @@ export const PlcTab: React.FC = () => {
         >
           <PanelLeftIcon className="w-4 h-4" />
         </button>
-        <CpuIcon className="w-4 h-4 text-emerald-600 shrink-0" />
+        <CpuIcon className="w-4 h-4 text-gray-600 shrink-0" />
         <input
           className="w-28 px-1.5 py-1 text-[12px] font-semibold rounded border border-transparent
                      hover:border-gray-300 focus:border-blue-400 focus:outline-none"
@@ -382,7 +382,7 @@ export const PlcTab: React.FC = () => {
             onClick={() => setRightPanel(p => (p === 'assistant' ? null : 'assistant'))}
             title={rightPanel === 'assistant' ? t.hideAssistant : t.assistant}
             className={`px-2 py-1 rounded text-[12px] inline-flex items-center gap-1.5
-              ${rightPanel === 'assistant' ? 'bg-purple-100 text-purple-800' : 'hover:bg-gray-100'}`}
+              ${rightPanel === 'assistant' ? 'bg-gray-100 text-gray-900' : 'hover:bg-gray-100'}`}
           >
             <SimorghMark className="w-4 h-4" /> {t.assistant}
           </button>

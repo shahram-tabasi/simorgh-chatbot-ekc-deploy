@@ -259,17 +259,17 @@ export const PartQuestionsDialog: React.FC<Props> = ({
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-white rounded-lg shadow-xl w-[560px] max-w-[94vw] max-h-[90vh] flex flex-col"
         onClick={e => e.stopPropagation()}>
-        <div className="bg-blue-600 text-white px-5 py-3 rounded-t-lg flex justify-between items-start gap-3">
+        <div className="bg-gray-50 border-b border-gray-200 text-gray-900 px-5 py-3 rounded-t-lg flex justify-between items-start gap-3">
           <div className="min-w-0">
-            <p className="text-xs text-blue-100">{slotTitle}{index > 0 ? ` · part ${index + 1} of the row` : ''}</p>
+            <p className="text-xs text-gray-600">{slotTitle}{index > 0 ? ` · part ${index + 1} of the row` : ''}</p>
             <h3 className="text-base font-semibold truncate" title={`${label} : ${code}`}>
               {label || 'Part'}{code ? ` : ${code}` : ''}
             </h3>
-            <p className="text-xs text-blue-100">
+            <p className="text-xs text-gray-600">
               {fresh ? 'Just entered — how should the single line draw it?' : 'Single-line questions for this part'}
             </p>
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-blue-700" title="Close">
+          <button onClick={onClose} className="p-1 rounded text-gray-500 hover:bg-gray-200" title="Close">
             <XIcon className="w-5 h-5" />
           </button>
         </div>

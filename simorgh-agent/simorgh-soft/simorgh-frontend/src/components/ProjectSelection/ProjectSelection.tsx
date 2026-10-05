@@ -399,7 +399,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                       </>
                     : selectedTpms
                       ? <>
-                          <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-semibold mr-1.5">TPMS</span>
+                          <span className="text-[10px] bg-gray-100 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded font-semibold mr-1.5">TPMS</span>
                           {tpmsCode(selectedTpms) && (
                             <span className="text-gray-400 mr-1.5">{tpmsCode(selectedTpms)}</span>
                           )}
@@ -476,7 +476,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                   })}
 
                   {filteredTpms.length > 0 && (
-                    <li className="px-3 py-1 text-[10px] uppercase tracking-wide text-purple-500 bg-purple-50 border-y border-purple-100">
+                    <li className="px-3 py-1 text-[10px] uppercase tracking-wide text-gray-600 bg-gray-50 border-y border-gray-200">
                       TPMS — {filteredTpms.length} project{filteredTpms.length === 1 ? '' : 's'}
                     </li>
                   )}
@@ -487,13 +487,13 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                       <li
                         key={`tpms-${o.value}`}
                         className={`px-3 py-1.5 cursor-pointer truncate ${
-                          isSel ? 'bg-purple-600 text-white' : 'hover:bg-purple-50 text-gray-800'
+                          isSel ? 'bg-blue-600 text-white' : 'hover:bg-blue-50 text-gray-800'
                         }`}
                         onClick={() => handlePickTpms(o)}
                         title={o.text}
                       >
                         {tpmsCode(o) && (
-                          <span className={isSel ? 'text-purple-100 mr-1.5' : 'text-gray-400 mr-1.5'}>
+                          <span className={isSel ? 'text-blue-100 mr-1.5' : 'text-gray-400 mr-1.5'}>
                             {tpmsCode(o)}
                           </span>
                         )}
@@ -603,7 +603,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                       Cancel
                     </button>
                     <button
-                      className="px-3 py-1.5 bg-green-600 text-white rounded text-xs hover:bg-green-700 disabled:opacity-50"
+                      className="px-3 py-1.5 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 disabled:opacity-50"
                       onClick={handleCreateRevision}
                       disabled={creatingRevision}
                     >
@@ -617,7 +617,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
 
           {/* ── A TPMS project: what is about to be read ── */}
           {selectedTpms && (
-            <div className="mt-5 border border-purple-200 bg-purple-50/50 rounded p-3 space-y-3">
+            <div className="mt-5 border border-gray-200 bg-gray-50 rounded p-3 space-y-3">
               {tpmsBusy && !tpmsHeader && (
                 <div className="text-sm text-gray-500">Reading the project…</div>
               )}
@@ -625,7 +625,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
               {tpmsHeader && (
                 <>
                   {tpmsHeader.switchgears.length > 0 && (
-                    <div className="border border-purple-100 rounded bg-white max-h-32 overflow-y-auto divide-y divide-gray-50">
+                    <div className="border border-gray-200 rounded bg-white max-h-32 overflow-y-auto divide-y divide-gray-50">
                       {tpmsHeader.switchgears.map(sw => (
                         <div key={sw.scopeId} className="flex items-center gap-2 px-3 py-1.5 text-sm">
                           <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
@@ -645,7 +645,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1.5">Revisions to read</label>
                       <select
-                        className="w-full border border-gray-400 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-purple-500"
+                        className="w-full border border-gray-400 rounded px-3 py-2 text-sm bg-white focus:outline-none focus:border-blue-500"
                         value={revisionScope}
                         onChange={e => setRevisionScope(e.target.value as 'all' | 'newest')}
                       >
@@ -663,8 +663,8 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
 
           {/* A project of this suite that TPMS still owns */}
           {selectedProject?.tpmsSync?.master === 'tpms' && (
-            <div className="mt-4 flex items-start gap-2 text-xs text-purple-800 bg-purple-50 border border-purple-200 rounded px-3 py-2">
-              <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-semibold">TPMS</span>
+            <div className="mt-4 flex items-start gap-2 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded px-3 py-2">
+              <span className="text-[10px] bg-gray-100 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded font-semibold">TPMS</span>
               <span>
                 Linked to TPMS project {selectedProject.tpmsSync.oeNumber || selectedProject.tpmsSync.projectMainId} — it is
                 read from TPMS again when it opens, and stays read-only until a revision is raised here.
@@ -691,7 +691,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
                   Try again
                 </button>
                 <button
-                  className="px-3 py-1.5 bg-amber-600 text-white rounded text-xs hover:bg-amber-700"
+                  className="px-3 py-1.5 border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 rounded text-xs"
                   onClick={() => onProjectSelect(pending.project, pending.current || undefined)}
                 >
                   Open anyway
@@ -721,7 +721,7 @@ export const ProjectSelection: React.FC<ProjectSelectionProps> = ({
           </span>
           {selectedTpms ? (
             <button
-              className="px-5 py-2 bg-purple-600 text-white rounded text-sm font-medium hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-5 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={handleOpenFromTpms}
               disabled={!tpmsHeader || tpmsBusy || opening}
             >

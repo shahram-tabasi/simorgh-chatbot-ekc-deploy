@@ -198,7 +198,7 @@ export const LogicWorkspace: React.FC<Props> = ({ fileBase, titleBlock, onClose 
                           const at = pages.findIndex(p => p.rungs.includes(first));
                           if (at >= 0) setPage(at);
                         }}
-                        className={`w-full text-start px-2.5 py-2 ${open ? 'bg-violet-50' : 'hover:bg-gray-50'}`}
+                        className={`w-full text-start px-2.5 py-2 ${open ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
                       >
                         <span className="text-[12px] font-medium text-gray-900">
                           {i + 1}. {step.title}

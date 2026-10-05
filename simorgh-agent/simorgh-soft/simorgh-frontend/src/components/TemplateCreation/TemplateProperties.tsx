@@ -239,18 +239,18 @@ const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-xl w-[90%] h-[90%] flex flex-col">
         {/* Header */}
-        <div className="bg-blue-600 text-white px-6 py-4 rounded-t-lg flex justify-between items-center">
+        <div className="bg-gray-50 border-b border-gray-200 text-gray-900 px-6 py-4 rounded-t-lg flex justify-between items-center">
           <div>
             <h2 className="text-xl font-semibold">
               {currentPart ? '🔄 Replace Part' : '➕ Select Part'} for {propertyName}
             </h2>
             {currentPart && (
-              <p className="text-sm text-blue-100 mt-1">
+              <p className="text-sm text-gray-600 mt-1">
                 Current: {currentPart.partNumber}
               </p>
             )}
           </div>
-          <button onClick={onClose} className="text-white hover:bg-blue-700 rounded-full p-2">
+          <button onClick={onClose} className="text-gray-500 hover:bg-gray-200 rounded-full p-2">
             ✕
           </button>
         </div>

@@ -31,13 +31,15 @@ const SimorghMark: React.FC<{ className?: string; white?: boolean }> = ({
   className = 'w-5 h-5', white = false,
 }) => (
   // `white` for the mark on a coloured ground. The bird is drawn in navy, and
-  // navy on the indigo-to-pink gradient of the launcher and the header is a
+  // navy on the blue of the launcher is a
   // shape somebody has to go looking for — which is the opposite of what a
   // mark is for.
   <img
     src={logoMark}
     alt=""
     aria-hidden
+    // The navy bird on the dark theme's ground: theme.css whitens it there.
+    data-theme-invert={white ? undefined : ''}
     className={`${className} object-contain select-none${white ? ' brightness-0 invert' : ''}`}
   />
 );
@@ -664,15 +666,15 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
       // `relative z-50` keeps the column visible above any fullscreen modal
       // mounted elsewhere in the app (Device Selection fullscreen leaves
       // room for us via --simorgh-chat-w but is itself `fixed`).
-      <div className="relative z-50 w-12 bg-gradient-to-b from-indigo-50 to-purple-50 border-l border-indigo-200 flex flex-col items-center pt-3 flex-shrink-0">
+      <div className="relative z-50 w-12 bg-gray-50 border-l border-gray-200 flex flex-col items-center pt-3 flex-shrink-0">
         <button
           onClick={() => setOpen(true)}
           title="Open Simorgh AI Assistant"
-          className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 text-white shadow-lg flex items-center justify-center transition-transform hover:scale-110 ring-2 ring-white"
+          className="w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-lg flex items-center justify-center transition-transform hover:scale-110 ring-2 ring-white"
         >
           <SimorghMark className="w-6 h-6" white />
         </button>
-        <span className="mt-3 text-[10px] font-semibold text-indigo-700 [writing-mode:vertical-rl] rotate-180 tracking-widest">
+        <span className="mt-3 text-[10px] font-semibold text-gray-600 [writing-mode:vertical-rl] rotate-180 tracking-widest">
           SIMORGH&nbsp;AI
         </span>
         {/* Put the whole column away, not just the chat. The rail is 48px of
@@ -681,7 +683,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         <button
           onClick={panel.hide}
           title="Close the assistant — View → Panels brings it back"
-          className="mt-auto mb-3 p-1.5 rounded text-indigo-400 hover:text-indigo-800 hover:bg-indigo-100"
+          className="mt-auto mb-3 p-1.5 rounded text-gray-500 hover:text-gray-800 hover:bg-gray-200"
         >
           <XIcon className="w-3.5 h-3.5" />
         </button>
@@ -699,11 +701,11 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
   return (
     <div className={`${panelClass} bg-white shadow-md flex flex-col overflow-hidden`}>
       {/* Title bar */}
-      <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white px-4 py-2 flex items-center justify-between flex-shrink-0">
+      <div className="bg-gray-50 border-b border-gray-200 text-gray-800 px-4 py-2 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-2">
-          <SimorghMark className="w-5 h-5" white />
+          <SimorghMark className="w-5 h-5" />
           <span className="text-sm font-semibold">Simorgh AI Assistant</span>
-          <span className="text-[10px] bg-blue-800 px-2 py-0.5 rounded-full uppercase">
+          <span className="text-[10px] bg-gray-100 text-gray-600 border border-gray-200 px-2 py-0.5 rounded-full uppercase">
             {mode}
           </span>
         </div>
@@ -711,21 +713,21 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
           <button
             title={maximized ? 'Restore' : 'Maximize'}
             onClick={() => setMaximized(m => !m)}
-            className="p-1.5 rounded hover:bg-blue-700"
+            className="p-1.5 rounded text-gray-500 hover:bg-gray-200"
           >
             {maximized ? <MinimizeIcon className="w-4 h-4" /> : <MaximizeIcon className="w-4 h-4" />}
           </button>
           <button
             title="Collapse to the side rail"
             onClick={() => setOpen(false)}
-            className="p-1.5 rounded hover:bg-blue-700"
+            className="p-1.5 rounded text-gray-500 hover:bg-gray-200"
           >
             <MinusIcon className="w-4 h-4" />
           </button>
           <button
             title="Close the assistant — View → Panels brings it back"
             onClick={() => { setMaximized(false); panel.hide(); }}
-            className="p-1.5 rounded hover:bg-blue-700"
+            className="p-1.5 rounded text-gray-500 hover:bg-gray-200"
           >
             <XIcon className="w-4 h-4" />
           </button>
@@ -782,7 +784,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
 
       {/* What the assistant is looking at, and what answered last turn. */}
       <div className="border-b border-gray-200 px-3 py-1 flex items-center gap-2 text-[10px] text-gray-500 bg-white flex-shrink-0">
-        <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium">
+        <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 font-medium">
           {activeTab != null ? TAB_LABELS[activeTab] : 'No tab'}
         </span>
         <span className="truncate">
@@ -804,7 +806,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
             placeholder="/api/chat-local"
           />
           <button
-            className="text-xs bg-amber-600 text-white px-2 py-1 rounded hover:bg-amber-700"
+            className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700"
             onClick={() => setEndpoint(endpointDraft.trim() || (mode === 'local' ? LOCAL_DEFAULT : ONLINE_DEFAULT))}
           >
             Apply
