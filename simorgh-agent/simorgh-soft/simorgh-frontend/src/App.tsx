@@ -774,7 +774,7 @@ const AboutDialog: React.FC<{ onClose: () => void }> = ({ onClose }) => (
             <span className="text-gray-500">Build:</span> <strong>{buildLabel()}</strong>
           </p>
         )}
-        <p><span className="text-gray-500">Modules:</span> Project Definition · Create Template · Device Selection · Output · Simorgh Draw</p>
+        <p><span className="text-gray-500">Modules:</span> Project Definition · Create Template · Scope Selection · Output · Simorgh Draw</p>
         <p><span className="text-gray-500">Guide:</span>{' '}
           <a
             className="text-blue-600 hover:underline"
@@ -828,7 +828,7 @@ const ProjectConflictModal: React.FC<{
         <p className="font-medium text-sm text-gray-800">{title}</p>
         <p className="text-[11px] text-gray-500 mb-1.5">{note}</p>
         <p className="text-xs text-gray-700">
-          {n.templates} template(s) · {n.equipments} switchgear(s) · {n.rows} device row(s)
+          {n.templates} template(s) · {n.equipments} switchgear(s) · {n.rows} scope row(s)
         </p>
       </div>
     );
@@ -1145,7 +1145,7 @@ const MainApp: React.FC = () => {
     },
     {
       id: 2,
-      title: `Device Selection`,
+      title: `Scope Selection`,
       fill: true,
       component: (
         <DeviceSelectionTab
@@ -1375,7 +1375,7 @@ const MainApp: React.FC = () => {
               
               {/* Device Count */}
               <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
-                {projectData.devices.length} devices
+                {projectData.devices.length} scopes
               </div>
 
               {/* Simorgh Logic — a door, not a tab.

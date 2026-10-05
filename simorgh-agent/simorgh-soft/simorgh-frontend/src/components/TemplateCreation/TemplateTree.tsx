@@ -608,7 +608,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                   key={`move-many-${family.id}`}
                   className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
                   onClick={() => handleMoveMany(family.id)}
-                  title="Each keeps its id and its name, so the device rows built on them stay attached"
+                  title="Each keeps its id and its name, so the scope rows built on them stay attached"
                 >
                   <ClipboardPasteIcon className="w-4 h-4 mr-2" />
                   Move {manyTarget.list.length} templates to {manyTarget.tier} / {family.label}
@@ -618,7 +618,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
               <button
                 className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
                 onClick={() => handleMoveMany(null)}
-                title="Each keeps its id and its name, so the device rows built on them stay attached"
+                title="Each keeps its id and its name, so the scope rows built on them stay attached"
               >
                 <ClipboardPasteIcon className="w-4 h-4 mr-2" />
                 Move {manyTarget.list.length} templates to {manyTarget.tier} ({TIER_LABEL[manyTarget.tier]})
@@ -640,7 +640,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                   key={`move-${family.id}`}
                   className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
                   onClick={() => handleMoveFromBpms(family.id)}
-                  title="It keeps its id, so the device rows built on it stay attached"
+                  title="It keeps its id, so the scope rows built on it stay attached"
                 >
                   <ClipboardPasteIcon className="w-4 h-4 mr-2" />
                   Move to {bpmsMoveTarget.type} / {family.label}
@@ -650,7 +650,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
               <button
                 className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
                 onClick={() => handleMoveFromBpms(null)}
-                title="It keeps its id, so the device rows built on it stay attached"
+                title="It keeps its id, so the scope rows built on it stay attached"
               >
                 <ClipboardPasteIcon className="w-4 h-4 mr-2" />
                 Move to {bpmsMoveTarget.type} ({TIER_LABEL[bpmsMoveTarget.type]})
@@ -684,7 +684,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
               <button
                 className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
                 onClick={() => handleClip('cut')}
-                title="Take it to file somewhere else — it keeps its id, so the device rows built on it stay attached"
+                title="Take it to file somewhere else — it keeps its id, so the scope rows built on it stay attached"
               >
                 <ScissorsIcon className="w-4 h-4 mr-2" />
                 Cut
@@ -707,7 +707,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           itemKind="Template"
           usage={templateDeleteTarget.usage}
           cascadeNote={
-            'Deleting the template also deletes the device rows built on it in Device Selection; ' +
+            'Deleting the template also deletes the scope rows built on it in Scope Selection; ' +
             'the equipment itself is kept and its remaining rows are renumbered.'
           }
           onConfirm={confirmDeleteTemplate}

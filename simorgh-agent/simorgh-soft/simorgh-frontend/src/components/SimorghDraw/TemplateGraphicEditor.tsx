@@ -68,7 +68,7 @@ export const TemplateGraphicEditor: React.FC<Props> = ({
           <div className="min-w-0">
             <h2 className="text-base font-semibold truncate">{template.name || 'Template'}</h2>
             <p className="text-[11px] text-slate-200">
-              {tier} · {built.devices} device{built.devices === 1 ? '' : 's'} ·
+              {tier} · {built.devices} scope{built.devices === 1 ? '' : 's'} ·
               {' '}drawn the way a feeder built on this template will be
             </p>
           </div>

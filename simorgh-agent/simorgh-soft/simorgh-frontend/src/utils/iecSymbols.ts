@@ -600,7 +600,7 @@ export const IEC_SYMBOLS: Record<SymbolId, IecSymbol> = {
     ].join(''),
   },
   accessory: {
-    id: 'accessory', title: 'Accessory (belongs to the device above)', titleFa: 'متعلقات',
+    id: 'accessory', title: 'Accessory (belongs to the scope above)', titleFa: 'متعلقات',
     group: 'Connections',
     draw: (x, y) => ln(x, y, x, y + CELL) +
       `<rect x="${x + 5}" y="${y + 14}" width="12" height="12" fill="#fff" stroke="${S}" stroke-width="1" stroke-dasharray="3 2"/>`,

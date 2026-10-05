@@ -115,7 +115,7 @@ function exportLayoutExcel(data: ProjectData, equipments: Equipment[]) {
 function exportMechanicalExcel(data: ProjectData, equipments: Equipment[]) {
   const rows = buildMechanicalRows(data, equipments);
   if (rows.length === 0) {
-    void appAlert('Nothing to list yet — these switchgears have no panel specification in Device Library.');
+    void appAlert('Nothing to list yet — these switchgears have no panel specification in Scope Library.');
     return;
   }
   const wb = XLSX.utils.book_new();
@@ -383,7 +383,7 @@ export const EplanixTab: React.FC = () => {
       </button>
       <button
         onClick={() => setShowReports(true)}
-        title="EPLAN's reports — title page, contents, device and parts lists, terminal diagrams, connection list, PLC, cables, revisions — as pages of the set"
+        title="EPLAN's reports — title page, contents, scope and parts lists, terminal diagrams, connection list, PLC, cables, revisions — as pages of the set"
         className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap ${dark
           ? 'bg-white/15 text-white hover:bg-white/25' : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50'}`}
       >
@@ -447,7 +447,7 @@ export const EplanixTab: React.FC = () => {
           <h2 className="text-xl font-bold text-gray-800">Simorgh Draw</h2>
           <p className="text-sm text-gray-500 mt-0.5">
             {projectData.projectName} — single line, panel layout and mechanical items,
-            drawn from Device Selection and the templates behind it.
+            drawn from Scope Selection and the templates behind it.
           </p>
         </div>
         <div className="flex items-center flex-wrap gap-2">
@@ -495,7 +495,7 @@ export const EplanixTab: React.FC = () => {
           could not — the pack, and redrawing a symbol for this project — went
           with it into the library rather than being dropped. */}
       <div className="grid grid-cols-3 gap-3 mb-5">
-        <Tab id="single-line" label="Single line" note="Busbar, feeders, devices, data blocks" />
+        <Tab id="single-line" label="Single line" note="Busbar, feeders, scopes, data blocks" />
         <Tab id="layout" label="Layout" note="Front elevation, column by column" />
         <Tab id="mechanical" label="Mechanical" note="Enclosure, busbars, compartments" />
       </div>
@@ -511,7 +511,7 @@ export const EplanixTab: React.FC = () => {
                   {preview ? `${preview.name} — ${preview.devices?.length ?? 0} feeders` : 'No switchgear with feeder lines'}
                 </p>
                 <p className="text-xs text-gray-500">
-                  One sheet per {perPage} feeders · supply, busbar, device chain and a data block per feeder.
+                  One sheet per {perPage} feeders · supply, busbar, scope chain and a data block per feeder.
                 </p>
                 <p className="text-[11px] text-blue-700 mt-0.5">{symbolNote}</p>
               </div>
@@ -531,7 +531,7 @@ export const EplanixTab: React.FC = () => {
                 disabled={!preview}
                 title={preview
                   ? 'Open this single line in Simorgh Draw — move, retype, draw lines and text, and write DXF / PDF / SVG'
-                  : 'Add feeder lines in Device Selection first'}
+                  : 'Add feeder lines in Scope Selection first'}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-40"
               >
                 <PencilRulerIcon className="w-4 h-4" />
@@ -551,7 +551,7 @@ export const EplanixTab: React.FC = () => {
                 className="bg-blue-700 text-white hover:bg-blue-800"
                 disabled={chosenWithLines.length === 0}
               >
-                EPLAN device list
+                EPLAN scope list
               </Btn>
               <select
                 className="border border-gray-300 rounded px-2 py-1.5 text-sm"
@@ -567,7 +567,7 @@ export const EplanixTab: React.FC = () => {
               {exportLabelMm != null && exportLabelMm < LEGIBLE_MM && (
                 <span
                   className="text-[11px] text-amber-700 font-medium tabular-nums"
-                  title={`A device label plots at ${exportLabelMm.toFixed(2)} mm on ${paper}, under the ${LEGIBLE_MM} mm a drawing stays readable at. Fewer feeders to a sheet, or a bigger sheet.`}
+                  title={`A scope label plots at ${exportLabelMm.toFixed(2)} mm on ${paper}, under the ${LEGIBLE_MM} mm a drawing stays readable at. Fewer feeders to a sheet, or a bigger sheet.`}
                 >
                   labels {exportLabelMm.toFixed(1)} mm
                 </span>
@@ -613,7 +613,7 @@ export const EplanixTab: React.FC = () => {
             </>
           ) : (
             <p className="p-6 text-sm text-gray-500">
-              Nothing to draw yet — add feeder lines in Device Selection, or import a switchgear from TPMS.
+              Nothing to draw yet — add feeder lines in Scope Selection, or import a switchgear from TPMS.
             </p>
           )}
         </div>
@@ -803,7 +803,7 @@ export const EplanixTab: React.FC = () => {
             </div>
           ) : (
             <p className="p-6 text-sm text-gray-500">
-              Nothing to list yet — the switchgears need a panel specification in Device Library.
+              Nothing to list yet — the switchgears need a panel specification in Scope Library.
             </p>
           )}
         </div>

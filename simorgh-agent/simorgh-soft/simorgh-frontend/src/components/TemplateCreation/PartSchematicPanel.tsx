@@ -69,7 +69,7 @@ const WHY: Record<SymbolSource, string> = {
   eplan: 'from what EPLAN says the part is',
   description: 'from the part’s own description',
   slot: 'from the row it was filed under',
-  accessory: 'reads as an accessory of the device above it',
+  accessory: 'reads as an accessory of the scope above it',
 };
 
 /** One symbol drawn to its own box, for the list beside each part. */
@@ -280,7 +280,7 @@ export const PartSchematicPanel: React.FC<Props> = ({
             })}
           </ul>
           <p className="px-3 py-1.5 border-t bg-gray-50 text-[10px] text-gray-400">
-            {cell.devices} device{cell.devices === 1 ? '' : 's'} on the cell · one cell step is {CELL} units.
+            {cell.devices} scope{cell.devices === 1 ? '' : 's'} on the cell · one cell step is {CELL} units.
           </p>
         </>
       )}

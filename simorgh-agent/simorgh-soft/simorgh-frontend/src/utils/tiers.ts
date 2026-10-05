@@ -23,7 +23,7 @@ export const TIER_LABEL: Record<Tier, string> = {
   MV: 'Medium Voltage',
   HV: 'High Voltage',
   GIS: 'Gas Insulated Switchgear',
-  OTHER: 'Other devices',
+  OTHER: 'Other scopes',
 };
 
 /** Badge colours, light utilities only (see theme.css for the dark remap). */

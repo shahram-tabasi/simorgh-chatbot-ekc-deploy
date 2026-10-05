@@ -116,7 +116,7 @@ export const DxfSymbolPack: React.FC<Props> = ({ symbols, onChange, onPackChange
         <div className="min-w-0">
           <p className="font-medium text-sm text-gray-800">Your own DXF schematics — this browser</p>
           <p className="text-xs text-gray-500">
-            A device drawn in AutoCAD replaces the library symbol and goes back out as
+            A scope drawn in AutoCAD replaces the library symbol and goes back out as
             geometry, not as a picture. Put points on a layer named <code>CONN</code> at the
             terminals and the branch line runs through them by itself.
           </p>

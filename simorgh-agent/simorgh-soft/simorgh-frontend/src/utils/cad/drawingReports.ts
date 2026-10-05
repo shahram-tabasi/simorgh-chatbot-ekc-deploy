@@ -281,7 +281,7 @@ export const REPORT_HEADERS = {
   connections: ['Page', 'From', 'To'],
   terminals: ['Strip', 'Terminal', 'Upper', 'Lower', 'Page'],
   devices: ['Designation', 'What it is', 'Connection points', 'Page'],
-  io: ['Address', 'Kind', 'Card', 'Terminal', 'Field device', 'Page'],
+  io: ['Address', 'Kind', 'Card', 'Terminal', 'Field scope', 'Page'],
 } as const;
 
 /** One report as rows of cells, ready for a sheet. */

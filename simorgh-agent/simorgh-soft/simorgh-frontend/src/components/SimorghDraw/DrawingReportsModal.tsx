@@ -19,7 +19,7 @@ const TABS: { id: Which; label: string; note: string }[] = [
   { id: 'io', label: 'I/O list', note: 'Every channel as drawn, with its terminal and what is on the end of it' },
   { id: 'terminals', label: 'Terminal diagram', note: 'Every strip, terminal by terminal' },
   { id: 'connections', label: 'Connection list', note: 'Every wire, end to end' },
-  { id: 'devices', label: 'Device list', note: 'Every device, what it is, and where it was drawn' },
+  { id: 'devices', label: 'Scope list', note: 'Every scope, what it is, and where it was drawn' },
 ];
 
 interface Props {

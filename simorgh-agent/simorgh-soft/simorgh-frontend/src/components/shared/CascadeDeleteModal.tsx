@@ -46,7 +46,7 @@ export const CascadeDeleteModal: React.FC<CascadeDeleteModalProps> = ({
               <div>
                 <p className="text-sm font-semibold text-gray-800">
                   This {itemKind.toLowerCase()} is currently used in {usage.equipments.length} place
-                  {usage.equipments.length === 1 ? '' : 's'} ({usage.totalRows} device row
+                  {usage.equipments.length === 1 ? '' : 's'} ({usage.totalRows} scope row
                   {usage.totalRows === 1 ? '' : 's'}):
                 </p>
                 <p className="text-sm text-gray-600 mt-1" dir="rtl">

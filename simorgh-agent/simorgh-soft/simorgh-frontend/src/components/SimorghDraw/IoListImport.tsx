@@ -24,7 +24,7 @@ interface Props {
 }
 
 const FIELD_NAMES: Record<string, string> = {
-  address: 'Address', tag: 'Device tag', description: 'Description',
+  address: 'Address', tag: 'Scope tag', description: 'Description',
   card: 'Card', strip: 'Terminal strip', terminal: 'Terminal', symbol: 'Symbol',
 };
 
@@ -99,7 +99,7 @@ export const IoListImport: React.FC<Props> = ({ pages, edits, onDone, onClose })
           <div>
             <h2 className="text-base font-semibold">Wiring pages from an I/O list</h2>
             <p className="text-[11px] text-slate-200">
-              One path per signal: field device, terminal, PLC channel, between the two rails.
+              One path per signal: field scope, terminal, PLC channel, between the two rails.
             </p>
           </div>
           <button onClick={onClose} className="p-1 rounded hover:bg-white/20" title="Close">

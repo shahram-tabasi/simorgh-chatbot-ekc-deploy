@@ -54,7 +54,7 @@ import { TIERS } from '../../utils/tiers';
 
 // Tab labels used both in the context snapshot we send to the model and in
 // the local tool runner that resolves `set_active_tab`.
-const TAB_LABELS = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types',
+const TAB_LABELS = ['Project Definition', 'Create Template', 'Scope Selection', 'Output Types',
   'Simorgh Draw', 'PLC', 'Documents', 'Send to EPLAN'] as const;
 
 // What each tab owns, in the words the model is given. Sent with every turn
@@ -63,12 +63,12 @@ const TAB_LABELS = ['Project Definition', 'Create Template', 'Device Selection',
 const TAB_SCOPE: Record<number, string> = {
   0: 'Project Definition — project master data (name, client, standard, planner…), '
    + 'Technical Settings (altitude, design temperature, wire sizes, wire colours, painting) '
-   + 'and the Device Library (panel specifications). Tools: set_project_fields, set_tech_setting, '
+   + 'and the Scope Library (panel specifications). Tools: set_project_fields, set_tech_setting, '
    + 'add_library_device, update_library_device, delete_library_device.',
   1: 'Create Template — the template tree and the parts on each template. '
    + 'Tools: create_template, search_templates, find_similar_templates, delete_template, '
    + 'set_template_property_parts.',
-  2: 'Device Selection — the switchgears and their feeder rows. '
+  2: 'Scope Selection — the switchgears and their feeder rows. '
    + 'Tools: add_equipment, delete_equipment, select_equipment, add_row, update_row, '
    + 'bulk_update, delete_row, apply_excel, set_cell_color, set_row_color.',
   3: 'Output Types — the export formats. No editing tools; answer questions.',
@@ -237,11 +237,11 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
       text:
         "## Hi — I'm Simorgh AI ✨\n\n" +
         "I work on **the tab you are on**: ask for a change and I read it against that screen — " +
-        "on Project Definition `دما` is the design temperature, on Device Selection it is the rows.\n\n" +
+        "on Project Definition `دما` is the design temperature, on Scope Selection it is the rows.\n\n" +
         "**Nothing lands until you approve it.** With **Review** on (the default) every change I propose " +
         "appears as a checklist with an **Apply** button, so an engineer signs it off.\n\n" +
         "Some things to try:\n\n" +
-        "**📄 Upload a project PDF** — I read it, extract project metadata, technical settings, equipment & devices, and show you a preview card. Pick which items to keep and hit **Apply** to fill the project.\n\n" +
+        "**📄 Upload a project PDF** — I read it, extract project metadata, technical settings, equipment & scopes, and show you a preview card. Pick which items to keep and hit **Apply** to fill the project.\n\n" +
         "**Project Definition**\n" +
         "- `Set project name to Pars Refinery, client NIORDC, standard IEC`\n" +
         "- `Altitude is 1200 m and design temperature is 45 °C`\n" +
@@ -249,7 +249,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         "**Create Template**\n" +
         "- `Make a new LV template at S8 / OFW / FCB1 / OUTGOING for a 22 kW motor`\n" +
         "- `Search templates that contain FCB1`\n\n" +
-        "**Device Selection**\n" +
+        "**Scope Selection**\n" +
         "- `Add a new LV equipment called MCC-01`\n" +
         "- `Set row 3 feederNo to L03`\n" +
         "- `Everywhere wiringType is M3, change it to M4`\n" +

@@ -323,7 +323,7 @@ export function checkSheet(shapes: Shape[]): Message[] {
     if (group.every(d => d.pins.length > 0)) continue;
     out.push({
       cls: 'error', code: 'E-DUP-TAG', category: 'Designations',
-      text: `${group.length} devices are all designated ${tag}.`,
+      text: `${group.length} scopes are all designated ${tag}.`,
       shapes: group.flatMap(d => d.shapes), at: group[0].at,
     });
   }

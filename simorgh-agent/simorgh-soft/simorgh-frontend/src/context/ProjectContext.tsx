@@ -918,7 +918,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     const newDevice: DeviceItem = {
       id: `device-${Date.now()}`,
       rowNumber: projectData.devices.length + 1,
-      deviceName: `Device ${projectData.devices.length + 1}`,
+      deviceName: `Scope ${projectData.devices.length + 1}`,
       templateId: '',
       flc: '',
       ratingPower: '',

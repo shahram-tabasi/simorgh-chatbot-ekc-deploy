@@ -13,8 +13,8 @@ interface TpmsImportModalProps {
 const OPTION_LABELS: { key: keyof TpmsImportOptions; label: string; hint: string }[] = [
   { key: 'projectData',   label: 'Project data',    hint: 'OE number, name, planner, design office' },
   { key: 'techSettings',  label: 'Technical settings', hint: 'Altitude, temperature, wire sizes and colours' },
-  { key: 'deviceLibrary', label: 'Device Library entry', hint: 'The panel specification as a device' },
-  { key: 'equipment',     label: 'Switchgear & lines',  hint: 'Feeder lines in Device Selection, plus their templates' },
+  { key: 'deviceLibrary', label: 'Scope Library entry', hint: 'The panel specification as a scope' },
+  { key: 'equipment',     label: 'Switchgear & lines',  hint: 'Feeder lines in Scope Selection, plus their templates' },
 ];
 
 // Pull a switchgear out of TPMS — the same MySQL data Eplanix reads — and put

@@ -47,7 +47,7 @@ export const DeviceTable: React.FC<DeviceTableProps> = ({ devices, onDevicesUpda
       id: `device-${Date.now()}`,
       rowNumber: devices.length + 1,
       templateId: '',
-      deviceName: `Device ${devices.length + 1}`,
+      deviceName: `Scope ${devices.length + 1}`,
       flc: '', ratingPower: '', wiringType: '', feederNo: '', busSection: '',
       children: [],
       selectedParts: []
@@ -92,7 +92,7 @@ export const DeviceTable: React.FC<DeviceTableProps> = ({ devices, onDevicesUpda
         const importedDevices: DeviceItem[] = jsonData.map((row, index) => ({
           id: `imported-${Date.now()}-${index}`,
           rowNumber: devices.length + index + 1,
-          deviceName: row['Device Name'] || row['deviceName'] || `Imported Device ${index + 1}`,
+          deviceName: row['Device Name'] || row['deviceName'] || `Imported Scope ${index + 1}`,
           templateId: row['Template'] || row['templateId'] || '',
           busSection: row['Bus Section'] || row['busSection'] || '',
           feederNo: row['Feeder No'] || row['feederNo'] || '',
@@ -103,7 +103,7 @@ export const DeviceTable: React.FC<DeviceTableProps> = ({ devices, onDevicesUpda
           selectedParts: []
         }));
         onDevicesUpdate([...devices, ...importedDevices]);
-        void appAlert(`Successfully imported ${importedDevices.length} devices`);
+        void appAlert(`Successfully imported ${importedDevices.length} scopes`);
       } catch (error) {
         console.error('Error importing Excel:', error);
         void appAlert('Error importing Excel file. Please check the format.');
@@ -165,7 +165,7 @@ export const DeviceTable: React.FC<DeviceTableProps> = ({ devices, onDevicesUpda
       <div className="mb-4 flex justify-between items-center">
         <div className="flex space-x-2">
           <button className="px-3 py-1 bg-blue-600 text-white rounded-md text-sm flex items-center" onClick={handleAddRow}>
-            <PlusIcon className="w-4 h-4 mr-1" /> Add Device
+            <PlusIcon className="w-4 h-4 mr-1" /> Add Scope
           </button>
           <button className="px-3 py-1 bg-green-600 text-white rounded-md text-sm flex items-center" onClick={() => fileInputRef.current?.click()}>
             <UploadIcon className="w-4 h-4 mr-1" /> Import Excel
@@ -188,7 +188,7 @@ export const DeviceTable: React.FC<DeviceTableProps> = ({ devices, onDevicesUpda
           <thead>
             <tr className="bg-gray-50">
               <th className="px-2 py-2 text-left text-sm font-medium text-gray-600 border-b w-8">#</th>
-              <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b">Device Name</th>
+              <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b">Scope Name</th>
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b">Template</th>
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b">Bus Section</th>
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b">Feeder No</th>

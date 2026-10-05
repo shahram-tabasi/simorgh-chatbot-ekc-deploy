@@ -285,12 +285,12 @@ export const PartQuestionsDialog: React.FC<Props> = ({
           </Question>
 
           {asksRole && (
-            <Question n={++n} title="Is it an accessory of the device above, or a device of its own?">
+            <Question n={++n} title="Is it an accessory of the scope above, or a scope of its own?">
               <Choice on={isAccessory} title="Accessory"
                 note={`Not drawn; only its SIM-TABLE is written, under ${host ? `${stripLocaleTags(host?.label) || 'the row'}'s` : 'the row’s'}.`}
                 onClick={() => set('role', undefined)} />
-              <Choice on={!isAccessory} title="Main device"
-                note="Drawn as a device of its own, with its own label."
+              <Choice on={!isAccessory} title="Main scope"
+                note="Drawn as a scope of its own, with its own label."
                 onClick={() => set('role', 'main')} />
             </Question>
           )}
@@ -493,7 +493,7 @@ export const PartQuestionsDialog: React.FC<Props> = ({
               {(isRelay || isMeter) && (
                 <Question n={++n} title="Serial link?">
                   <Choice on={answers.serialLink === true} title="Yes"
-                    note="A dashed line from the device down to the foot of the cell, its text along it."
+                    note="A dashed line from the scope down to the foot of the cell, its text along it."
                     onClick={() => set('serialLink', true)} />
                   <Choice on={answers.serialLink !== true} title="No"
                     onClick={() => { set('serialLink', undefined); set('serialText', undefined); set('serialDir', undefined); }} />
@@ -512,7 +512,7 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                   : isMeter ? 'Status signals from the meter' : 'Status signals from the breaker'}>
                   <p className="w-full text-[11px] text-gray-500">
                     {isRelay || isMeter
-                      ? 'Each one a dashed line from the device, beside the serial link, down to the foot of the cell with its text along it.'
+                      ? 'Each one a dashed line from the scope, beside the serial link, down to the foot of the cell with its text along it.'
                       : 'Each one carries on the mechanical interlock’s dashed line and runs down to the foot of the cell with its text along it.'}
                   </p>
                   <StatusList

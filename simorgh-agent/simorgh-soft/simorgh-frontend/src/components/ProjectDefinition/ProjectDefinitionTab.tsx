@@ -180,7 +180,7 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
         <div className="flex items-center justify-between px-6 py-4 border-b">
           <div className="flex items-center gap-3">
             <h3 className="font-semibold text-lg">
-              {mode === 'add' ? 'Add Device to Library' : name}
+              {mode === 'add' ? 'Add Scope to Library' : name}
             </h3>
             {mode !== 'add' && (
               <span className={`text-xs px-2 py-0.5 rounded font-semibold ${typeColor}`}>{type}</span>
@@ -189,8 +189,8 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
           <div className="flex gap-2 items-center">
             <button
               className="px-2.5 py-1.5 border rounded text-xs flex items-center gap-1 hover:bg-gray-50"
-              onClick={() => onCopy({ id: item?.id ?? 'new', name: name || 'this device', type, properties: props })}
-              title="Copy this device's whole specification"
+              onClick={() => onCopy({ id: item?.id ?? 'new', name: name || 'this scope', type, properties: props })}
+              title="Copy this scope's whole specification"
             >
               <CopyIcon className="w-3 h-3" /> Copy spec
             </button>
@@ -236,7 +236,7 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
                 className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
                 value={name}
                 onChange={e => setName(e.target.value)}
-                placeholder="Device name"
+                placeholder="Scope name"
                 autoFocus={mode === 'add'}
               />
             </div>
@@ -846,8 +846,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     <div>
       <div className="flex items-start justify-between gap-4 mb-3">
         <p className="text-sm text-gray-500">
-          Right-click on a group to add a device; right-click a device to copy its specification
-          and paste it into another, whole or tab by tab. Click a device to break out its
+          Right-click on a group to add a scope; right-click a scope to copy its specification
+          and paste it into another, whole or tab by tab. Click a scope to break out its
           specification, double-click to open it.
         </p>
       </div>
@@ -855,9 +855,9 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
       <div className="border border-gray-200 rounded-md overflow-hidden">
         {/* Root header */}
         <div className="px-4 py-2 bg-gray-100 border-b font-semibold text-sm flex items-center gap-2 select-none">
-          <span>📦</span> Device Library
+          <span>📦</span> Scope Library
           <span className="ml-auto text-xs font-normal text-gray-500">
-            {TIERS.reduce((n, t) => n + (deviceLibrary[t] ?? []).length, 0)} device(s)
+            {TIERS.reduce((n, t) => n + (deviceLibrary[t] ?? []).length, 0)} scope(s)
           </span>
         </div>
 
@@ -889,7 +889,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                     {TIER_LABEL[t]}
                   </span>
                 </div>
-                <span className="text-xs text-gray-400">{items.length} device{items.length !== 1 ? 's' : ''}</span>
+                <span className="text-xs text-gray-400">{items.length} scope{items.length !== 1 ? 's' : ''}</span>
               </div>
 
               {/* Device items */}
@@ -897,7 +897,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                 <div>
                   {items.length === 0 && (
                     <div className="pl-12 py-2 text-xs text-gray-400 italic border-b bg-white">
-                      No devices — right-click to add
+                      No scopes — right-click to add
                     </div>
                   )}
                   {items.map(item => {
@@ -964,7 +964,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                   setCtxMenu(prev => ({ ...prev, visible: false }));
                 }}
               >
-                <PlusIcon className="w-4 h-4 mr-2" /> Add Device
+                <PlusIcon className="w-4 h-4 mr-2" /> Add Scope
               </button>
               {copiedDevice && (
                 <button
@@ -978,7 +978,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                     setCtxMenu(prev => ({ ...prev, visible: false }));
                   }}
                 >
-                  <ClipboardIcon className="w-4 h-4 mr-2" /> Paste as new device "{copiedDevice.name}"
+                  <ClipboardIcon className="w-4 h-4 mr-2" /> Paste as new scope "{copiedDevice.name}"
                 </button>
               )}
             </>
@@ -1050,7 +1050,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                       setCtxMenu(prev => ({ ...prev, visible: false }));
                     }}
                   >
-                    <ClipboardIcon className="w-4 h-4 mr-2" /> Paste as new device "{copiedDevice.name}"
+                    <ClipboardIcon className="w-4 h-4 mr-2" /> Paste as new scope "{copiedDevice.name}"
                   </button>
                 )}
                 <button
@@ -1093,11 +1093,11 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
       {libDeleteTarget && (
         <CascadeDeleteModal
           itemName={libDeleteTarget.item.name}
-          itemKind="Device"
+          itemKind="Scope"
           usage={libDeleteTarget.usage}
           cascadeNote={
-            'Deleting it here removes it from the Device Library AND from Device Selection — ' +
-            'the equipment above and all of its device rows are deleted too.'
+            'Deleting it here removes it from the Scope Library AND from Scope Selection — ' +
+            'the equipment above and all of its scope rows are deleted too.'
           }
           onConfirm={confirmDeleteLib}
           onCancel={() => setLibDeleteTarget(null)}
@@ -1108,8 +1108,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
       {pasteNameModal.visible && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 w-96">
-            <h3 className="text-lg font-semibold mb-4">Paste Device</h3>
-            <label className="block text-sm mb-1 text-gray-600">New Device Name:</label>
+            <h3 className="text-lg font-semibold mb-4">Paste Scope</h3>
+            <label className="block text-sm mb-1 text-gray-600">New Scope Name:</label>
             <input
               type="text"
               autoFocus
@@ -1149,7 +1149,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
       <div className="flex items-end border-b mb-6">
         {([
           { id: 'project-data'   as SubTab, label: '📋 Project Data' },
-          { id: 'device-library' as SubTab, label: '📦 Device Library' },
+          { id: 'device-library' as SubTab, label: '📦 Scope Library' },
         ] as const).map(tab => (
           <button
             key={tab.id}
@@ -1186,7 +1186,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[80vh] flex flex-col">
             <div className="flex items-center gap-2 px-6 py-4 border-b">
               <DatabaseIcon className="w-5 h-5 text-purple-600" />
-              <h3 className="font-semibold">Update from TPMS — project data and device specifications</h3>
+              <h3 className="font-semibold">Update from TPMS — project data and scope specifications</h3>
               <button className="ml-auto text-gray-400 hover:text-gray-600" onClick={closeTpmsUpdate}>
                 <XIcon className="w-5 h-5" />
               </button>

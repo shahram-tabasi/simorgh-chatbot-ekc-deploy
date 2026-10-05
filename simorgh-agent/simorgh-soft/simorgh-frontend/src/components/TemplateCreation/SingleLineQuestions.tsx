@@ -263,7 +263,7 @@ export const SingleLineQuestions: React.FC<Props> = ({ value, onChange, family, 
 
       {family === 'SIMOPRIME' && asks.ptTruck && (
         <Question title="Incoming with a PT truck"
-          hint="The PT is then drawn after the breaker, on a socket — not as a switched device.">
+          hint="The PT is then drawn after the breaker, on a socket — not as a switched scope.">
           <div className="flex flex-wrap gap-1">
             <Pill on={value.ptTruck === true} label="Yes" onClick={() => set('ptTruck', true)} />
             <Pill on={value.ptTruck !== true} label="No" onClick={() => set('ptTruck', undefined)} />

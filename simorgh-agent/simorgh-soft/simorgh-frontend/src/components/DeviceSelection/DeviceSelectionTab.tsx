@@ -1700,7 +1700,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
     // renamed in Excel; everything else — values, rows, widths — stays free.
     prepareLockedHeader(ws, fillableColumns.length);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Devices');
+    XLSX.utils.book_append_sheet(wb, ws, 'Scopes');
     const fileName = `${selectedEquipment.name}_Devices.xlsx`;
     const workbookBytes = () =>
       unlockAllButHeader(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer);
@@ -1753,7 +1753,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
       <div className="flex items-center justify-center h-64 bg-gray-50 border-2 border-dashed border-gray-300 rounded">
         <div className="text-center">
           <p className="text-gray-500">No Equipment Selected</p>
-          <p className="text-sm text-gray-400 mt-2">Select equipment to manage devices</p>
+          <p className="text-sm text-gray-400 mt-2">Select equipment to manage scopes</p>
         </div>
       </div>
     );
@@ -2191,7 +2191,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
       <div className="mb-4 flex justify-between items-center">
         <div>
-          <h3 className="font-semibold">Device Table: {selectedEquipment.name}</h3>
+          <h3 className="font-semibold">Scope Table: {selectedEquipment.name}</h3>
           <p className="text-xs text-gray-500">Type: <span className="font-semibold">{selectedEquipment.type}</span> | Power: {selectedEquipment.power || 'N/A'}</p>
         </div>
         <div className="flex space-x-2">
@@ -2251,7 +2251,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           <button
             className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50"
             onClick={handleExportExcel}
-            title="Export the current device rows to Excel, with the same headers Import Excel expects. Template column is excluded — it can only be assigned inside the software."
+            title="Export the current scope rows to Excel, with the same headers Import Excel expects. Template column is excluded — it can only be assigned inside the software."
           >
             <UploadIcon className="w-4 h-4 inline mr-1" />
             Export Excel
@@ -2581,7 +2581,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
 
         {rows.length === 0 && (
           <div className="text-center py-8 text-gray-500 text-sm">
-            No devices. Click "Add Row" or "Import Excel".
+            No scopes. Click "Add Row" or "Import Excel".
           </div>
         )}
         {rows.length > 0 && getFilteredRows().length === 0 && (
@@ -3058,7 +3058,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
                     {lockedBy('equipment', eq.id) && (
                       <span
                         className="ml-1.5 text-[10px] px-1 py-px rounded bg-amber-100 text-amber-800 whitespace-nowrap"
-                        title={`${lockedBy('equipment', eq.id)!.userName} is working on this device`}
+                        title={`${lockedBy('equipment', eq.id)!.userName} is working on this scope`}
                       >
                         🔒 {lockedBy('equipment', eq.id)!.userName}
                       </span>
@@ -3070,7 +3070,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
                 </div>
                 {eq.power && <div className="text-xs text-gray-500 mt-1 ml-5">{eq.power}</div>}
                 {hasDevices && (
-                  <div className="text-xs text-gray-400 mt-1 ml-5">{eq.devices.length} device(s)</div>
+                  <div className="text-xs text-gray-400 mt-1 ml-5">{eq.devices.length} scope(s)</div>
                 )}
               </div>
 
@@ -3240,12 +3240,12 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
               <div className="px-6 py-4 space-y-3">
                 <p className="text-sm text-gray-700">
                   This removes the equipment from the project arrangement together with its{' '}
-                  <strong>{rowCount}</strong> device row{rowCount === 1 ? '' : 's'}.
+                  <strong>{rowCount}</strong> scope row{rowCount === 1 ? '' : 's'}.
                 </p>
                 <div className="bg-blue-50 border border-blue-200 rounded px-3 py-2">
                   <p className="text-sm text-blue-900">
-                    The Device Library entry it was created from is <strong>kept</strong>, so you can lay
-                    the same device out again from <em>Add</em>.
+                    The Scope Library entry it was created from is <strong>kept</strong>, so you can lay
+                    the same scope out again from <em>Add</em>.
                   </p>
                 </div>
               </div>
@@ -3277,12 +3277,12 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
         return (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg p-6 w-[480px] max-h-[80vh] flex flex-col">
-              <h3 className="font-semibold mb-1">Add Equipment from Device Library</h3>
-              <p className="text-xs text-gray-500 mb-4">Select a device and click Add.</p>
+              <h3 className="font-semibold mb-1">Add Equipment from Scope Library</h3>
+              <p className="text-xs text-gray-500 mb-4">Select a scope and click Add.</p>
               {allItems.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center text-gray-500 py-8 gap-3">
-                  <p className="text-sm">Device Library is empty.</p>
-                  <p className="text-xs">Go to <strong>Project Definition → Device Library</strong> and add devices first.</p>
+                  <p className="text-sm">Scope Library is empty.</p>
+                  <p className="text-xs">Go to <strong>Project Definition → Scope Library</strong> and add scopes first.</p>
                 </div>
               ) : (
                 <div className="flex-1 overflow-y-auto border rounded mb-4 min-h-0">
@@ -3364,7 +3364,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
               </div>
               <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
                 {!libItem ? (
-                  <p className="text-sm text-gray-400 italic">No device library record linked to this equipment.</p>
+                  <p className="text-sm text-gray-400 italic">No scope library record linked to this equipment.</p>
                 ) : (
                   <div className="space-y-4">
                     <div>
@@ -3433,7 +3433,7 @@ const EquipmentTree: React.FC<EquipmentTreeProps> = ({
                     onNavigateToDeviceLibrary(libItemId);
                   }}
                 >
-                  <EditIcon className="w-4 h-4" /> Edit in Device Library
+                  <EditIcon className="w-4 h-4" /> Edit in Scope Library
                 </button>
               </div>
             </div>
@@ -3550,7 +3550,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
   // width into a gap instead of into the table.
   const templatesPanel = usePanel({
     id: 'ds-templates', label: 'Templates', group: 'Device Selection',
-    note: 'The templates a device row can be dropped onto',
+    note: 'The templates a scope row can be dropped onto',
   });
   const treePanel = usePanel({
     id: 'ds-equipment-tree', label: 'Equipment Tree', group: 'Device Selection',
@@ -3572,7 +3572,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
       id="ds-templates"
       title="Templates"
       group="Device Selection"
-      note="The templates a device row can be dropped onto"
+      note="The templates a scope row can be dropped onto"
       side="left"
       className="w-[220px]"
       bodyClassName="flex-1 overflow-y-auto"
@@ -3628,7 +3628,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
         {/* Fullscreen at the end of the panel's own heading, and the same
             button takes it back out — the one way in and out. */}
         <div className="bg-gray-50 px-4 py-2 border-b shrink-0 flex items-center justify-between gap-3">
-          <h3 className="font-medium">Device Specifications</h3>
+          <h3 className="font-medium">Scope Specifications</h3>
           <button
             className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50 flex items-center shrink-0"
             onClick={handleToggleFullscreen}
@@ -3724,7 +3724,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
         <div className="p-4 flex-1 min-h-0 flex flex-col">
           <div className="flex justify-between items-center mb-3 shrink-0">
             <h2 className="text-xl font-semibold">
-              Device Selection — {projectData.projectName}
+              Scope Selection — {projectData.projectName}
             </h2>
           </div>
 
@@ -3738,7 +3738,7 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
 
   return (
     <div className="h-full min-h-0 flex flex-col">
-      <h2 className="text-xl font-semibold mb-4 shrink-0">Device Selection - {projectData.projectName}</h2>
+      <h2 className="text-xl font-semibold mb-4 shrink-0">Scope Selection - {projectData.projectName}</h2>
 
       {/* Templates and Equipment Tree get just enough fixed width for their
           content (names/tree labels); Device Specifications takes all the

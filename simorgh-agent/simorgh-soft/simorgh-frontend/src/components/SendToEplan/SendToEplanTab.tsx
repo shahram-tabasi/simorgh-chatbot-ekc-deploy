@@ -42,7 +42,7 @@ const FIELD_1_9_LABELS: Record<number, string> = {
 const SUBSET_STARTS = [1, 11, 21, 31, 41]; // "User supplementary fields N - N+8"
 const OPTIONS_INDEXES = Array.from({ length: 21 }, (_, i) => 50 + i); // 50-70
 const IDENTITY_FIELDS: { index: number; label: string; placeholder: string }[] = [
-  { index: 91, label: 'Origin (Device name)', placeholder: 'e.g. B.B.1 Switchgear, 36KV, 2000A, 25KA/3S, EK3' },
+  { index: 91, label: 'Origin (Scope name)', placeholder: 'e.g. B.B.1 Switchgear, 36KV, 2000A, 25KA/3S, EK3' },
   { index: 92, label: 'Replacement of (Internal document no.)', placeholder: '' },
   { index: 93, label: 'Replaced by (Customer document no.)', placeholder: '' },
   { index: 94, label: 'Macro: Version', placeholder: '00' },
@@ -538,7 +538,7 @@ export const SendToEplanTab: React.FC = () => {
     if (!equipment) return;
     const cells = equipment.devices ?? [];
     if (cells.length === 0) {
-      void appAlert('Nothing to report yet — this switchgear has no feeders in Device Selection.');
+      void appAlert('Nothing to report yet — this switchgear has no feeders in Scope Selection.');
       return;
     }
     const revision = currentRevision?.revisionNumber ? String(currentRevision.revisionNumber) : '';
@@ -586,7 +586,7 @@ export const SendToEplanTab: React.FC = () => {
           ))}
         </select>
         {withLines.length === 0 && (
-          <p className="text-xs text-amber-700 mt-2">No switchgear has feeder lines yet — add them in Device Selection first.</p>
+          <p className="text-xs text-amber-700 mt-2">No switchgear has feeder lines yet — add them in Scope Selection first.</p>
         )}
       </div>
 
@@ -626,7 +626,7 @@ export const SendToEplanTab: React.FC = () => {
               {mechanical.items === 0 && (
                 <p className="p-6 text-sm text-gray-500">
                   {mechanical.why
-                    || 'Nothing to list yet — add the feeders in Device Selection first.'}
+                    || 'Nothing to list yet — add the feeders in Scope Selection first.'}
                 </p>
               )}
             </div>

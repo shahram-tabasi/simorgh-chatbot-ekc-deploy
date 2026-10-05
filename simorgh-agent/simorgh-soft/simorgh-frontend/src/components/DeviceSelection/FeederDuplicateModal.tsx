@@ -89,7 +89,7 @@ export const FeederDuplicateModal: React.FC<FeederDuplicateModalProps> = ({
               </p>
             </div>
           </div>
-          <button className="p-1 hover:bg-amber-100 rounded" onClick={onCancel} title="Back to Device Selection">
+          <button className="p-1 hover:bg-amber-100 rounded" onClick={onCancel} title="Back to Scope Selection">
             <XIcon className="w-5 h-5 text-amber-600" />
           </button>
         </div>

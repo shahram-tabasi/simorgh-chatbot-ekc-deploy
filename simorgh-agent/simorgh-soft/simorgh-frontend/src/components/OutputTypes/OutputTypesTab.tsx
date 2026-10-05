@@ -306,11 +306,11 @@ function exportExcel(data: ProjectData) {
       ]);
     }
   }
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(devRows), 'Device Library');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(devRows), 'Scope Library');
 
   // ── Sheet 4: Equipment & Selections ────────────────────────────────────────
   const eqHeaders = [
-    '#', 'Equipment', 'Type', 'Device (Library)',
+    '#', 'Equipment', 'Type', 'Scope (Library)',
     'Row', 'Template', 'Bus Section', 'Feeder No', 'Wiring Type', 'Rating Power', 'FLC (A)'
   ];
   const eqRows: any[][] = [eqHeaders];
@@ -419,7 +419,7 @@ function exportPDF(data: ProjectData) {
   );
 
   // ── Device library table ──────────────────────────────────────────────────
-  const devTable = allDevices.length === 0 ? '<p style="color:#9ca3af;font-size:12px">No devices defined.</p>' : table(
+  const devTable = allDevices.length === 0 ? '<p style="color:#9ca3af;font-size:12px">No scopes defined.</p>' : table(
     `<thead><tr>${th('#','#277548')}${th('Name','#277548')}${th('Type','#277548')}${propKeys.map(k => th(DEVICE_PROP_LABELS[k],'#277548')).join('')}</tr></thead><tbody>` +
     allDevices.map((dev, i) => {
       const p = dev.properties as Record<string, any>;
@@ -436,7 +436,7 @@ function exportPDF(data: ProjectData) {
   const eqs = data.equipments ?? [];
   const allLib = TIERS.flatMap(t => data.deviceLibrary?.[t] ?? []);
   const eqTable = eqs.length === 0 ? '<p style="color:#9ca3af;font-size:12px">No equipment defined.</p>' : table(
-    `<thead><tr>${['Equipment','Type','Device (Library)','Row','Template','Bus Section','Feeder No','Wiring Type','Rating Power','FLC (A)'].map(h=>th(h,'#b45309')).join('')}</tr></thead><tbody>` +
+    `<thead><tr>${['Equipment','Type','Scope (Library)','Row','Template','Bus Section','Feeder No','Wiring Type','Rating Power','FLC (A)'].map(h=>th(h,'#b45309')).join('')}</tr></thead><tbody>` +
     eqs.flatMap((eq, eqi) => {
       const libItem = allLib.find(d => d.id === (eq.properties?.deviceLibraryItemId as string));
       if (!eq.devices || eq.devices.length === 0) {
@@ -476,8 +476,8 @@ function exportPDF(data: ProjectData) {
   </div>
   ${secHd('01','Project Overview','#1e50a2')}${projTable}
   ${techRows.length>0 ? secHd('02','Technical Settings','#277548')+techTable : ''}
-  ${secHd('03','Device Library','#277548')}${devTable}
-  ${secHd('04','Equipment & Device Selections','#b45309')}${eqTable}
+  ${secHd('03','Scope Library','#277548')}${devTable}
+  ${secHd('04','Equipment & Scope Selections','#b45309')}${eqTable}
   ${(() => {
     const usedIds = new Set<string>();
     eqs.forEach(eq => eq.devices?.forEach(d => { if (d.templateId) usedIds.add(d.templateId); }));
@@ -571,7 +571,7 @@ function exportHTML(data: ProjectData) {
   // Device Library table
   const allDevices = TIERS.flatMap(t => (data.deviceLibrary?.[t] ?? []).map(d => ({ ...d, tier: t })));
   const propKeys = Object.keys(DEVICE_PROP_LABELS);
-  const devLibTable = allDevices.length === 0 ? '<p style="color:#888">No devices defined.</p>' :
+  const devLibTable = allDevices.length === 0 ? '<p style="color:#888">No scopes defined.</p>' :
     `<div style="overflow-x:auto"><table style="${tableStyle}">
       <thead><tr>
         <th style="${thStyle('#277548')}">#</th>
@@ -595,7 +595,7 @@ function exportHTML(data: ProjectData) {
   const eqTable = equipments.length === 0 ? '<p style="color:#888">No equipment defined.</p>' :
     `<table style="${tableStyle}">
       <thead><tr>
-        ${['Equipment','Type','Device (Library)','Row','Template','Bus Section','Feeder No','Wiring Type','Rating Power','FLC (A)']
+        ${['Equipment','Type','Scope (Library)','Row','Template','Bus Section','Feeder No','Wiring Type','Rating Power','FLC (A)']
           .map(h => `<th style="${thStyle('#b45309')}">${h}</th>`).join('')}
       </tr></thead>
       <tbody>${equipments.flatMap((eq, eqi) => {
@@ -667,10 +667,10 @@ function exportHTML(data: ProjectData) {
 
   ${techRows.length > 0 ? sectionHd('02', 'Technical Settings', '#277548') + kv2rows(techRows, '#277548') : ''}
 
-  ${sectionHd('03', 'Device Library', '#277548')}
+  ${sectionHd('03', 'Scope Library', '#277548')}
   ${devLibTable}
 
-  ${sectionHd('04', 'Equipment &amp; Device Selections', '#b45309')}
+  ${sectionHd('04', 'Equipment &amp; Scope Selections', '#b45309')}
   ${eqTable}
 
   <div style="margin-top:40px;border-top:1px solid #e5e7eb;padding-top:12px;font-size:11px;color:#9ca3af;display:flex;justify-content:space-between">
@@ -786,7 +786,7 @@ const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
                 </tbody>
               </table>
               <div className="mt-2 text-[10px] text-gray-500">
-                {propCols.length} property columns × {totalRows} device rows. Empty cells indicate the row's template doesn't define that property.
+                {propCols.length} property columns × {totalRows} scope rows. Empty cells indicate the row's template doesn't define that property.
               </div>
             </div>
           )}
@@ -992,7 +992,7 @@ export const OutputTypesTab: React.FC = () => {
       <div className="grid grid-cols-4 gap-3 mb-6">
         {[
           { label: 'Project',   value: projectData.projectName, color: 'bg-white border-gray-200 text-gray-800' },
-          { label: 'Devices',   value: `${devices.length} in library`, color: 'bg-white border-gray-200 text-gray-800' },
+          { label: 'Scopes',   value: `${devices.length} in library`, color: 'bg-white border-gray-200 text-gray-800' },
           { label: 'Equipment', value: `${eqs.length} units`,           color: 'bg-white border-gray-200 text-gray-800' },
           { label: 'Rows',      value: `${rowTotal} selection rows`,    color: 'bg-white border-gray-200 text-gray-800' },
         ].map(c => (
@@ -1070,9 +1070,9 @@ export const OutputTypesTab: React.FC = () => {
         }
       </Section>
 
-      <Section id="devices" title={`Device Library (${devices.length} devices)`} badge="03" color="#277548">
+      <Section id="devices" title={`Scope Library (${devices.length} scopes)`} badge="03" color="#277548">
         {devices.length === 0
-          ? <p className="text-sm text-gray-400">No devices defined in library.</p>
+          ? <p className="text-sm text-gray-400">No scopes defined in library.</p>
           : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs border-collapse">
@@ -1148,7 +1148,7 @@ export const OutputTypesTab: React.FC = () => {
 
       <div className="mt-4 flex items-center gap-2 text-xs text-gray-400">
         <CheckCircleIcon className="w-3.5 h-3.5 text-green-500" />
-        All three formats contain identical data — Project Overview, Technical Settings, Device Library, and Equipment & Selections.
+        All three formats contain identical data — Project Overview, Technical Settings, Scope Library, and Equipment & Selections.
         <DownloadIcon className="w-3.5 h-3.5 ml-2" />
         HTML report includes a "Print / Save as PDF" button for browser-based PDF export.
       </div>

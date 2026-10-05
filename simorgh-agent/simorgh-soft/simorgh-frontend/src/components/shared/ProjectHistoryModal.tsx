@@ -144,7 +144,7 @@ export const ProjectHistoryModal: React.FC<Props> = ({
                       </p>
                       <p className="text-xs text-gray-500">
                         {v.counts.templates} template(s) · {v.counts.equipments} switchgear(s)
-                        {' · '}{v.counts.rows} device row(s)
+                        {' · '}{v.counts.rows} scope row(s)
                       </p>
                     </button>
                     <button

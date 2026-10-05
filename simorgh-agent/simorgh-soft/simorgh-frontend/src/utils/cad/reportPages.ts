@@ -45,7 +45,7 @@ const ROW = 6;
 export const REPORT_TITLES: Record<ReportKind, string> = {
   title: 'Title page',
   toc: 'Table of contents',
-  devices: 'Device tag list',
+  devices: 'Scope tag list',
   parts: 'Summarized parts list',
   terminals: 'Terminal diagram',
   strips: 'Terminal strip overview',
@@ -157,7 +157,7 @@ function revisionsTable(revisions: Revision[]): Table {
 function tableFor(kind: ReportKind, pages: SetPage[], project: ProjectData, revisions: Revision[]): Table | null {
   switch (kind) {
     case 'devices': return {
-      head: ['Device tag', 'What it is', 'Connection points', 'Page'],
+      head: ['Scope tag', 'What it is', 'Connection points', 'Page'],
       widths: [0.16, 0.38, 0.3, 0.16],
       rows: deviceRows(pages).map(r => [r.tag, r.what, r.pins, r.page]),
     };
@@ -186,7 +186,7 @@ function tableFor(kind: ReportKind, pages: SetPage[], project: ProjectData, revi
       rows: connectionRows(pages).map((r, i) => [String(i + 1), r.from, r.to, r.page]),
     };
     case 'plc': return {
-      head: ['Address', 'Kind', 'Card', 'Terminal', 'Device', 'Page'],
+      head: ['Address', 'Kind', 'Card', 'Terminal', 'Scope', 'Page'],
       widths: [0.12, 0.08, 0.16, 0.12, 0.34, 0.18],
       rows: ioRows(pages).map(r => [r.address, r.kind, r.card, r.terminal, r.device, r.page]),
     };

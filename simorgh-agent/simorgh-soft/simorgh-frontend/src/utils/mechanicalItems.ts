@@ -91,7 +91,7 @@ export function buildMechanicalItems(data: ProjectData, equipment: Equipment): M
   const lines = equipment.devices ?? [];
   if (lines.length > 0) {
     add('Compartments', 'Feeder compartment', `${layout.unit === 'C' ? 'cell' : 'module'}-mounted`, 'pcs',
-      String(lines.length), `one per feeder line in Device Selection`);
+      String(lines.length), `one per feeder line in Scope Selection`);
 
     const bySize = new Map<string, number>();
     for (const line of lines) {

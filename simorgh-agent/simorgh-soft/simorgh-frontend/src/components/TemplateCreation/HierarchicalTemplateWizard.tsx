@@ -77,7 +77,7 @@ const LV_FIX_FEEDERS = ['INCOMING', 'COUPLING', 'METERING', 'RISER', 'MET&RISER'
  */
 const MV_CELL_TYPES: { name: string; note: string }[] = [
   { name: 'Feeder Truck', note: 'Truck Type Circuit Breaker Panel w or wo VT' },
-  { name: 'Feeder Wda', note: 'Withdrawable Type Circuit Breaker Panel. With VT, the withdrawable voltage transformers lie in a separate compartment under the switching device compartment' },
+  { name: 'Feeder Wda', note: 'Withdrawable Type Circuit Breaker Panel. With VT, the withdrawable voltage transformers lie in a separate compartment under the switching scope compartment' },
   { name: 'Coupling Truck', note: 'Truck Type Circuit Breaker Panel - Bus Sectionalizer' },
   { name: 'Coupling Wda', note: 'Withdrawable Type Circuit Breaker Panel - Bus Sectionalizer' },
   { name: 'Metering', note: 'Metering Panel w VT' },

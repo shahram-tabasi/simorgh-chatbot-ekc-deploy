@@ -497,7 +497,7 @@ export const PageNavigator: React.FC<Props> = ({
         <button
           onClick={() => setReporting(true)}
           disabled={pages.length === 0}
-          title="The I/O list, terminal diagram, connection list and device list, read off these pages"
+          title="The I/O list, terminal diagram, connection list and scope list, read off these pages"
           className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-sm font-medium border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 shrink-0"
         >
           <ListIcon className="w-4 h-4" />
