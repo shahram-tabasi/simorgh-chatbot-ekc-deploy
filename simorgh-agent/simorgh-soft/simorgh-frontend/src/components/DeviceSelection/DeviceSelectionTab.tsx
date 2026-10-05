@@ -75,8 +75,6 @@ interface DeviceTableProps {
   selectedEquipment: Equipment | null;
   updateEquipment: (id: string, data: Partial<Equipment>) => void;
   projectData: ProjectData;
-  isFullscreen: boolean;
-  onToggleFullscreen: () => void;
   onShowTemplateProperties?: (templateId: string) => void;
   clipboardRows: DeviceTableRow[];
   onCopyRows: (rows: DeviceTableRow[]) => void;
@@ -582,8 +580,6 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
   selectedEquipment,
   updateEquipment,
   projectData,
-  isFullscreen,
-  onToggleFullscreen,
   onShowTemplateProperties,
   clipboardRows,
   onCopyRows
@@ -2201,14 +2197,6 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         <div className="flex space-x-2">
           <button
             className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50"
-            onClick={onToggleFullscreen}
-            title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-          >
-            {isFullscreen ? <MinimizeIcon className="w-4 h-4 inline mr-1" /> : <MaximizeIcon className="w-4 h-4 inline mr-1" />}
-            {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-          </button>
-          <button
-            className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50"
             onClick={handleAddRow}
           >
             <PlusIcon className="w-4 h-4 inline mr-1" />
@@ -3637,16 +3625,24 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
       {renderTemplateLeftPanel()}
 
       <div className="border rounded min-w-0 min-h-0 flex flex-col">
-        <div className="bg-gray-50 px-4 py-2 border-b shrink-0">
+        {/* Fullscreen at the end of the panel's own heading, and the same
+            button takes it back out — the one way in and out. */}
+        <div className="bg-gray-50 px-4 py-2 border-b shrink-0 flex items-center justify-between gap-3">
           <h3 className="font-medium">Device Specifications</h3>
+          <button
+            className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50 flex items-center shrink-0"
+            onClick={handleToggleFullscreen}
+            title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+          >
+            {isFullscreen ? <MinimizeIcon className="w-4 h-4 mr-1" /> : <MaximizeIcon className="w-4 h-4 mr-1" />}
+            {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+          </button>
         </div>
         <div className="p-3 flex-1 min-h-0 overflow-auto flex flex-col">
           <DeviceTable
             selectedEquipment={currentEquipment}
             updateEquipment={updateEquipment}
             projectData={projectData}
-            isFullscreen={isFullscreen}
-            onToggleFullscreen={handleToggleFullscreen}
             onShowTemplateProperties={(templateId) => setPropertiesModal({ visible: true, templateId })}
             clipboardRows={clipboardRows}
             onCopyRows={setClipboardRows}
@@ -3723,19 +3719,13 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
         style={{ right: 'var(--simorgh-chat-w, 0px)' }}
       >
         {/* Held to the screen like the tab is: the panels scroll, each on its
-            own, and the heading with Exit Fullscreen stays where it is. */}
+            own, and the heading stays where it is. Exit Fullscreen is on the
+            Device Specifications panel, where Fullscreen was pressed. */}
         <div className="p-4 flex-1 min-h-0 flex flex-col">
           <div className="flex justify-between items-center mb-3 shrink-0">
             <h2 className="text-xl font-semibold">
               Device Selection — {projectData.projectName}
             </h2>
-            <button
-              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 flex items-center"
-              onClick={handleToggleFullscreen}
-            >
-              <MinimizeIcon className="w-4 h-4 mr-2" />
-              Exit Fullscreen
-            </button>
           </div>
 
           {workspace}
