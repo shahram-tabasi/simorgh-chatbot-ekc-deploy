@@ -1,0 +1,408 @@
+// src/utils/cad/emaCell.ts
+//
+// A template's cell as an EPLAN window macro whose devices are EPLAN's own —
+// functions placed from the office's SLD library, joined by EPLAN itself.
+//
+// `renderEma` writes a drawing as lines and texts: EPLAN shows it, but to
+// EPLAN it is a picture. Here nothing that carries current is drawn. Each
+// device is placed as the office's macros place it (a copy of the device out
+// of one of them, moved and renumbered — `PROTOS`), and laid out so its
+// connection points face the next device's on one line; where a line turns
+// or branches, one of EPLAN's corners or T-nodes stands (`CONNS`). EPLAN's
+// autoconnecting then draws every wire on insertion, as it does for the
+// office's own macros, and the devices are devices: tagged when the project
+// is numbered, in the parts and connection lists.
+//
+// The geometry is the SLD library's (`PINS`, read out of SLD.sdb): where each
+// variant's connection points are and which way they face. Nothing is
+// estimated; a device the library has no variant for is left out of the
+// macro and named in a note on it instead.
+//
+// Laid out in millimetres, y up: the main line runs down x = 0 from the
+// busbar at y = 0, what hangs off it to the side of it, and each CT core runs
+// out to the right along its own row through what it feeds.
+import { PINS, FD, PROTOS, CONNS } from './emaParts';
+import { num, multi, HEAD, emaDocument } from './ema';
+import { templateCell, breakLabel, type ChainItem } from '../eplanSingleLine';
+import type { SymbolId } from '../iecSymbols';
+import type { Tier } from '../tiers';
+
+type Pin = { x: number; y: number; dir: number };
+const UP = 1, RIGHT = 2, DOWN = 4, LEFT = 8;
+
+/** Our kind of device → the SLD library's symbol and variant. */
+const EPLAN_OF: Partial<Record<SymbolId, [number, number]>> = {
+  vcb: [1, 1], 'vcb-racking': [1, 1], 'withdrawable-cb': [1, 1], 'circuit-breaker': [1, 1],
+  'vacuum-contactor-fuse': [1, 1], disconnector: [1, 1], 'switch-disconnector': [1, 1], mcb: [1, 1],
+  contactor: [12, 1],
+  'earthing-switch': [1, 7],
+  'capacitive-divider': [7, 0],
+  'surge-arrester': [14, 3], 'surge-limiter': [14, 3],
+  magnet: [13, 1],
+  'voltage-transformer': [3, 1],
+  'test-block': [50, 0],
+  ammeter: [9, 1], voltmeter: [9, 1], 'frequency-meter': [9, 1],
+  multimeter: [23, 1], 'watt-meter': [23, 1], 'var-meter': [23, 1], 'power-factor-meter': [23, 1],
+  'kwh-meter': [23, 1], 'kvarh-meter': [23, 1], transducer: [23, 1],
+  'alarm-annunciator': [24, 0],
+  lamp: [10, 1],
+};
+const RELAYS: SymbolId[] = ['protection-relay', 'earth-fault-relay'];
+const SWITCHES: SymbolId[] = ['vcb', 'vcb-racking', 'withdrawable-cb', 'circuit-breaker',
+  'vacuum-contactor-fuse', 'disconnector', 'switch-disconnector', 'mcb', 'contactor'];
+const METERS: SymbolId[] = ['ammeter', 'multimeter', 'watt-meter', 'var-meter', 'power-factor-meter',
+  'kwh-meter', 'kvarh-meter', 'transducer'];
+const VOLTS: SymbolId[] = ['voltmeter', 'frequency-meter'];
+/** A CT by how many cores leave it: its variant of SLD 2. */
+const CT_VARIANT = (cores: number) => (cores <= 0 ? 3 : cores === 1 ? 5 : cores === 2 ? 1 : 2);
+
+const pinsOf = (n: number, v: number): Pin[] | undefined =>
+  PINS[`${n}:${v}`]?.map(([x, y, dir]) => ({ x, y, dir }));
+
+/** The page being written: objects in mm about the cell's own origin. */
+class Page {
+  readonly out: string[] = [];
+  private id = 300000;
+  box = { l: Infinity, t: -Infinity, r: -Infinity, b: Infinity };
+  /** Devices the library had no variant for — named on the macro. */
+  readonly missing: string[] = [];
+
+  constructor(private ox: number, private oy: number) {}
+
+  next(type: string) { return `${type}/${this.id++}`; }
+  private at(x: number, y: number) { return `${num(this.ox + x)}/${num(this.oy + y)}`; }
+  grow(x: number, y: number, pad = 0) {
+    this.box.l = Math.min(this.box.l, x - pad); this.box.r = Math.max(this.box.r, x + pad);
+    this.box.t = Math.max(this.box.t, y + pad); this.box.b = Math.min(this.box.b, y - pad);
+  }
+
+  /** A text: `align` 1–9 from the top left, row by row, as EPLAN numbers it. */
+  textXml(x: number, y: number, s: string, align = 7, height = 1.8, rad = 0): string {
+    const lines = s.split('\n').length;
+    this.grow(x, y, 2);
+    this.grow(x + (align % 3 === 0 ? -1 : 1) * s.split('\n').reduce((m, l) => Math.max(m, l.length), 0) * height * 0.7,
+      y + (align <= 3 ? -1 : 1) * lines * height * 1.4);
+    return `  <O30 Build="15117" A1="${this.next('30')}" ${HEAD} A411="108" A412="L" A413="L" A414="L" A415="L" ` +
+      `A416="0" A501="${this.at(x, y)}" A503="0" A506="0" A511="${multi(s)}">\r\n` +
+      `  <S54x505 A961="${num(height)}" A962="${num(rad)}" A963="0" A964="L" A965="0" A966="${align}" ` +
+      'A967="0" A968="0" A969="0" A4000="L" A4001="L" A4013="0"/>\r\n  </O30>';
+  }
+  text(x: number, y: number, s: string, align = 7, height = 1.8, rad = 0) {
+    if (s.trim()) this.out.push(this.textXml(x, y, s, align, height, rad));
+  }
+  line(x1: number, y1: number, x2: number, y2: number, dashed = false) {
+    this.grow(x1, y1); this.grow(x2, y2);
+    const pen = dashed ? 'A411="100" A412="1" A413="L" A414="0.13" A415="-3" A416="0"'
+      : 'A411="100" A412="L" A413="L" A414="L" A415="L" A416="0"';
+    this.out.push(`  <O31 Build="15117" A1="${this.next('31')}" ${HEAD} ${pen} ` +
+      `A531="${this.at(x1, y1)}" A532="${this.at(x2, y2)}"/>`);
+  }
+  rect(x1: number, y1: number, x2: number, y2: number) {
+    this.grow(x1, y1); this.grow(x2, y2);
+    this.out.push(`  <O89 Build="15117" A1="${this.next('89')}" ${HEAD} A411="100" A412="L" A413="L" A414="L" ` +
+      `A415="L" A416="0" A1651="${this.at(x1, y1)}" A1652="${this.at(x2, y2)}" A1653="0" A1654="0" A1655="0" ` +
+      'A1656="0" A1657="0"/>');
+  }
+
+  /** One of EPLAN's corners or T-nodes. */
+  conn(n: number, v: number, x: number, y: number) {
+    const proto = CONNS[`${n}:${v}`] ?? (CONNS[`${n}:0`] ? CONNS[`${n}:0`].replace(/A1263="\d+"/, `A1263="${v}"`) : '');
+    if (!proto) return;
+    this.grow(x, y, 2);
+    this.out.push(this.copy(proto, x, y, 'O42'));
+  }
+
+  /**
+   * A device out of the office's macros, its insertion point at (x, y), with
+   * its own texts. `key` is library:number:variant; a variant no macro had is
+   * made from one of the same symbol, or of a symbol with the same points.
+   */
+  device(lib: string, n: number, v: number, x: number, y: number, texts: string[] = []) {
+    const own = PROTOS[`${lib}:${n}:${v}`];
+    let proto = own;
+    if (!proto) {
+      const pins = lib === 'SLD' ? pinsOf(n, v) : undefined;
+      const sameSymbol = Object.keys(PROTOS).find(k => k.startsWith(`${lib}:${n}:`));
+      const base = sameSymbol ?? (pins?.length === 1 ? 'SLD:7:0'
+        : pins?.length === 2 && pins.every(p => p.dir === LEFT || p.dir === RIGHT) ? 'SLD:50:0'
+          : pins?.length === 2 ? 'SLD:13:1' : 'SLD:2:1');
+      proto = PROTOS[base];
+      if (!proto) return;
+      proto = this.retarget(proto, n, v, pins?.length ?? 0);
+    }
+    const pins = lib === 'SLD' ? pinsOf(n, v) ?? [] : [];
+    for (const p of pins) this.grow(x + p.x, y + p.y, 3);
+    this.grow(x, y, 4);
+    this.out.push(this.copy(proto, x, y, 'O17', texts));
+  }
+
+  /** A copy of a prototype made into another symbol or variant. */
+  private retarget(proto: string, n: number, v: number, pinCount: number): string {
+    const doc = new DOMParser().parseFromString(`<r>${proto}</r>`, 'application/xml');
+    const f = doc.getElementsByTagName('O17')[0];
+    if (!f) return proto;
+    f.setAttribute('A1262', String(n));
+    f.setAttribute('A1263', String(v));
+    if (FD[String(n)] != null) f.setAttribute('A1381', String(FD[String(n)]));
+    // Its connection points, one entry each.
+    const list = f.getElementsByTagName('S61x183')[0];
+    if (list) {
+      const entries = Array.from(list.getElementsByTagName('S16x1062'));
+      const first = entries[0];
+      entries.forEach(e => e.parentNode?.removeChild(e));
+      if (first) {
+        for (let k = 1; k <= pinCount; k++) {
+          const e = first.cloneNode(true) as Element;
+          e.setAttribute('A161', String(k));
+          list.appendChild(e);
+        }
+      }
+      list.setAttribute('A1061', String(pinCount));
+    }
+    // A designation placed at a connection point it no longer has.
+    Array.from(f.getElementsByTagName('S53x5')).forEach(e => {
+      const c = Number(e.getAttribute('A772') ?? 0);
+      if (c > pinCount) e.parentNode?.removeChild(e);
+    });
+    return serialize(doc);
+  }
+
+  /**
+   * A prototype moved so its `anchor` object stands at (x, y), renumbered,
+   * its own texts swapped for `texts`.
+   */
+  private copy(proto: string, x: number, y: number, anchor: 'O17' | 'O42', texts: string[] = []): string {
+    const doc = new DOMParser().parseFromString(`<r>${proto}</r>`, 'application/xml');
+    const root = doc.documentElement;
+    const all = Array.from(root.getElementsByTagName('*'));
+    const a = root.getElementsByTagName(anchor)[0];
+    const pos = a && Array.from(a.children).find(c => c.tagName === 'S40x1201')?.getAttribute('A762');
+    if (!a || !pos) return '';
+    const [px, py] = pos.split('/').map(Number);
+    const dx = this.ox + x - px;
+    const dy = this.oy + y - py;
+    const shift = (el: Element, attr: string) => {
+      const v = el.getAttribute(attr);
+      if (!v) return;
+      const [vx, vy, ...rest] = v.split('/');
+      el.setAttribute(attr, [num(Number(vx) + dx), num(Number(vy) + dy), ...rest].join('/'));
+    };
+    // New ids, and every reference to an old one follows it.
+    const ids = new Map<string, string>();
+    for (const el of all) {
+      const id = el.getAttribute('A1');
+      if (id && /^\d+\/\d+$/.test(id)) ids.set(id, this.next(id.split('/')[0]));
+    }
+    for (const el of all) {
+      for (const at of Array.from(el.attributes)) {
+        if (at.name !== 'A1' && !/^R\d+$/.test(at.name) && at.name !== 'A502' && at.name !== 'A683') continue;
+        const m = /^(\d+\/\d+)(\/\d+)?$/.exec(at.value);
+        if (m && ids.has(m[1])) el.setAttribute(at.name, ids.get(m[1]) + (m[2] ?? ''));
+      }
+      if (el.tagName === 'S40x1201') shift(el, 'A762');
+      if (el.tagName === 'O30') shift(el, 'A501');
+      if (el.tagName === 'O32') shift(el, 'A555');
+    }
+    // The prototype's own texts said its job's tags; ours go in their place.
+    const group = root.firstElementChild;
+    if (group?.tagName === 'O26') {
+      Array.from(group.children).filter(c => c.tagName === 'O30').forEach(c => group.removeChild(c));
+      for (const t of texts) {
+        const tdoc = new DOMParser().parseFromString(`<r>${t}</r>`, 'application/xml');
+        const el = tdoc.documentElement.firstElementChild;
+        if (el) group.insertBefore(doc.importNode(el, true), group.firstChild);
+      }
+      return '  ' + serialize(doc);
+    }
+    // A device that is not grouped: its texts stand beside it.
+    return ['  ' + serialize(doc), ...texts].join('\r\n');
+  }
+}
+
+const serialize = (doc: Document) => {
+  const s = new XMLSerializer();
+  return Array.from(doc.documentElement.childNodes)
+    .filter(n => n.nodeType === 1)
+    .map(n => s.serializeToString(n).replace(/ xmlns="[^"]*"/g, ''))
+    .join('\r\n');
+};
+
+/** The text a device carries: its letter and SIM-TABLE, broken as the sheet breaks it. */
+const labelOf = (item: ChainItem, wrap = 26) =>
+  breakLabel(item.simTable ? `${item.label} : ${item.simTable}` : item.label, wrap).join('\n');
+
+/** A template's cell as an EPLAN window macro of EPLAN's own devices. */
+export function renderEmaCell(template: { name?: string } & Record<string, any>, tier: Tier): string {
+  const { chain, answers, family, cores: coresFor } = templateCell(template as any, tier);
+  const page = new Page(60, 280);
+  const skipped = (item: ChainItem) => page.missing.push(`${item.label} (${item.id})`);
+
+  const take = (pred: (i: ChainItem) => boolean) => chain.filter(pred);
+  const sw = chain.find(i => SWITCHES.includes(i.id));
+  const earth = take(i => i.id === 'earthing-switch');
+  const left = [...earth, ...take(i => i.id === 'magnet')];
+  const right = take(i => ['capacitive-divider', 'surge-arrester', 'surge-limiter', 'voltage-transformer'].includes(i.id));
+  const cts = take(i => i.id === 'current-transformer' || i.id === 'core-balance-ct');
+  const relays = take(i => RELAYS.includes(i.id));
+  const relay = relays.find(r => r.relayRole === 'main') ?? relays.find(r => r.relayRole !== 'auxiliary') ?? relays[0];
+  const testBlock = chain.find(i => i.id === 'test-block');
+  const meters = take(i => METERS.includes(i.id));
+  const volts = take(i => VOLTS.includes(i.id));
+  const others = take(i => ['alarm-annunciator', 'lamp'].includes(i.id));
+  const placed = new Set<ChainItem>([...(sw ? [sw] : []), ...left, ...right, ...cts, ...relays,
+    ...(testBlock ? [testBlock] : []), ...meters, ...volts, ...others]);
+  chain.filter(i => !placed.has(i)).forEach(skipped);
+
+  // ── Down the main line ────────────────────────────────────────────────
+  /** Each row of the secondary side: where it leaves and what it is for. */
+  const rows: { item: ChainItem; y: number; x: number; purpose: string; text?: string }[] = [];
+  page.conn(64, 0, 0, 0);
+  let y = -10;
+  /** A device on the line: its top point at `y`, the line on from its bottom. */
+  const onLine = (item: ChainItem, n: number, v: number): number | null => {
+    const pins = pinsOf(n, v);
+    const top = pins?.find(p => p.dir === UP);
+    if (!pins || !top) { skipped(item); return null; }
+    const insY = y - top.y;
+    const lx = -14;
+    page.device('SLD', n, v, 0, insY, [page.textXml(lx, insY, labelOf(item, 22), 6)]);
+    const bottom = pins.find(p => p.dir === DOWN);
+    y = (bottom ? insY + bottom.y : insY - 8) - 10;
+    return insY;
+  };
+
+  if (sw) onLine(sw, ...(EPLAN_OF[sw.id] ?? [1, 1]));
+
+  // What hangs to the left: the earth switch down from a corner, the magnet
+  // beside it.
+  for (const item of earth) {
+    page.conn(67, 0, 0, y);
+    page.conn(70, 0, -24, y);
+    const [n, v] = EPLAN_OF[item.id]!;
+    const top = pinsOf(n, v)?.find(p => p.dir === UP);
+    const insY = y - 10 - (top?.y ?? 0);
+    page.device('SLD', n, v, -24, insY, [page.textXml(-30, insY, labelOf(item, 18), 6)]);
+    y -= 26;
+  }
+  for (const item of take(i => i.id === 'magnet')) {
+    const [n, v] = EPLAN_OF[item.id]!;
+    page.device('SLD', n, v, -48, y + 14, [page.textXml(-54, y + 14, labelOf(item, 16), 6)]);
+  }
+
+  // What is tapped off to the right: the detector, the arrester and its
+  // earth, the VT — each on its own row from a T on the line.
+  const tapRight = (item: ChainItem) => {
+    const [n, v] = EPLAN_OF[item.id]!;
+    const pins = pinsOf(n, v) ?? [];
+    const inPin = pins.find(p => p.dir === LEFT);
+    if (!inPin) { skipped(item); return; }
+    page.conn(66, 0, 0, y);
+    const insX = 24 - inPin.x;
+    page.device('SLD', n, v, insX, y, [page.textXml(insX, y + 6, labelOf(item, 22), 8)]);
+    if (item.id === 'surge-arrester' || item.id === 'surge-limiter') {
+      page.device('IEC_symbol', 300, 1, insX + 10, y);
+    }
+    if (item.id === 'voltage-transformer') {
+      pins.filter(p => p.dir === RIGHT).forEach(p =>
+        rows.push({ item, x: insX + p.x, y: y + p.y, purpose: 'voltage' }));
+    }
+    y -= 20;
+  };
+  // EK36 puts the capacitive detector before the CT, as its sheets do.
+  const before = family === 'EK36' ? right.filter(i => i.id === 'capacitive-divider') : [];
+  before.forEach(tapRight);
+
+  // The CTs on the line, each core out to the right on its own row.
+  for (const ct of cts) {
+    const list = coresFor(ct, Boolean(relay), meters.length > 0);
+    const v = ct.id === 'core-balance-ct' ? 5 : CT_VARIANT(list.length);
+    const insY = onLine(ct, 2, v);
+    if (insY == null) continue;
+    const outs = (pinsOf(2, v) ?? []).filter(p => p.dir === RIGHT);
+    list.slice(0, outs.length).forEach((core, k) => rows.push({
+      item: ct, x: outs[k].x, y: insY + outs[k].y, purpose: core.purpose, text: core.text,
+    }));
+  }
+
+  right.filter(i => !before.includes(i)).forEach(tapRight);
+  // The line's end, named as the cell says.
+  page.text(4, y + 4, String(answers.connectedTo ?? '').trim().toUpperCase(), 7, 2);
+
+  // ── Each row of the secondary side ────────────────────────────────────
+  // The devices on a row in series, one's right point facing the next one's
+  // left, so EPLAN joins them; the relay last on a protection row.
+  const measuring = rows.filter(r => r.purpose === 'measurement').length;
+  let measSeen = 0;
+  for (const row of rows) {
+    let cx = row.x + 12;
+    const put = (item: ChainItem) => {
+      const [n, v] = EPLAN_OF[item.id] ?? [0, 0];
+      const pins = pinsOf(n, v);
+      const l = pins?.find(p => p.dir === LEFT);
+      if (!pins || !l) { skipped(item); return; }
+      const insX = cx - l.x;
+      page.device('SLD', n, v, insX, row.y, [page.textXml(insX, row.y + 5, labelOf(item, 18), 8, 1.6)]);
+      const r = pins.find(p => p.dir === RIGHT);
+      cx = (r ? insX + r.x : insX + 6) + 14;
+    };
+    if (row.purpose === 'remark' || (row.purpose === 'measurement' && !meters.length)) {
+      page.line(row.x, row.y, row.x + 20, row.y);
+      page.text(row.x + 22, row.y, (row.text || (row.purpose === 'remark' ? '' : 'MEASURING')).toUpperCase(), 4);
+      continue;
+    }
+    if (testBlock && row.purpose !== 'voltage') put(testBlock);
+    if (row.purpose === 'protection' && relay) {
+      placeRelay(page, relay, cx, row.y);
+      continue;
+    }
+    if (row.purpose === 'measurement') {
+      const j = measSeen++;
+      const mine = j === measuring - 1 ? meters.slice(j) : meters.slice(j, j + 1);
+      mine.forEach(put);
+    }
+    if (row.purpose === 'voltage') volts.forEach(put);
+  }
+  if (!rows.some(r => r.purpose === 'voltage')) volts.forEach(skipped);
+  // The alarm window and lamps, under the relay.
+  others.forEach((item, k) => {
+    const [n, v] = EPLAN_OF[item.id]!;
+    page.device('SLD', n, v, 60 + k * 24, y - 10, [page.textXml(60 + k * 24, y - 18, labelOf(item, 16), 2, 1.6)]);
+  });
+
+  // ── Beside the breaker: 94 / CR / 74 / 86 ─────────────────────────────
+  const boxes = (answers.breakerAttachments ?? []).map(a => String(a.text ?? a.kind ?? '').toUpperCase()).filter(Boolean);
+  boxes.forEach((t, k) => {
+    const by = -10 - 6 - k * 5;
+    page.rect(20, by, 24, by + 4);
+    page.text(22, by + 2, t, 5, 1.5);
+  });
+  if (answers.upstreamInterlock) {
+    page.text(28, -10 - 6 - boxes.length * 5 - 4, String(answers.upstreamText || 'INCOMING FEEDER').toUpperCase(), 4, 1.8);
+  }
+  if (page.missing.length) {
+    page.text(0, page.box.b - 6, `NOT IN THE SLD LIBRARY: ${page.missing.join(', ')}`, 1, 1.8);
+  }
+
+  const name = String(template?.name ?? 'CELL').trim() || 'CELL';
+  const area = { left: 60 + page.box.l - 4, top: 280 + Math.max(page.box.t, 4), right: 60 + page.box.r + 4, bottom: 280 + page.box.b - 4 };
+  return emaDocument(name, page.out, area, { x: 60, y: 280 });
+
+  function placeRelay(p: Page, item: ChainItem, x: number, rowY: number) {
+    // The office's relay: a black box, the core in at its device connection
+    // point; its functions written in it.
+    const proto = PROTOS['SPECIAL:0:0'];
+    const fn = String(item.functions ?? '').trim() || 'PROTECTION RELAY';
+    const dcp = /<O130[\s\S]*?A762="([-\d.]+)\/([-\d.]+)"/.exec(proto ?? '');
+    const box = /<O17[\s\S]*?A762="([-\d.]+)\/([-\d.]+)"/.exec(proto ?? '');
+    if (!proto || !dcp || !box) { skipped(item); return; }
+    const ox = Number(box[1]) - Number(dcp[1]);
+    const oy = Number(box[2]) - Number(dcp[2]);
+    const bx = x + ox;
+    const by = rowY + oy;
+    p.device('SPECIAL', 0, 0, bx, by, [
+      p.textXml(bx + 16, by - 6, breakLabel(fn.replace(/\s*,\s*/g, ','), 22).join('\n'), 5, 1.8),
+      p.textXml(bx, by + 2, labelOf(item, 22), 7, 1.8),
+    ]);
+    p.grow(bx + 32, by - 12);
+  }
+}

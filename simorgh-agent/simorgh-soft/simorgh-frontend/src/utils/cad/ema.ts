@@ -36,22 +36,22 @@ export interface EmaOptions {
 /** Where the drawing's top left corner lands, in mm. */
 const ORIGIN = { x: 10, y: 10 };
 
-const num = (v: number) => {
+export const num = (v: number) => {
   if (!Number.isFinite(v)) return '0';
   const r = Math.round(v * 1e4) / 1e4;
   return String(Object.is(r, -0) ? 0 : r);
 };
 
-const xml = (s: string) => s
+export const xml = (s: string) => s
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
   .replace(/\r?\n/g, '&#10;');
 
 /** A text in EPLAN's own multi-language form, for every language. A `;`
  *  would end it early, so it is written as a comma. */
-const multi = (s: string) => `??_??@${xml(s.replace(/;/g, ','))};`;
+export const multi = (s: string) => `??_??@${xml(s.replace(/;/g, ','))};`;
 
 /** The common head of every graphic object the office's macros write. */
-const HEAD = 'A3="0" A13="0" A14="0" A404="1" A405="64" A406="0" A407="0"';
+export const HEAD = 'A3="0" A13="0" A14="0" A404="1" A405="64" A406="0" A407="0"';
 /** Its pen: the layer's, or the office's dashed interlock line. */
 const pen = (s: Shape) => (s.dash
   ? 'A411="100" A412="1" A413="L" A414="0.13" A415="-3" A416="0"'
@@ -149,10 +149,20 @@ export function renderEma(d: Drawing, opts: EmaOptions = {}): string {
   }
 
   const name = (opts.name || d.name || 'SIMORGH').trim();
-  const right = ORIGIN.x + d.width * s;
+  return emaDocument(name, out, { left: ORIGIN.x, top, right: ORIGIN.x + d.width * s, bottom: ORIGIN.y },
+    { x: ORIGIN.x, y: top });
+}
+
+/** A window macro around a page's objects: its name, the box it covers and
+ *  its insertion point, all in mm. */
+export function emaDocument(
+  name: string, objects: string[],
+  area: { left: number; top: number; right: number; bottom: number },
+  ref: { x: number; y: number },
+): string {
   return EMA_SKELETON
     .split('{{NAME}}').join(xml(name))
-    .split('{{REF}}').join(`${num(ORIGIN.x)}/${num(top)}/0`)
-    .split('{{AREA}}').join(`${num(ORIGIN.x)}/${num(top)}/${num(right)}/${num(ORIGIN.y)}`)
-    .split('{{OBJECTS}}').join(out.length ? `${out.join('\r\n')}\r\n` : '');
+    .split('{{REF}}').join(`${num(ref.x)}/${num(ref.y)}/0`)
+    .split('{{AREA}}').join(`${num(area.left)}/${num(area.top)}/${num(area.right)}/${num(area.bottom)}`)
+    .split('{{OBJECTS}}').join(objects.length ? `${objects.join('\r\n')}\r\n` : '');
 }

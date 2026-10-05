@@ -433,5 +433,12 @@ detaches every row built on it.
 2.9 window macro: the frame (`emaSkeleton.ts`) is one of the office's own
 macros with its names and paths taken out, and every object is written the
 way the office's macros write it (O31 line, O34 polyline, O89 rectangle, O30
-text). Graphics only — the devices are not EPLAN functions yet. Never invent
-an object type or attribute: copy it from a macro the office saved.
+text). That is a picture to EPLAN. A template's MV cell goes out instead as
+EPLAN's own devices (`emaCell.ts`): each device is a copy of one out of the
+office's macros (`emaParts.ts` PROTOS), placed so its connection points face
+the next device's — the SLD library's own geometry, read out of SLD.sdb
+(PINS) — with EPLAN's corners and T-nodes (CONNS) where a line turns or
+branches, and no wire drawn: EPLAN autoconnects on insertion. A macro
+numbers its libraries in its own order (A1261 is an index into its ESymLib
+list) — a copied device must be renumbered to the frame's. Never invent an
+object type or attribute: copy it from a macro the office saved.

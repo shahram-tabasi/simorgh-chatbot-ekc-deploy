@@ -101,6 +101,12 @@ export interface EditorSheet {
 }
 
 interface Props {
+  /**
+   * The sheet as an EPLAN window macro, when the host can do better than its
+   * lines and texts — a template's cell, made of EPLAN's own devices joined
+   * by EPLAN (see emaCell.ts). Without it the sheet goes out as drawn.
+   */
+  emaOf?: () => string;
   sheets: EditorSheet[];
   /** Which sheet to open on. Absent means the first, as it always was. */
   startAt?: number;
@@ -623,6 +629,7 @@ export const DrawingEditor: React.FC<Props> = ({
   embedded = false, lean = false, saveHandle, onDirty, guides, ownDxfImport = false, signoff,
   fitPad,
   onSheetChange,
+  emaOf,
 }) => {
   const [index, setIndex] = useState(startAt);
   const sheet = sheets[Math.min(index, Math.max(0, sheets.length - 1))];
@@ -2067,7 +2074,7 @@ export const DrawingEditor: React.FC<Props> = ({
   // The sheet as an EPLAN window macro, inserted with Insert → Window macro.
   const exportEma = () => {
     downloadText(`${fileSafe(fileBase)}_${fileSafe(sheet.name)}.ema`,
-      renderEma(editedDrawing(index), { name: sheet.name || fileBase }), 'application/xml');
+      emaOf ? emaOf() : renderEma(editedDrawing(index), { name: sheet.name || fileBase }), 'application/xml');
   };
   const exportPdf = () => {
     downloadBlob(`${fileSafe(fileBase)}.pdf`,

@@ -442,7 +442,7 @@ const isMotorLoad = (line: DeviceTableRow) =>
   /motor|pump|fan|blower|compressor|mill/i.test(String(line.description || ''));
 
 /** One device on a branch: its symbol, its tag, its code and its accessories. */
-interface ChainItem {
+export interface ChainItem {
   id: SymbolId;
   tag: string;
   /** The device's own letter — Q, F, T — with no number after it. */
@@ -3072,6 +3072,22 @@ export function buildSingleLineSvg(
  * The stubs at the top and the bottom stand for the busbar it will hang from
  * and whatever it will feed; on a sheet those come from the feeder around it.
  */
+/** A template's devices in the order a cell is drawn, its answers with each
+ *  part's own laid over them, and a CT's cores — the same reading the
+ *  drawing makes, for a back-end that lays the cell out on its own (the
+ *  EPLAN window macro). */
+export function templateCell(template: TemplateLike | undefined, tier: Tier, symbols?: EplanSymbolMap) {
+  const chain = chainOfTemplate(template, propertyOrder(tier), 1, symbols, tier);
+  const opts = mvOptionsOf(template);
+  const answers = withPartAnswers(opts.answers ?? {}, chain);
+  return {
+    chain,
+    answers,
+    family: opts.family ?? '',
+    cores: (ct: ChainItem, hasRelay: boolean, hasMeters: boolean) => coresOf(answers, hasRelay, hasMeters, ct),
+  };
+}
+
 export function buildTemplateSvg(
   template: TemplateLike | undefined,
   tier: Tier,

@@ -6,7 +6,8 @@ import { EplanSymbolMap, TemplateLike, buildTemplateSvg } from '../../utils/epla
 import { drawingFromSvg } from '../../utils/cad/fromSvg';
 import { fingerprint } from '../../utils/cad/edit';
 import { DrawingEditor, EditorSheet } from './DrawingEditor';
-import { type Tier } from '../../utils/tiers';
+import { type Tier, LAYOUT_OF } from '../../utils/tiers';
+import { renderEmaCell } from '../../utils/cad/emaCell';
 
 // The whole template, in one window.
 //
@@ -96,6 +97,7 @@ export const TemplateGraphicEditor: React.FC<Props> = ({
             savedEdits={savedEdits}
             onSaveEdits={onSaveEdits}
             canEdit={canEdit}
+            emaOf={LAYOUT_OF[tier] === 'MV' ? () => renderEmaCell(template as any, tier) : undefined}
           />
         </div>
 
