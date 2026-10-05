@@ -97,6 +97,15 @@ class Page {
     this.out.push(`  <O31 Build="15117" A1="${this.next('31')}" ${HEAD} ${pen} ` +
       `A531="${this.at(x1, y1)}" A532="${this.at(x2, y2)}"/>`);
   }
+  poly(pts: [number, number][], close = false) {
+    pts.forEach(([x, y]) => this.grow(x, y));
+    const all = close ? [...pts, pts[0]] : pts;
+    this.out.push(`  <O34 Build="15117" A1="${this.next('34')}" ${HEAD} A411="100" A412="L" A413="L" A414="L" ` +
+      `A415="L" A416="0" A621="${all.map(([x, y]) => this.at(x, y)).join(';')}" A623="0" A624="0"/>`);
+  }
+  dashedPath(pts: [number, number][]) {
+    for (let k = 1; k < pts.length; k++) this.line(pts[k - 1][0], pts[k - 1][1], pts[k][0], pts[k][1], true);
+  }
   rect(x1: number, y1: number, x2: number, y2: number) {
     this.grow(x1, y1); this.grow(x2, y2);
     this.out.push(`  <O89 Build="15117" A1="${this.next('89')}" ${HEAD} A411="100" A412="L" A413="L" A414="L" ` +
@@ -117,8 +126,8 @@ class Page {
    * its own texts. `key` is library:number:variant; a variant no macro had is
    * made from one of the same symbol, or of a symbol with the same points.
    */
-  device(lib: string, n: number, v: number, x: number, y: number, texts: string[] = []) {
-    const own = PROTOS[`${lib}:${n}:${v}`];
+  device(lib: string, n: number, v: number, x: number, y: number, texts: string[] = [], given?: string) {
+    const own = given ?? PROTOS[`${lib}:${n}:${v}`];
     let proto = own;
     if (!proto) {
       const pins = lib === 'SLD' ? pinsOf(n, v) : undefined;
@@ -271,7 +280,12 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     return insY;
   };
 
-  if (sw) onLine(sw, ...(EPLAN_OF[sw.id] ?? [1, 1]));
+  /** Where the switch, the earth switch and the magnet stand, for the
+   *  mechanical interlock between them. */
+  let swMid: number | null = null;
+  let esMid: number | null = null;
+  let mbAt: { x: number; y: number } | null = null;
+  if (sw) swMid = onLine(sw, ...(EPLAN_OF[sw.id] ?? [1, 1]));
 
   // What hangs to the left: the earth switch down from a corner, the magnet
   // beside it.
@@ -282,11 +296,13 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     const top = pinsOf(n, v)?.find(p => p.dir === UP);
     const insY = y - 10 - (top?.y ?? 0);
     page.device('SLD', n, v, -24, insY, [page.textXml(-30, insY, labelOf(item, 18), 6)]);
+    esMid = insY - 2;
     y -= 26;
   }
   for (const item of take(i => i.id === 'magnet')) {
     const [n, v] = EPLAN_OF[item.id]!;
     page.device('SLD', n, v, -48, y + 14, [page.textXml(-54, y + 14, labelOf(item, 16), 6)]);
+    mbAt = { x: -48, y: y + 14 };
   }
 
   // What is tapped off to the right: the detector, the arrester and its
@@ -333,6 +349,19 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   // left, so EPLAN joins them; the relay last on a protection row.
   const measuring = rows.filter(r => r.purpose === 'measurement').length;
   let measSeen = 0;
+  // One relay for every protection core: it stands right of all of them, the
+  // first core straight into its connection point, each other one round two
+  // corners into a connection point of its own on the same box.
+  const protection = relay ? rows.filter(r => r.purpose === 'protection') : [];
+  const relayX = Math.max(0, ...protection.map(r => r.x + 12 + (testBlock ? 22 : 0))) + 4 + protection.length * 3;
+  const relayY = protection[0]?.y ?? 0;
+  const DCP_STEP = 3;
+  let relayBox: { x: number; y: number } | null = null;
+  if (relay && protection.length) {
+    relayBox = placeRelay(page, relay, relayX, relayY, protection.slice(1).map((_, k) => -(k + 1) * DCP_STEP));
+  }
+  /** Signals down to the foot of the cell, drawn once everything stands. */
+  const signals: { x: number; from: number; text: string }[] = [];
   for (const row of rows) {
     let cx = row.x + 12;
     const put = (item: ChainItem) => {
@@ -342,17 +371,25 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
       if (!pins || !l) { skipped(item); return; }
       const insX = cx - l.x;
       page.device('SLD', n, v, insX, row.y, [page.textXml(insX, row.y + 5, labelOf(item, 18), 8, 1.6)]);
+      deviceSignals(item).forEach((t, k) => signals.push({ x: insX + 2 + k * 3, from: row.y - 4, text: t }));
       const r = pins.find(p => p.dir === RIGHT);
       cx = (r ? insX + r.x : insX + 6) + 14;
     };
     if (row.purpose === 'remark' || (row.purpose === 'measurement' && !meters.length)) {
       page.line(row.x, row.y, row.x + 20, row.y);
-      page.text(row.x + 22, row.y, (row.text || (row.purpose === 'remark' ? '' : 'MEASURING')).toUpperCase(), 4);
+      page.poly([[row.x + 20, row.y + 1], [row.x + 22, row.y], [row.x + 20, row.y - 1]], true);
+      page.text(row.x + 24, row.y, (row.text || (row.purpose === 'remark' ? '' : 'MEASURING')).toUpperCase(), 4);
       continue;
     }
     if (testBlock && row.purpose !== 'voltage') put(testBlock);
     if (row.purpose === 'protection' && relay) {
-      placeRelay(page, relay, cx, row.y);
+      const k = protection.indexOf(row);
+      if (k > 0) {
+        const lane = relayX - k * 3;
+        const dy = relayY - k * DCP_STEP;
+        if (row.y < dy) { page.conn(70, 2, lane, row.y); page.conn(70, 0, lane, dy); }
+        else { page.conn(70, 3, lane, row.y); page.conn(70, 1, lane, dy); }
+      }
       continue;
     }
     if (row.purpose === 'measurement') {
@@ -363,11 +400,24 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     if (row.purpose === 'voltage') volts.forEach(put);
   }
   if (!rows.some(r => r.purpose === 'voltage')) volts.forEach(skipped);
-  // The alarm window and lamps, under the relay.
-  others.forEach((item, k) => {
+  // The alarm window and lamps hang under the relay's box on its control
+  // line; with no relay, beside the line's foot.
+  const hangX = relayBox ? relayBox.x + 6 : 60;
+  let hangY = relayBox ? relayBox.y - 12 : y;
+  for (const item of others) {
     const [n, v] = EPLAN_OF[item.id]!;
-    page.device('SLD', n, v, 60 + k * 24, y - 10, [page.textXml(60 + k * 24, y - 18, labelOf(item, 16), 2, 1.6)]);
-  });
+    const pins = pinsOf(n, v) ?? [];
+    const top = pins.find(p => p.dir === UP) ?? pins.find(p => p.dir === LEFT);
+    const ins = { x: hangX - (top?.dir === UP ? top.x : 0), y: hangY - 10 - (top?.y ?? 0) };
+    page.dashedPath([[hangX, hangY], [hangX, ins.y + (top?.y ?? 0)]]);
+    page.device('SLD', n, v, ins.x, ins.y, [page.textXml(ins.x + 8, ins.y, labelOf(item, 16), 4, 1.6)]);
+    const bottom = pins.find(p => p.dir === DOWN);
+    hangY = ins.y + (bottom?.y ?? -8) - 2;
+  }
+  // The relay's serial link and statuses, down from the bottom of its box.
+  if (relayBox && relay) {
+    deviceSignals(relay).forEach((t, k) => signals.push({ x: relayBox!.x + 28 - k * 4, from: relayBox!.y - 12, text: t }));
+  }
 
   // ── Beside the breaker: 94 / CR / 74 / 86 ─────────────────────────────
   const boxes = (answers.breakerAttachments ?? []).map(a => String(a.text ?? a.kind ?? '').toUpperCase()).filter(Boolean);
@@ -376,8 +426,45 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     page.rect(20, by, 24, by + 4);
     page.text(22, by + 2, t, 5, 1.5);
   });
+  // The upstream key interlock: down from under the boxes, to the foot.
   if (answers.upstreamInterlock) {
-    page.text(28, -10 - 6 - boxes.length * 5 - 4, String(answers.upstreamText || 'INCOMING FEEDER').toUpperCase(), 4, 1.8);
+    signals.push({ x: 22, from: -10 - 6 - Math.max(0, boxes.length - 1) * 5,
+      text: String(answers.upstreamText || 'INCOMING FEEDER') });
+  }
+  // The mechanical interlock: from the switch to the earth switch and on to
+  // the magnet, and the magnet's own line to the feeder below.
+  if (swMid != null && (esMid != null || mbAt)) {
+    const spine = -36;
+    const lowest = mbAt ? mbAt.y : esMid!;
+    page.dashedPath([[-8, swMid + 2], [spine, swMid + 2], [spine, lowest]]);
+    if (esMid != null) page.dashedPath([[spine, esMid], [-28, esMid]]);
+    if (mbAt) page.dashedPath([[spine, mbAt.y], [mbAt.x + 4, mbAt.y]]);
+  }
+  if (mbAt && answers.downstreamInterlock !== false) {
+    signals.push({ x: mbAt.x, from: mbAt.y - 4, text: String(answers.downstreamText || 'OUTGOING FEEDER') });
+  }
+  // The breaker's statuses: on along the interlock's line, out to the left of
+  // everything, each down to the foot.
+  const swStatuses = (sw?.statuses ?? []).map(t => t.trim()).filter(Boolean);
+  if (sw && swMid != null && swStatuses.length) {
+    const first = Math.min(page.box.l, -60) - 6;
+    const lanes = swStatuses.map((_, k) => first - k * 5);
+    page.dashedPath([[-8, swMid - 2], [lanes[lanes.length - 1], swMid - 2]]);
+    swStatuses.forEach((t, k) => signals.push({ x: lanes[k], from: swMid! - 2, text: t }));
+  }
+  // Every signal ends on one floor, low enough for the longest text.
+  if (signals.length) {
+    const len = (t: string) => t.length * 1.8 * 0.72;
+    const floor = Math.min(page.box.b - 6, ...signals.map(sg => sg.from - len(sg.text) - 14));
+    for (const sg of signals) {
+      const t = sg.text.trim().toUpperCase();
+      const mid = (sg.from + floor) / 2;
+      const half = len(t) / 2 + 1.5;
+      page.line(sg.x, sg.from, sg.x, mid + half, true);
+      page.line(sg.x, mid - half, sg.x, floor + 2, true);
+      page.poly([[sg.x - 1, floor + 2], [sg.x, floor], [sg.x + 1, floor + 2]], true);
+      page.text(sg.x, mid, t, 5, 1.8, Math.PI / 2);
+    }
   }
   if (page.missing.length) {
     page.text(0, page.box.b - 6, `NOT IN THE SLD LIBRARY: ${page.missing.join(', ')}`, 1, 1.8);
@@ -387,14 +474,23 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   const area = { left: 60 + page.box.l - 4, top: 280 + Math.max(page.box.t, 4), right: 60 + page.box.r + 4, bottom: 280 + page.box.b - 4 };
   return emaDocument(name, page.out, area, { x: 60, y: 280 });
 
-  function placeRelay(p: Page, item: ChainItem, x: number, rowY: number) {
+  function placeRelay(p: Page, item: ChainItem, x: number, rowY: number, more: number[] = []) {
     // The office's relay: a black box, the core in at its device connection
-    // point; its functions written in it.
-    const proto = PROTOS['SPECIAL:0:0'];
+    // point; its functions written in it. Each further core gets a connection
+    // point of its own on the box, `more` mm above or below the first.
+    let proto = PROTOS['SPECIAL:0:0'];
+    const point = /<O130 [\s\S]*?<\/O130>/.exec(proto ?? '')?.[0];
+    if (proto && point) {
+      const own = /A1="(130\/\d+)"/.exec(point)?.[1] ?? '';
+      const copies = more.map((dy, k) => point
+        .split(own).join(`130/${990001 + k}`)
+        .replace(/A762="([-\d.]+)\/([-\d.]+)"/, (_, px, py) => `A762="${px}/${num(Number(py) + dy)}"`));
+      proto = proto.replace(point, [point, ...copies].join('\n'));
+    }
     const fn = String(item.functions ?? '').trim() || 'PROTECTION RELAY';
     const dcp = /<O130[\s\S]*?A762="([-\d.]+)\/([-\d.]+)"/.exec(proto ?? '');
     const box = /<O17[\s\S]*?A762="([-\d.]+)\/([-\d.]+)"/.exec(proto ?? '');
-    if (!proto || !dcp || !box) { skipped(item); return; }
+    if (!proto || !dcp || !box) { skipped(item); return null; }
     const ox = Number(box[1]) - Number(dcp[1]);
     const oy = Number(box[2]) - Number(dcp[2]);
     const bx = x + ox;
@@ -402,7 +498,16 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     p.device('SPECIAL', 0, 0, bx, by, [
       p.textXml(bx + 16, by - 6, breakLabel(fn.replace(/\s*,\s*/g, ','), 22).join('\n'), 5, 1.8),
       p.textXml(bx, by + 2, labelOf(item, 22), 7, 1.8),
-    ]);
+    ], proto);
     p.grow(bx + 32, by - 12);
+    return { x: bx, y: by };
+  }
+
+  /** A device's serial link and statuses, as its window gives them. */
+  function deviceSignals(item: ChainItem): string[] {
+    return [
+      ...(item.serialLink ? [String(item.serialText ?? '').trim() || 'SERIAL LINK'] : []),
+      ...(item.statuses ?? []).map(t => t.trim()).filter(Boolean),
+    ];
   }
 }
