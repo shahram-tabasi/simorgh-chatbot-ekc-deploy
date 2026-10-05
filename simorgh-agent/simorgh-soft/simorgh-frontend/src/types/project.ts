@@ -468,6 +468,26 @@ export interface PartSingleLine {
   /** Drawn with one of the office's new symbols (its id) rather than the
    *  library's drawing of its kind — still connected as its kind is. */
   drawing?: string;
+  /** A relay: everything it is wired to — 'breaker', 'relay' (the main
+   *  one), or another part of the template by its key (`slot#index`), such
+   *  as the alarm window. Replaces `relayConnect`, which is read when this
+   *  is absent. */
+  connects?: string[];
+  /** The breaker: interlocked with the feeder upstream (a key interlock),
+   *  and what that is written as. */
+  upstreamInterlock?: boolean;
+  upstreamText?: string;
+  /** The breaker: the boxes stacked beside it — 94, CR, 74, 86. */
+  attachments?: string[];
+  /** The magnet: interlocked with the feeder downstream, and its name
+   *  written along the line (OUTGOING FEEDER). False draws no line. */
+  downstreamInterlock?: boolean;
+  downstreamText?: string;
+  /** The VT: drawn with its HRC fuses (default) or without. */
+  vtFuses?: boolean;
+  /** The VT on SIMOPRIME: the incoming has a PT truck — the PT after the
+   *  breaker, on a socket. */
+  ptTruck?: boolean;
 }
 
 /** What one core of a CT is for. */

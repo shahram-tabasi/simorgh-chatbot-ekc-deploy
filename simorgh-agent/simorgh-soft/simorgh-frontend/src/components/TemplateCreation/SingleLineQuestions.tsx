@@ -23,6 +23,10 @@ interface Props {
   /** The cell type and its sub-type: which questions it is asked. */
   cellType?: string;
   sub?: string;
+  /** Only what belongs to the cell rather than to one of its parts — the
+   *  bus section, what the line is connected to, the neutral. The parts'
+   *  own questions are asked as each part is entered. */
+  cellOnly?: boolean;
 }
 
 const Pill: React.FC<{ on: boolean; label: string; onClick: () => void; tone?: 'blue' | 'gray' }> = ({
@@ -103,8 +107,18 @@ const Attachments: React.FC<{
   );
 };
 
-export const SingleLineQuestions: React.FC<Props> = ({ value, onChange, family, cellType = '', sub = '' }) => {
-  const asks = mvAsks(cellType, sub);
+/** Whether a cell type has anything of its own to be asked. */
+export const cellAsks = (cellType = '', sub = '') => {
+  const a = mvAsks(cellType, sub);
+  return a.otherSection || a.connectedTo || a.neutral;
+};
+
+export const SingleLineQuestions: React.FC<Props> = ({ value, onChange, family, cellType = '', sub = '', cellOnly }) => {
+  const all = mvAsks(cellType, sub);
+  const asks = cellOnly
+    ? { ...all, nothing: false, switchType: false, interlocks: false, ctCores: false, relay: false,
+      breakerAttachments: false, vt: false, ptTruck: false }
+    : all;
   // An answer is cleared by dropping its key — the drawing reads the absence
   // as "work it out from the parts".
   const set = <K extends keyof TemplateSingleLine>(key: K, v: TemplateSingleLine[K] | undefined) => {

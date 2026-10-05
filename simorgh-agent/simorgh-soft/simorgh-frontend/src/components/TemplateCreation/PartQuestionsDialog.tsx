@@ -36,6 +36,14 @@ interface Props {
   host?: any;
   /** Opened because the part was just entered (rather than to edit). */
   fresh: boolean;
+  /** The part drawn just above this one — what series and parallel are
+   *  told relative to. */
+  above?: string;
+  /** The template's other parts, by key (`slot#index`): what an auxiliary
+   *  relay can be wired to besides the breaker and the main relay. */
+  others?: { key: string; label: string }[];
+  /** EK36 or SIMOPRIME — the PT truck is a SIMOPRIME question. */
+  family?: 'EK36' | 'SIMOPRIME' | '';
   /** `simTable` is the SIM-TABLE typed here, or undefined to keep the
    *  part's own (its order number / designation). */
   onSave: (answers: PartSingleLine, symbolId: string | undefined, simTable: string | undefined) => void;
@@ -53,6 +61,8 @@ const CORE_PURPOSES: { id: CtCorePurpose; label: string }[] = [
   { id: 'measurement', label: 'Measuring → meters' },
   { id: 'remark', label: 'Remark (arrow + text)' },
 ];
+/** The breaker of the cell: the interlocks and the boxes beside it. */
+const BREAKERS: SymbolId[] = ['vcb', 'vcb-racking', 'withdrawable-cb', 'vacuum-contactor-fuse', 'circuit-breaker'];
 const SWITCHES: SymbolId[] = [
   'vcb', 'vcb-racking', 'withdrawable-cb', 'vacuum-contactor-fuse', 'circuit-breaker',
   'contactor', 'disconnector', 'switch-disconnector', 'mcb', 'motor-starter',
@@ -65,17 +75,18 @@ const StatusList: React.FC<{
   value: string[] | undefined;
   onChange: (next: string[] | undefined) => void;
   hint: string;
-}> = ({ value, onChange, hint }) => {
+  label?: string;
+}> = ({ value, onChange, hint, label = 'Status' }) => {
   const list = value ?? [];
   const set = (next: string[]) => onChange(next.length ? next : undefined);
   return (
     <div className="w-full space-y-1.5">
       {list.map((t, k) => (
         <div key={k} className="flex items-center gap-1.5">
-          <span className="text-[11px] text-gray-500 w-14 shrink-0">Status {k + 1}</span>
+          <span className="text-[11px] text-gray-500 w-14 shrink-0">{label} {k + 1}</span>
           <input className={input} value={t} placeholder={hint}
             onChange={e => set(list.map((x, i) => (i === k ? e.target.value : x)))} />
-          <button type="button" title="Remove this status" onClick={() => set(list.filter((_, i) => i !== k))}
+          <button type="button" title="Remove" onClick={() => set(list.filter((_, i) => i !== k))}
             className="p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50">
             <TrashIcon className="w-3.5 h-3.5" />
           </button>
@@ -83,7 +94,7 @@ const StatusList: React.FC<{
       ))}
       <button type="button" onClick={() => onChange([...list, ''])}
         className="flex items-center gap-1 px-2 py-1 rounded border border-dashed border-gray-300 text-xs text-gray-600 hover:border-blue-400 hover:text-blue-700">
-        <PlusIcon className="w-3.5 h-3.5" /> Add a status
+        <PlusIcon className="w-3.5 h-3.5" /> Add {label === 'Status' ? 'a status' : `a ${label.toLowerCase()}`}
       </button>
     </div>
   );
@@ -118,6 +129,22 @@ const Choice: React.FC<{
   </button>
 );
 
+/** One of several that can be ticked together. */
+const Check: React.FC<{ on: boolean; title: string; onClick: () => void }> = ({ on, title, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+      on ? 'border-blue-600 bg-blue-50 ring-1 ring-blue-600 text-gray-800' : 'border-gray-300 bg-white text-gray-700 hover:border-blue-400'}`}
+  >
+    <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${
+      on ? 'bg-blue-600 border-blue-600' : 'border-gray-400'}`}>
+      {on && <CheckIcon className="w-2.5 h-2.5 text-white" />}
+    </span>
+    {title}
+  </button>
+);
+
 const Question: React.FC<{ n: number; title: string; children: React.ReactNode }> = ({ n, title, children }) => (
   <div>
     <p className="text-sm font-semibold text-gray-800 mb-1.5">
@@ -129,7 +156,7 @@ const Question: React.FC<{ n: number; title: string; children: React.ReactNode }
 );
 
 export const PartQuestionsDialog: React.FC<Props> = ({
-  part, slot, slotTitle, index, tier, host, fresh, onSave, onClose,
+  part, slot, slotTitle, index, tier, host, fresh, above, others, family, onSave, onClose,
 }) => {
   const [answers, setAnswers] = useState<PartSingleLine>({ ...(part?.sld ?? {}) });
   const [symbolId, setSymbolId] = useState<string>(String(part?.symbolId ?? ''));
@@ -165,6 +192,23 @@ export const PartQuestionsDialog: React.FC<Props> = ({
   const asksRole = index > 0;
   const isAccessory = asksRole ? answers.role !== 'main' : answers.role === 'accessory';
   const isRelay = RELAYS.includes(effective);
+  const isBreaker = BREAKERS.includes(effective);
+  const isMagnet = effective === 'magnet';
+  const isVt = effective === 'voltage-transformer';
+  // What an auxiliary relay is wired to: its list, else the older one-answer.
+  const connects: string[] = answers.connects
+    ?? (answers.relayConnect === 'both' ? ['breaker', 'relay']
+      : answers.relayConnect ? [answers.relayConnect] : ['relay']);
+  const toggleConnect = (key: string) => {
+    const next = connects.includes(key) ? connects.filter(k => k !== key) : [...connects, key];
+    setAnswers(prev => {
+      const out = { ...prev, connects: next };
+      delete out.relayConnect;
+      return out;
+    });
+  };
+  const ownKey = `${slot}#${index}`;
+  const aboveName = above || 'the part above';
   const naturally = INSTRUMENT_IDS.includes(effective) || BESIDE_IDS.includes(effective)
     ? 'beside the line' : 'on the line';
 
@@ -269,12 +313,14 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                 )}
               </Question>
 
-              <Question n={++n} title="Series or parallel?">
+              <Question n={++n} title={`Series or parallel with ${aboveName}?`}>
                 <Choice on={!answers.placement} title="Auto" note={`As its kind is drawn: ${naturally}.`}
                   onClick={() => set('placement', undefined)} />
-                <Choice on={answers.placement === 'series'} title="Series" note="On the line — the current runs through it."
+                <Choice on={answers.placement === 'series'} title="Series"
+                  note={`After ${aboveName}, in line with it — connected on from it.`}
                   onClick={() => set('placement', 'series')} />
-                <Choice on={answers.placement === 'parallel'} title="Parallel" note="Beside the line, tapped off it."
+                <Choice on={answers.placement === 'parallel'} title="Parallel"
+                  note={`Branched off before ${aboveName}, standing beside it.`}
                   onClick={() => set('placement', 'parallel')} />
               </Question>
 
@@ -282,19 +328,23 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                 <Question n={++n} title="Main relay or auxiliary relay?">
                   <Choice on={answers.relayRole !== 'auxiliary'} title="Main relay"
                     note="The CTs, the core-balance CT and the test block go into it."
-                    onClick={() => { set('relayRole', 'main'); set('relayConnect', undefined); }} />
+                    onClick={() => { set('relayRole', 'main'); set('relayConnect', undefined); set('connects', undefined); }} />
                   <Choice on={answers.relayRole === 'auxiliary'} title="Auxiliary relay"
-                    note="Wired to the breaker, the main relay, or both."
+                    note="Wired to the breaker, the main relay, or any other part."
                     onClick={() => set('relayRole', 'auxiliary')} />
                 </Question>
               )}
 
               {isRelay && answers.relayRole === 'auxiliary' && (
-                <Question n={++n} title="What is it connected to?">
-                  <Choice on={answers.relayConnect === 'breaker'} title="Breaker" onClick={() => set('relayConnect', 'breaker')} />
-                  <Choice on={!answers.relayConnect || answers.relayConnect === 'relay'} title="Main relay"
-                    onClick={() => set('relayConnect', 'relay')} />
-                  <Choice on={answers.relayConnect === 'both'} title="Both" onClick={() => set('relayConnect', 'both')} />
+                <Question n={++n} title="What is it connected to? (any of them)">
+                  <Check on={connects.includes('breaker')} title="Breaker" onClick={() => toggleConnect('breaker')} />
+                  <Check on={connects.includes('relay')} title="Main relay" onClick={() => toggleConnect('relay')} />
+                  {(others ?? []).filter(o => o.key !== ownKey).map(o => (
+                    <Check key={o.key} on={connects.includes(o.key)} title={o.label} onClick={() => toggleConnect(o.key)} />
+                  ))}
+                  {connects.length === 0 && (
+                    <p className="w-full text-[11px] text-gray-500">Nothing ticked — drawn standing on its own.</p>
+                  )}
                 </Question>
               )}
 
@@ -306,6 +356,58 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                   <p className="w-full text-[11px] text-gray-500">
                     Written in the relay’s box in place of “PROTECTION RELAY”. Left empty, the box says PROTECTION RELAY.
                   </p>
+                </Question>
+              )}
+
+              {isBreaker && (
+                <Question n={++n} title="Interlock with upstream?">
+                  <Choice on={answers.upstreamInterlock === true} title="Yes"
+                    note="A key interlock on the breaker's dashed line, its text along it."
+                    onClick={() => set('upstreamInterlock', true)} />
+                  <Choice on={answers.upstreamInterlock !== true} title="No"
+                    onClick={() => { set('upstreamInterlock', undefined); set('upstreamText', undefined); }} />
+                  {answers.upstreamInterlock && (
+                    <input className={input} value={answers.upstreamText ?? ''} placeholder="INCOMING FEEDER"
+                      onChange={e => set('upstreamText', e.target.value || undefined)} />
+                  )}
+                </Question>
+              )}
+
+              {isBreaker && (
+                <Question n={++n} title="Boxes beside the breaker">
+                  <p className="w-full text-[11px] text-gray-500">
+                    Each one a box strung along the interlock's dashed line — 94, CR, 74, 86 …
+                  </p>
+                  <StatusList value={answers.attachments} onChange={v => set('attachments', v)} hint="e.g. 94" label="Box" />
+                </Question>
+              )}
+
+              {isMagnet && (
+                <Question n={++n} title="Interlock with downstream?">
+                  <Choice on={answers.downstreamInterlock !== false} title="Yes"
+                    note="A dashed line from the magnet, the feeder's name along it."
+                    onClick={() => set('downstreamInterlock', undefined)} />
+                  <Choice on={answers.downstreamInterlock === false} title="No"
+                    onClick={() => { set('downstreamInterlock', false); set('downstreamText', undefined); }} />
+                  {answers.downstreamInterlock !== false && (
+                    <input className={input} value={answers.downstreamText ?? ''} placeholder="OUTGOING FEEDER"
+                      onChange={e => set('downstreamText', e.target.value || undefined)} />
+                  )}
+                </Question>
+              )}
+
+              {isVt && (
+                <Question n={++n} title="Fuses?">
+                  <Choice on={answers.vtFuses !== false} title="With fuses" onClick={() => set('vtFuses', undefined)} />
+                  <Choice on={answers.vtFuses === false} title="Without fuses" onClick={() => set('vtFuses', false)} />
+                </Question>
+              )}
+
+              {isVt && family === 'SIMOPRIME' && (
+                <Question n={++n} title="On a PT truck?">
+                  <Choice on={answers.ptTruck === true} title="Yes"
+                    note="The PT is drawn after the breaker, on a socket." onClick={() => set('ptTruck', true)} />
+                  <Choice on={answers.ptTruck !== true} title="No" onClick={() => set('ptTruck', undefined)} />
                 </Question>
               )}
 
@@ -402,6 +504,10 @@ export const PartQuestionsDialog: React.FC<Props> = ({
               if (clean.statuses) {
                 const kept = clean.statuses.map(t => t.trim()).filter(Boolean);
                 if (kept.length) clean.statuses = kept; else delete clean.statuses;
+              }
+              if (clean.attachments) {
+                const kept = clean.attachments.map(t => t.trim()).filter(Boolean);
+                if (kept.length) clean.attachments = kept; else delete clean.attachments;
               }
               const typed = simTable.trim();
               onSave(clean, symbolId || undefined, typed && typed !== ownCode ? typed : undefined);

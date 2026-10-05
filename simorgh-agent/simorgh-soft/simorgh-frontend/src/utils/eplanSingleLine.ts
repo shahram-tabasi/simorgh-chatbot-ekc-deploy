@@ -16,7 +16,7 @@
 //                         substitute for the EPLAN drawing.
 import {
   ProjectData, Equipment, TemplateItem, DeviceTableRow,
-  TemplateSingleLine, TemplateMechanical, DeviceAttachment, CtCore,
+  TemplateSingleLine, TemplateMechanical, DeviceAttachment, CtCore, PartSingleLine,
 } from '../types/project';
 import {
   templateParts, formatPartEntry, stripLocaleTags, getEplanixValue,
@@ -475,6 +475,13 @@ interface ChainItem {
   cores?: CtCore[];
   /** One of the office's new symbols it is drawn with, by id. */
   drawAs?: string;
+  /** Everything its window answered, for what the drawing reads directly. */
+  sld?: PartSingleLine;
+  /** The part, as the template knows it: `slot#index`. */
+  key?: string;
+  /** The device the part above it became — what "series" and "parallel"
+   *  in its window are measured against. */
+  anchor?: ChainItem;
   eplan?: EplanSymbolInfo;
 }
 
@@ -588,6 +595,9 @@ function chainOfTemplate(
         statuses: sld.statuses,
         cores: sld.cores,
         drawAs: sld.drawing,
+        sld,
+        key: `${slot}#${k}`,
+        anchor: out[out.length - 1],
       };
       out.push(item);
       host = item;
@@ -1651,6 +1661,33 @@ function coresOf(
 const synth = (id: SymbolId, label: string): ChainItem =>
   ({ id, tag: `-${label}`, label, simTable: '', code: '', slot: '', accessories: [], accessoryCodes: [] });
 
+/**
+ * The cell's answers with each part's own laid over them: the breaker's
+ * window says its upstream interlock and the boxes beside it, the magnet's
+ * its downstream interlock, the VT's its fuses and PT truck. The cell-wide
+ * answers a template carried before the parts were asked are still read
+ * where a part has said nothing.
+ */
+function withPartAnswers(cell: TemplateSingleLine, chain: ChainItem[]): TemplateSingleLine {
+  const out: TemplateSingleLine = { ...cell };
+  const sw = chain.find(i => SWITCH_IDS.includes(i.id))?.sld;
+  if (sw?.upstreamInterlock !== undefined) {
+    out.upstreamInterlock = sw.upstreamInterlock;
+    out.upstreamText = sw.upstreamText;
+  }
+  if (sw?.attachments) {
+    out.breakerAttachments = sw.attachments.map(t => t.trim()).filter(Boolean)
+      .map(text => ({ kind: 'other' as const, text }));
+  }
+  const mg = chain.find(i => i.id === 'magnet')?.sld;
+  if (mg?.downstreamInterlock !== undefined) out.downstreamInterlock = mg.downstreamInterlock;
+  if (mg?.downstreamText !== undefined) out.downstreamText = mg.downstreamText;
+  const vt = chain.find(i => i.id === 'voltage-transformer')?.sld;
+  if (vt?.vtFuses !== undefined) out.vtFuses = vt.vtFuses;
+  if (vt?.ptTruck !== undefined) out.ptTruck = vt.ptTruck;
+  return out;
+}
+
 /** Geometry the sheet needs to lay columns out round a cell. */
 /** How MV labels are written: smaller than LV's, and broken onto lines. */
 const MV_LABEL = { size: 9, wrap: 26 };
@@ -1694,7 +1731,7 @@ function drawMvCellLines(
    *  every signal line (serial link, status, interlock) is run down to. */
   floorAt?: number,
 ): { svg: string; bottom: number; reachBottom: number; left: number; right: number } {
-  const answers = opts.answers ?? {};
+  const answers = withPartAnswers(opts.answers ?? {}, chain);
   const mech = opts.mechanical ?? {};
   const kind = cellKind(opts.cellType, opts.sub);
   const out: string[] = [];
@@ -1771,7 +1808,9 @@ function drawMvCellLines(
   // whatever kind of device it is; unanswered, its kind decides.
   const besideLine = (i: ChainItem) =>
     (i.placement === 'parallel' ? !isInstrument(i.id) : i.placement === 'series' ? false : LEFT_SHUNTS.includes(i.id));
-  const offLine = (i: ChainItem) => i.placement !== 'series' && isInstrument(i.id);
+  // An instrument stays on the secondary side whatever it is answered:
+  // series and parallel say how it stands by the part above it there.
+  const offLine = (i: ChainItem) => isInstrument(i.id);
   const shunts = [...(orphanMagnet ? [orphanMagnet] : []), ...rest.filter(besideLine)];
   const instruments = rest.filter(offLine);
   const series = rest.filter(i => !besideLine(i) && !offLine(i))
@@ -1812,6 +1851,19 @@ function drawMvCellLines(
     stations.push({ kind: 'series', item: loadVt });
   }
   if (ngr) stations.push({ kind: 'series', item: ngr });
+  // A part whose window answered series or parallel stands by the part above
+  // it, when that part is on the line too: in series, straight after it, fed
+  // from it; in parallel, tapped off the line just before it, so it is joined
+  // where that part is and stands beside it. Unanswered, its kind places it.
+  for (const st of [...stations]) {
+    const anchor = st.item.anchor;
+    if (!st.item.placement || !anchor) continue;
+    const from = stations.indexOf(st);
+    if (stations.findIndex(o => o.item === anchor) < 0) continue;
+    stations.splice(from, 1);
+    const at = stations.findIndex(o => o.item === anchor);
+    stations.splice(st.item.placement === 'series' ? at + 1 : at, 0, st);
+  }
 
   // How far below the top of the switch its 94 / CR / 74 / 86 and the
   // upstream key reach, so the next device starts clear of them.
@@ -2113,6 +2165,11 @@ function drawMvCellLines(
   let relayAt = -1;
   /** Where the meters' line starts, once they are hung. */
   let meterTop = -1;
+  /** Where each part's device was drawn, by its key, for a wire drawn to it
+   *  afterwards — an auxiliary relay to the alarm window. */
+  const placed = new Map<string, { x: number; y: number; w: number; h: number; cx?: number }>();
+  /** An auxiliary relay's wires to other parts, drawn once all are placed. */
+  const auxLinks: { from: Pt; key: string }[] = [];
   /** Where a core can come up into the relay from below, and how far right
    *  it and what hangs on it reach. */
   let relayBox = { cx: 0, bottom: 0, right: 0, reach: 0, left: 0 };
@@ -2168,9 +2225,114 @@ function drawMvCellLines(
       Math.max(CELL, 17 + labelLineCount(item, MV_LABEL.wrap) * MV_LABEL.size * 1.15)
       + Math.max(0, signalsOf(item).length) * 6;
     let yy = y0;
+    /** Where each one stood in this column, for one answered parallel with it. */
+    const rows = new Map<ChainItem, { y: number; feed: number; out: number | null; px: number; side: boolean }>();
+    // **Series and parallel with the part above, as answered.** A device fed
+    // from its side (in at 1 on its left, out at 2 on its right — the
+    // office's meters) is in series with the one above it when it carries on
+    // in that one's row, from its 2 into this one's 1; in parallel, it takes
+    // its own tap off the line, which is how such devices always hang. A
+    // device fed from its top is in series down the line, as always; in
+    // parallel it stands beside the one above, fed from where that one is fed
+    // and joined back under it.
+    const tails = new Map<ChainItem, ChainItem[]>();
+    const inTail = new Set<ChainItem>();
+    items.forEach((item, k) => {
+      const prev = items[k - 1];
+      if (!prev || item.placement !== 'series' || item.anchor !== prev || !singlePin(dk(item))) return;
+      const head = [...tails.entries()].find(([, t]) => t[t.length - 1] === prev)?.[0]
+        ?? (singlePin(dk(prev)) && !inTail.has(prev) ? prev : undefined);
+      if (!head) return;
+      tails.set(head, [...(tails.get(head) ?? []), item]);
+      inTail.add(item);
+    });
+    const ROW_WRAP = 16;
     items.forEach(item => {
+      if (inTail.has(item)) return;
       let rightEdge: number;
       let tx: number;
+      // Answered parallel with the part above it, and that part is in this
+      // column: beside it, level with it, fed from the point it is fed from
+      // and joined back under it — never on after it down the column.
+      const anchorRow = item.placement === 'parallel' && item.anchor ? rows.get(item.anchor) : undefined;
+      const beside = anchorRow && !anchorRow.side ? anchorRow : undefined;
+      if (beside) {
+        const px = beside.px + 26;
+        const ry = beside.y;
+        const p1 = pinOf(dk(item), px, ry, '1');
+        const feedY = Math.min(beside.feed, p1.y) - 6;
+        out.push(solidPath([{ x: colX, y: feedY }, { x: p1.x, y: feedY }, p1]), node({ x: colX, y: feedY }));
+        out.push(drawDevice(item, px, ry));
+        if (item.key) {
+          placed.set(item.key, { x: px - symbolLeft(dk(item)), y: ry,
+            w: symbolLeft(dk(item)) + symbolRight(dk(item)), h: symbolHeight(dk(item)) });
+        }
+        const o = symbolOverride(dk(item));
+        const has2 = !(o?.art && o.terminals?.length) || o.terminals.some(t => t.name === '2');
+        if (has2 && beside.out != null) {
+          const p2 = pinOf(dk(item), px, ry, '2');
+          const joinY = Math.max(beside.out, p2.y) + 6;
+          out.push(solidPath([p2, { x: p2.x, y: joinY }, { x: colX, y: joinY }]), node({ x: colX, y: joinY }));
+          if (cursor != null) cursor = Math.max(cursor, joinY);
+        }
+        const ptx = px + Math.max(34, labelOffset(item));
+        out.push(simLabel(item, ptx, ry - 4, 'start', MV_LABEL.size, MV_LABEL.wrap));
+        reach(ptx + labelWidth(item, MV_LABEL.size, MV_LABEL.wrap), ry + step(item));
+        beside.px = ptx + labelWidth(item, MV_LABEL.size, MV_LABEL.wrap);
+        signalsOf(item).forEach((t, k) => {
+          const sy = ry + step(item) - 6 - (signalsOf(item).length - 1 - k) * 6;
+          instrSignals.push({ lead: [{ x: px + symbolRight(dk(item)), y: sy }], y: sy, text: t });
+        });
+        yy = Math.max(yy, ry + step(item));
+        return;
+      }
+      const tail = tails.get(item) ?? [];
+      if (tail.length) {
+        // A row: the first tapped off the line, each after it on from the
+        // one before, every label written above its own device.
+        const row = [item, ...tail];
+        const lift = Math.max(...row.map(i => labelLineCount(i, ROW_WRAP))) * MV_LABEL.size * 1.15 + 4;
+        const tapY = yy + lift + HALF;
+        lineTo(tapY);
+        cursor = tapY;
+        out.push(node({ x: colX, y: tapY }));
+        let from: Pt = { x: colX, y: tapY };
+        let rowStep = 0;
+        /** Where the label before ends: the next device stands clear of it. */
+        let clear = -Infinity;
+        row.forEach(r => {
+          const off = pinOf(dk(r), 0, 0, '1');
+          const mx = Math.max(from.x + 16 - off.x, clear + 10 + symbolLeft(dk(r)));
+          const my = tapY - off.y;
+          const p1x = mx + off.x;
+          out.push(line(from.x, tapY, p1x, tapY, 1.1));
+          out.push(drawDevice(r, mx, my));
+          const lx = mx - symbolLeft(dk(r));
+          if (r.key) {
+            placed.set(r.key, { x: lx, y: my, w: symbolLeft(dk(r)) + symbolRight(dk(r)), h: symbolHeight(dk(r)) });
+          }
+          const up = (labelLineCount(r, ROW_WRAP) - 1) * MV_LABEL.size * 1.15;
+          // From where its ink starts, clear of the line it is tapped off.
+          const lbx = Math.max(lx, p1x) + 2;
+          out.push(simLabel(r, lbx, my - 4 - up, 'start', MV_LABEL.size, ROW_WRAP));
+          clear = lbx + labelWidth(r, MV_LABEL.size, ROW_WRAP);
+          reach(clear, my + symbolHeight(dk(r)));
+          const re = mx + symbolRight(dk(r));
+          const sigs = signalsOf(r);
+          sigs.forEach((t, k) => {
+            const sy = my + symbolHeight(dk(r)) + 4 + k * 6;
+            instrSignals.push({ lead: [{ x: re - 4, y: my + symbolHeight(dk(r)) }, { x: re - 4, y: sy }], y: sy, text: t });
+          });
+          rowStep = Math.max(rowStep, symbolHeight(dk(r)) + 8 + sigs.length * 6);
+          rows.set(r, { y: my, feed: tapY, out: cursor, px: re + 6, side: true });
+          const o = symbolOverride(dk(r));
+          const has2 = !(o?.art && o.terminals?.length) || o.terminals.some(t => t.name === '2');
+          from = has2 ? { x: pinOf(dk(r), mx, my, '2').x, y: tapY } : { x: re, y: tapY };
+        });
+        yy += lift + Math.max(CELL, rowStep);
+        return;
+      }
+      const rowY = yy;
       if (singlePin(dk(item))) {
         // Tapped off the line at its one point.
         const off = pinOf(dk(item), 0, 0, '1');
@@ -2186,6 +2348,10 @@ function drawMvCellLines(
         cursor = yy + HALF;
         out.push(line(colX, yy + HALF, px, yy + HALF, 1.1), node({ x: colX, y: yy + HALF }));
         out.push(drawDevice(item, mx, my));
+        if (item.key) {
+          placed.set(item.key, { x: mx - symbolLeft(dk(item)), y: my,
+            w: symbolLeft(dk(item)) + symbolRight(dk(item)), h: symbolHeight(dk(item)) });
+        }
         rightEdge = mx + symbolRight(dk(item));
         tx = rightEdge + 6;
       } else {
@@ -2193,6 +2359,10 @@ function drawMvCellLines(
         if (cursor == null) cursor = p1.y;
         lineTo(p1.y);
         out.push(drawDevice(item, colX, yy));
+        if (item.key) {
+          placed.set(item.key, { x: colX - symbolLeft(dk(item)), y: yy,
+            w: symbolLeft(dk(item)) + symbolRight(dk(item)), h: symbolHeight(dk(item)), cx: p1.x });
+        }
         // On from its 2 when it has one; a device with no way out at the
         // bottom ends the line.
         const o = symbolOverride(dk(item));
@@ -2203,6 +2373,13 @@ function drawMvCellLines(
       }
       out.push(simLabel(item, tx, yy + 17, 'start', MV_LABEL.size, MV_LABEL.wrap));
       reach(tx + labelWidth(item, MV_LABEL.size, MV_LABEL.wrap), yy + step(item));
+      rows.set(item, {
+        y: rowY,
+        feed: singlePin(dk(item)) ? rowY + HALF : pinOf(dk(item), colX, rowY, '1').y,
+        out: cursor,
+        px: tx + labelWidth(item, MV_LABEL.size, MV_LABEL.wrap),
+        side: singlePin(dk(item)),
+      });
       // Its signals leave under its label, one under the other.
       signalsOf(item).forEach((t, k) => {
         const sy = yy + step(item) - 6 - (signalsOf(item).length - 1 - k) * 6;
@@ -2395,17 +2572,34 @@ function drawMvCellLines(
   // fault relay always did; one with no main relay to hang on, on the
   // breaker.
   if (auxRelays.length) {
-    const ax = (relayAt >= 0 ? relayBox.reach : ix) + 28;
+    // Right of everything already hung on the secondary side, so it never
+    // stands on a meter or its label.
+    const ax = Math.max(relayAt >= 0 ? relayBox.reach : ix, right) + 28;
     let ay = relayAt >= 0 ? relayBox.bottom + 18 : ty;
     for (const aux of auxRelays) {
-      const connect = aux.relayConnect ?? (relayAt >= 0 ? 'relay' : 'breaker');
+      // What its window says it is wired to — any of the breaker, the main
+      // relay and other parts (the alarm window…); the older single answer
+      // when there is no list; and, unanswered, the main relay when there is
+      // one to hang on, the breaker when there is not.
+      const connects: string[] = aux.sld?.connects
+        ?? (aux.relayConnect === 'both' ? ['breaker', 'relay']
+          : aux.relayConnect ? [aux.relayConnect] : [relayAt >= 0 ? 'relay' : 'breaker']);
+      const connect = connects.includes('breaker') && connects.includes('relay') ? 'both'
+        : connects.includes('breaker') ? 'breaker' : connects.includes('relay') ? 'relay' : 'none';
       out.push(drawDevice(aux, ax, ay));
+      if (aux.key) placed.set(aux.key, { x: ax, y: ay, w: symbolRight(dk(aux)), h: symbolHeight(dk(aux)) });
+      connects.filter(c => c !== 'breaker' && c !== 'relay').forEach((key, n) => {
+        auxLinks.push({ from: { x: ax + Math.min(symbolRight(dk(aux)) - 6, 10 + n * 6), y: ay + symbolHeight(dk(aux)) - 8 }, key });
+      });
       const up = (labelLineCount(aux, MV_LABEL.wrap) - 1) * MV_LABEL.size * 1.15;
       out.push(simLabel(aux, ax + 5, ay + 5 - up, 'start', MV_LABEL.size, MV_LABEL.wrap));
       const mid = { x: ax, y: ay + HALF };
       if ((connect === 'relay' || connect === 'both') && relayAt >= 0) {
-        const fx = relayBox.right - 6;
-        out.push(dashed([{ x: fx, y: relayBox.bottom }, { x: fx, y: mid.y }, mid]));
+        // Out of the relay's right side, high up, and down beside the
+        // auxiliary relay — clear of the meters hung under the main one.
+        const fy = relayAt + 16;
+        const down = ax - 10;
+        out.push(dashed([{ x: relayBox.right, y: fy }, { x: down, y: fy }, { x: down, y: mid.y }, mid]));
       }
       if ((connect === 'breaker' || connect === 'both') && sw && switchY >= 0) {
         // Round the far side of the relay, clear of its label, into its side.
@@ -2526,6 +2720,19 @@ function drawMvCellLines(
     }
   }
   reach(ix, ty);
+
+  // An auxiliary relay's wires to the other parts it is connected to: down
+  // out of its bottom and across into the device's near side.
+  for (const link of auxLinks) {
+    const to = placed.get(link.key);
+    if (!to) continue;
+    // Down into its top, at its near side, clear of the label beside it and
+    // of the line coming into its 1.
+    const cx = to.cx ?? to.x + to.w / 2;
+    const tx_ = link.from.x >= cx ? cx + 7 : cx - 7;
+    const above = to.y - 8;
+    out.push(dashed([link.from, { x: link.from.x, y: above }, { x: tx_, y: above }, { x: tx_, y: to.y + Math.min(8, to.h / 4) }]));
+  }
 
   // The secondary side's signals, to lanes out past everything drawn.
   if (instrSignals.length) {

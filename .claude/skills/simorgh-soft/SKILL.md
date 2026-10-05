@@ -286,8 +286,18 @@ the supply: the old wording test took the coupling and the incoming VT cell.
 when the part is entered and from its edit button in the parts list). A later
 part in a row is an accessory unless it says it is a main device: an
 accessory is never drawn, its SIM-TABLE is written under its device's. A main
-device can be put in series or in parallel; a relay is main (the CTs go into
-it) or auxiliary, wired to the breaker, the main relay or both. On MV the row
+device is in series or in parallel **with the part drawn above it**
+(`ChainItem.anchor`): series is on from it, in line with it; parallel is
+joined where it is joined, beside it (on the line: tapped just before it; a
+side-fed meter: its own tap off the column, while series carries on in the
+row from its 2). An instrument never goes onto the power line. A relay is main
+(the CTs go into it) or auxiliary, wired to any of the breaker, the main relay
+and other parts by key (`sld.connects`, `slot#index` — the alarm window). The
+breaker's upstream interlock and its 94/CR/74/86 boxes, the magnet's
+downstream interlock and the VT's fuses / PT truck are the parts' own answers
+too (`withPartAnswers`); the template keeps only what is the cell's (bus
+section, connected to, neutral), asked in the wizard. There is no
+template-level single-line panel any more. On MV the row
 decides what a part is before its wording does (`MV_ROW_IS`), then the
 office's letters in a spare row (`mvFromLabel`). Every label is broken onto
 lines (`labelLines`, at commas, words, then dashes) and every layout step

@@ -40,7 +40,7 @@ import {
 } from '../../types/project';
 import { TEMPLATE_FAMILIES, foldedPath, familyOf } from '../../utils/templateFamilies';
 import { MechanicalQuestions } from './MechanicalQuestions';
-import { SingleLineQuestions } from './SingleLineQuestions';
+import { SingleLineQuestions, cellAsks } from './SingleLineQuestions';
 import { type Tier } from '../../utils/tiers';
 
 const LV_ROOTS       = ['S8', '8PT'] as const;
@@ -890,13 +890,13 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
               Answered Yes already — change it if this template's equipment is not drawn here.
               Nothing waits on it.
             </p>
-            {/* Yes asks the single line's own questions, for the cell type
-                picked above. Optional, like Mechanical: anything left on
-                Auto is read from the parts. */}
-            {useSimorghDraw && mvLike(tier) && structuralPathComplete && (
+            {/* Yes asks what belongs to the cell itself, for the cell type
+                picked above — each part's own questions are asked as the
+                part is entered. Optional, like Mechanical. */}
+            {useSimorghDraw && mvLike(tier) && structuralPathComplete && cellAsks(cellType ?? '', cellSub ?? '') && (
               <div className="mt-2 rounded border border-indigo-200 bg-indigo-50/40">
                 <p className="px-3 pt-2 text-xs font-semibold text-indigo-800">
-                  Single-line questions{cellType ? ` — ${cellType}${cellSub ? ` · ${cellSub}` : ''}` : ''}
+                  About the cell{cellType ? ` — ${cellType}${cellSub ? ` · ${cellSub}` : ''}` : ''}
                 </p>
                 <SingleLineQuestions
                   value={singleLine}
@@ -904,6 +904,7 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
                   family={family === 'EK36' ? 'EK36' : String(family ?? '').startsWith('SIMOPRIME') ? 'SIMOPRIME' : ''}
                   cellType={cellType ?? ''}
                   sub={cellSub ?? ''}
+                  cellOnly
                 />
               </div>
             )}

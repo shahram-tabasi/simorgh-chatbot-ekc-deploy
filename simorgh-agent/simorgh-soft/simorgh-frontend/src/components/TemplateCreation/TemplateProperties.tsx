@@ -1,13 +1,13 @@
 // src/components/TemplateCreation/TemplateProperties.tsx - FIXED SQL CONNECTION
 import React, { useEffect, useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
-import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon, CopyIcon, ClipboardPasteIcon } from 'lucide-react';
+import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon, CopyIcon, ClipboardPasteIcon } from 'lucide-react';
 import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
 import { PanelFrame } from '../shared/PanelFrame';
 import { PartCell } from './PartCell';
 import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
-import { EplanSymbolMap, mvFamily, mvCellType } from '../../utils/eplanSingleLine';
-import { SingleLineQuestions } from './SingleLineQuestions';
+import { EplanSymbolMap, mvFamily } from '../../utils/eplanSingleLine';
+import { stripLocaleTags } from '../../utils/tierEquipmentMatrix';
 import { PartQuestionsDialog } from './PartQuestionsDialog';
 import { TemplateSingleLine, TemplateMechanical, PartSingleLine } from '../../types/project';
 import { useSymbolVersion } from '../../utils/cad/useSymbols';
@@ -534,9 +534,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   template
 }) => {
   const {
-    updateTemplate, projectData, patchProjectData, isCurrentRevisionEditable, setTemplateSingleLine,
+    updateTemplate, projectData, patchProjectData, isCurrentRevisionEditable,
   } = useProject();
-  const [singleLineOpen, setSingleLineOpen] = useState(true);
   const [clip, setClipState] = useState<SectionClip | null>(sectionClip);
   const setClip = (next: SectionClip | null) => { sectionClip = next; setClipState(next); };
   const [properties, setProperties] = useState<Record<string, PropertyValue>>(
@@ -1395,29 +1394,6 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           onOpenInTab={openGraphicInTab}
           onOpenGraphic={setGraphicSymbols}
         />
-        {/* What the cell's single line needs and its parts cannot say. MV
-            only, and only where Simorgh Draw is on for the template — that
-            is the question the wizard asks to gate these. */}
-        {LAYOUT_OF[template.type] === 'MV' && template.useSimorghDraw !== false && (
-          <div className="mt-2 border-t">
-            <button
-              type="button"
-              onClick={() => setSingleLineOpen(o => !o)}
-              className="w-full flex items-center gap-1 px-3 py-2 text-left text-sm font-medium text-gray-800 hover:bg-gray-50"
-            >
-              {singleLineOpen ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
-              Single-line questions
-            </button>
-            {singleLineOpen && (
-              <SingleLineQuestions
-                value={template.singleLine ?? {}}
-                family={mvFamily(template)}
-                {...mvCellType(template)}
-                onChange={next => setTemplateSingleLine(template.id, next)}
-              />
-            )}
-          </div>
-        )}
       </PanelFrame>
       </div>
 
@@ -1440,6 +1416,17 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
         const { slot, index } = questionsFor.ref;
         const live = properties[slot]?.parts?.[index];
         if (!live) return null;
+        // The parts drawn as devices of their own (an accessory is written
+        // under its device, not drawn): the one just above this part is what
+        // series and parallel are relative to, and any of them is what an
+        // auxiliary relay can be wired to.
+        const drawn = partRefs.filter(r => (r.index > 0 ? r.part?.sld?.role === 'main' : r.part?.sld?.role !== 'accessory'));
+        const nameOf = (r: PartRef) => {
+          const own = stripLocaleTags(r.part?.label);
+          return own ? `${getDisplayName(r.slot)} — ${own}` : getDisplayName(r.slot);
+        };
+        const at = partRefs.findIndex(r => r.slot === slot && r.index === index);
+        const above = partRefs.slice(0, Math.max(at, 0)).filter(r => drawn.includes(r)).pop();
         return (
           <PartQuestionsDialog
             part={live}
@@ -1449,6 +1436,9 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
             tier={template.type}
             host={index > 0 ? properties[slot]?.parts?.[0] : undefined}
             fresh={questionsFor.fresh}
+            above={above ? nameOf(above) : undefined}
+            others={drawn.map(r => ({ key: `${r.slot}#${r.index}`, label: nameOf(r) }))}
+            family={mvFamily(template)}
             onClose={() => setQuestionsFor(null)}
             onSave={(sld, symbolId, simTable) => {
               changePartAnswers({ slot, index, part: live }, sld, symbolId, simTable);
