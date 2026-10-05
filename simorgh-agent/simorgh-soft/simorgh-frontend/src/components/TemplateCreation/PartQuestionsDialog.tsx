@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { CheckIcon, XIcon, InfoIcon, PlusIcon, TrashIcon } from 'lucide-react';
-import { PartSingleLine, CtCore, CtCorePurpose } from '../../types/project';
+import { PartSingleLine, CtCore, CtCorePurpose, SignalDir } from '../../types/project';
 import { IEC_SYMBOLS, SYMBOL_GROUPS, SymbolId } from '../../utils/iecSymbols';
 import { breakLabel, symbolForPart, coresFromText } from '../../utils/eplanSingleLine';
 import { partCode } from '../../utils/eplanDataExport';
@@ -70,15 +70,41 @@ const SWITCHES: SymbolId[] = [
 
 const input = 'w-full min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-400';
 
+/**
+ * Which way a signal's arrow points at the foot of the cell: down, a signal
+ * going out; up, one coming in.
+ */
+const DirToggle: React.FC<{ value: SignalDir | undefined; onChange: (next: SignalDir | undefined) => void }> = ({
+  value, onChange,
+}) => (
+  <span className="inline-flex shrink-0 rounded border border-gray-300 overflow-hidden" title="Which way its arrow points">
+    {(['down', 'up'] as const).map(d => {
+      const on = (value ?? 'down') === d;
+      return (
+        <button key={d} type="button" onClick={() => onChange(d === 'down' ? undefined : d)}
+          title={d === 'down' ? 'Arrow down — going out' : 'Arrow up — coming in'}
+          className={`px-1.5 py-1 text-xs leading-none ${on ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}>
+          {d === 'down' ? '↓' : '↑'}
+        </button>
+      );
+    })}
+  </span>
+);
+
 /** A list of status texts: each one a dashed line to the foot of the cell. */
 const StatusList: React.FC<{
   value: string[] | undefined;
   onChange: (next: string[] | undefined) => void;
   hint: string;
   label?: string;
-}> = ({ value, onChange, hint, label = 'Status' }) => {
+  /** Each one's arrow, by position — given, a ↓/↑ beside each. */
+  dirs?: SignalDir[];
+  onDirs?: (next: SignalDir[] | undefined) => void;
+}> = ({ value, onChange, hint, label = 'Status', dirs, onDirs }) => {
   const list = value ?? [];
   const set = (next: string[]) => onChange(next.length ? next : undefined);
+  const setDirs = (next: SignalDir[]) => onDirs?.(next.some(d => d === 'up') ? next : undefined);
+  const dirAt = (k: number): SignalDir => dirs?.[k] ?? 'down';
   return (
     <div className="w-full space-y-1.5">
       {list.map((t, k) => (
@@ -86,7 +112,14 @@ const StatusList: React.FC<{
           <span className="text-[11px] text-gray-500 w-14 shrink-0">{label} {k + 1}</span>
           <input className={input} value={t} placeholder={hint}
             onChange={e => set(list.map((x, i) => (i === k ? e.target.value : x)))} />
-          <button type="button" title="Remove" onClick={() => set(list.filter((_, i) => i !== k))}
+          {onDirs && (
+            <DirToggle value={dirAt(k)}
+              onChange={d => setDirs(list.map((_, i) => (i === k ? d ?? 'down' : dirAt(i))))} />
+          )}
+          <button type="button" title="Remove" onClick={() => {
+            set(list.filter((_, i) => i !== k));
+            if (onDirs) setDirs(list.map((_, i) => dirAt(i)).filter((_, i) => i !== k));
+          }}
             className="p-1.5 rounded text-gray-400 hover:text-red-600 hover:bg-red-50">
             <TrashIcon className="w-3.5 h-3.5" />
           </button>
@@ -368,8 +401,11 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                   <Choice on={answers.upstreamInterlock !== true} title="No"
                     onClick={() => { set('upstreamInterlock', undefined); set('upstreamText', undefined); }} />
                   {answers.upstreamInterlock && (
-                    <input className={input} value={answers.upstreamText ?? ''} placeholder="INCOMING FEEDER"
-                      onChange={e => set('upstreamText', e.target.value || undefined)} />
+                    <div className="w-full flex items-center gap-1.5">
+                      <input className={input} value={answers.upstreamText ?? ''} placeholder="INCOMING FEEDER"
+                        onChange={e => set('upstreamText', e.target.value || undefined)} />
+                      <DirToggle value={answers.upstreamDir} onChange={d => set('upstreamDir', d)} />
+                    </div>
                   )}
                 </Question>
               )}
@@ -393,8 +429,11 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                   {answers.downstreamInterlock !== false && (
                     <label className="w-full">
                       <span className="block text-[11px] text-gray-500 mb-0.5">Text along the line</span>
-                      <input className={input} value={answers.downstreamText ?? 'OUTGOING FEEDER'}
-                        onChange={e => set('downstreamText', e.target.value === 'OUTGOING FEEDER' ? undefined : e.target.value)} />
+                      <span className="flex items-center gap-1.5">
+                        <input className={input} value={answers.downstreamText ?? 'OUTGOING FEEDER'}
+                          onChange={e => set('downstreamText', e.target.value === 'OUTGOING FEEDER' ? undefined : e.target.value)} />
+                        <DirToggle value={answers.downstreamDir} onChange={d => set('downstreamDir', d)} />
+                      </span>
                     </label>
                   )}
                 </Question>
@@ -457,10 +496,13 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                     note="A dashed line from the device down to the foot of the cell, its text along it."
                     onClick={() => set('serialLink', true)} />
                   <Choice on={answers.serialLink !== true} title="No"
-                    onClick={() => { set('serialLink', undefined); set('serialText', undefined); }} />
+                    onClick={() => { set('serialLink', undefined); set('serialText', undefined); set('serialDir', undefined); }} />
                   {answers.serialLink && (
-                    <input className={input} value={answers.serialText ?? ''} placeholder="SERIAL LINK"
-                      onChange={e => set('serialText', e.target.value || undefined)} />
+                    <div className="w-full flex items-center gap-1.5">
+                      <input className={input} value={answers.serialText ?? ''} placeholder="SERIAL LINK"
+                        onChange={e => set('serialText', e.target.value || undefined)} />
+                      <DirToggle value={answers.serialDir} onChange={d => set('serialDir', d)} />
+                    </div>
                   )}
                 </Question>
               )}
@@ -476,6 +518,8 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                   <StatusList
                     value={answers.statuses}
                     onChange={v => set('statuses', v)}
+                    dirs={answers.statusDirs}
+                    onDirs={v => set('statusDirs', v)}
                     hint={isRelay ? 'e.g. TRIP TO UPSTREAM' : isMeter ? 'e.g. ALARM TO DCS' : 'e.g. CB OPEN/CLOSE TO DCS'}
                   />
                 </Question>
@@ -506,8 +550,12 @@ export const PartQuestionsDialog: React.FC<Props> = ({
               // Empty statuses are dropped; nothing typed is no key at all.
               const clean = { ...answers };
               if (clean.statuses) {
-                const kept = clean.statuses.map(t => t.trim()).filter(Boolean);
-                if (kept.length) clean.statuses = kept; else delete clean.statuses;
+                // Each status keeps its own arrow when the empty ones go.
+                const kept = clean.statuses
+                  .map((t, k) => ({ t: t.trim(), d: clean.statusDirs?.[k] ?? 'down' as const }))
+                  .filter(x => x.t);
+                if (kept.length) clean.statuses = kept.map(x => x.t); else delete clean.statuses;
+                if (kept.some(x => x.d === 'up')) clean.statusDirs = kept.map(x => x.d); else delete clean.statusDirs;
               }
               if (clean.attachments) {
                 const kept = clean.attachments.map(t => t.trim()).filter(Boolean);

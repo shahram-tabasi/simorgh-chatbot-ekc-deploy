@@ -442,6 +442,9 @@ export interface TemplateMechanical {
  * the part (`part.sld`). Every key is optional; left out, the drawing reads
  * the part as it always did.
  */
+/** A signal's arrow at the foot of the cell: down (going out) or up (coming in). */
+export type SignalDir = 'down' | 'up';
+
 export interface PartSingleLine {
   /** A second part in a row: an accessory of the device above it (only its
    *  SIM-TABLE is written, under that device's), or a device of its own. */
@@ -460,9 +463,14 @@ export interface PartSingleLine {
    *  its text written along it. */
   serialLink?: boolean;
   serialText?: string;
+  /** Which way the serial link's arrow points at the foot of the cell. */
+  serialDir?: SignalDir;
   /** Status signals out of a relay or a breaker — each a dashed line down to
    *  the foot of the cell with its text along it. */
   statuses?: string[];
+  /** Which way each status's arrow points at the foot of the cell, by
+   *  position in `statuses`: down (out, the default) or up (in). */
+  statusDirs?: SignalDir[];
   /** A CT's cores, top to bottom, and what each one feeds. */
   cores?: CtCore[];
   /** Drawn with one of the office's new symbols (its id) rather than the
@@ -477,12 +485,14 @@ export interface PartSingleLine {
    *  and what that is written as. */
   upstreamInterlock?: boolean;
   upstreamText?: string;
+  upstreamDir?: SignalDir;
   /** The breaker: the boxes stacked beside it — 94, CR, 74, 86. */
   attachments?: string[];
   /** The magnet: interlocked with the feeder downstream, and its name
    *  written along the line (OUTGOING FEEDER). False draws no line. */
   downstreamInterlock?: boolean;
   downstreamText?: string;
+  downstreamDir?: SignalDir;
   /** The VT: drawn with its HRC fuses (default) or without. */
   vtFuses?: boolean;
   /** The VT on SIMOPRIME: the incoming has a PT truck — the PT after the
@@ -514,9 +524,13 @@ export interface TemplateSingleLine {
   /** Interlocked with the feeder below it — the magnet's line, and its text. */
   downstreamInterlock?: boolean;
   downstreamText?: string;
+  /** Which way the downstream line's arrow points at the foot. */
+  downstreamDir?: SignalDir;
   /** Interlocked with the feeder above it — on the key interlock's line. */
   upstreamInterlock?: boolean;
   upstreamText?: string;
+  /** Which way the upstream interlock's arrow points at the foot: down (out, the default) or up (in). */
+  upstreamDir?: SignalDir;
   /** The CT's cores, in order, and what each one feeds. */
   ctCores?: CtCore[];
   /** 'plain' draws only "protection relay"; 'functions' lists them. */

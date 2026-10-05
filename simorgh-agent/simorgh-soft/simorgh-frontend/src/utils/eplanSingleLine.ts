@@ -1474,6 +1474,19 @@ export const mvOffBus = (opts: MvCellOptions): boolean => {
   return Boolean(k.dummy || k.neutral);
 };
 
+/**
+ * A device's serial link and statuses as its window gives them, each with
+ * the way its arrow points at the foot of the cell (up: a signal coming in).
+ */
+export function signalList(item: { serialLink?: boolean; serialText?: string; statuses?: string[]; sld?: PartSingleLine }):
+  { text: string; up: boolean }[] {
+  const dirs = item.sld?.statusDirs ?? [];
+  return [
+    ...(item.serialLink ? [{ text: String(item.serialText ?? '').trim() || 'SERIAL LINK', up: item.sld?.serialDir === 'up' }] : []),
+    ...(item.statuses ?? []).map((t, k) => ({ text: t.trim(), up: dirs[k] === 'up' })).filter(sg => sg.text),
+  ];
+}
+
 /** Every current transformer: labelled on its left, its cores to the right. */
 const CT_IDS: SymbolId[] = ['current-transformer', 'core-balance-ct'];
 
@@ -1553,6 +1566,9 @@ const arrowRight = (x: number, y: number) =>
   `<path d="M ${x - 7} ${y - 3.5} L ${x} ${y} L ${x - 7} ${y + 3.5} Z" fill="#111"/>`;
 const arrowDown = (x: number, y: number) =>
   `<path d="M ${x - 3.5} ${y - 7} L ${x} ${y} L ${x + 3.5} ${y - 7} Z" fill="#111"/>`;
+/** A signal's arrow at the foot of the cell pointing back up: one coming in. */
+const arrowUp = (x: number, y: number) =>
+  `<path d="M ${x - 3.5} ${y} L ${x} ${y - 7} L ${x + 3.5} ${y} Z" fill="#111"/>`;
 
 const ATTACHMENT_TEXT: Record<DeviceAttachment['kind'], string> = {
   serial: 'SERIAL', link: 'LINK', status: 'STATUS', other: '',
@@ -1675,6 +1691,7 @@ function withPartAnswers(cell: TemplateSingleLine, chain: ChainItem[]): Template
     out.upstreamInterlock = sw.upstreamInterlock;
     out.upstreamText = sw.upstreamText;
   }
+  if (sw?.upstreamDir) out.upstreamDir = sw.upstreamDir;
   if (sw?.attachments) {
     out.breakerAttachments = sw.attachments.map(t => t.trim()).filter(Boolean)
       .map(text => ({ kind: 'other' as const, text }));
@@ -1682,6 +1699,7 @@ function withPartAnswers(cell: TemplateSingleLine, chain: ChainItem[]): Template
   const mg = chain.find(i => i.id === 'magnet')?.sld;
   if (mg?.downstreamInterlock !== undefined) out.downstreamInterlock = mg.downstreamInterlock;
   if (mg?.downstreamText !== undefined) out.downstreamText = mg.downstreamText;
+  if (mg?.downstreamDir) out.downstreamDir = mg.downstreamDir;
   const vt = chain.find(i => i.id === 'voltage-transformer')?.sld;
   if (vt?.vtFuses !== undefined) out.vtFuses = vt.vtFuses;
   if (vt?.ptTruck !== undefined) out.ptTruck = vt.ptTruck;
@@ -1923,15 +1941,18 @@ function drawMvCellLines(
    */
   // Collected, and drawn last, so every one of them ends on one level: the
   // floor, or lower when the longest text needs it — never each at its own.
-  const signals: { x: number; fromY: number; name: string }[] = [];
-  const signalDown = (sx_: number, fromY: number, text_: string) => {
-    signals.push({ x: sx_, fromY, name: text_.trim().toUpperCase() });
+  // Each arrow points as its window says: down, a signal going out; up, one
+  // coming in.
+  const signals: { x: number; fromY: number; name: string; up?: boolean }[] = [];
+  const signalDown = (sx_: number, fromY: number, text_: string, up?: boolean) => {
+    signals.push({ x: sx_, fromY, name: text_.trim().toUpperCase(), up });
   };
+  const arrowAt = (x_: number, y_: number, up?: boolean) => (up ? arrowUp(x_, y_) : arrowDown(x_, y_));
   const textLen = (name: string) => name.length * 7.5 * 0.68;
   const drawSignals = () => {
     if (!signals.length) return;
     const end = Math.max(floor, ...signals.map(sg => sg.fromY + textLen(sg.name) + 24));
-    for (const { x: sx_, fromY, name } of signals) {
+    for (const { x: sx_, fromY, name, up } of signals) {
       const tw = textLen(name);
       const mid = (fromY + end) / 2;
       // The line stops either side of its text rather than running under a
@@ -1939,11 +1960,11 @@ function drawMvCellLines(
       // is opened in the editor or sent out as DXF.
       if (name) {
         out.push(dashed([{ x: sx_, y: fromY }, { x: sx_, y: mid - tw / 2 - 3 }]));
-        out.push(dashed([{ x: sx_, y: mid + tw / 2 + 3 }, { x: sx_, y: end }]), arrowDown(sx_, end));
+        out.push(dashed([{ x: sx_, y: mid + tw / 2 + 3 }, { x: sx_, y: end }]), arrowAt(sx_, end, up));
         out.push(`<g transform="rotate(-90 ${sx_} ${mid})">` +
           `<text x="${sx_}" y="${mid + 2.8}" font-size="7.5" text-anchor="middle" fill="#111">${esc(name)}</text></g>`);
       } else {
-        out.push(dashed([{ x: sx_, y: fromY }, { x: sx_, y: end }]), arrowDown(sx_, end));
+        out.push(dashed([{ x: sx_, y: fromY }, { x: sx_, y: end }]), arrowAt(sx_, end, up));
       }
       reach(sx_ - 6, end);
       reach(sx_ + 6, end);
@@ -2115,7 +2136,7 @@ function drawMvCellLines(
       // Magnet's 2 to the feeder it is interlocked with, named along the
       // line, down to the foot of the cell with the other signals.
       const m2 = pinOf(dk(magnet), mx, my, '2');
-      signalDown(m2.x, m2.y, String(answers.downstreamText ?? '').trim() || 'OUTGOING FEEDER');
+      signalDown(m2.x, m2.y, String(answers.downstreamText ?? '').trim() || 'OUTGOING FEEDER', answers.downstreamDir === 'up');
     }
   }
 
@@ -2124,13 +2145,16 @@ function drawMvCellLines(
   // out to the left of everything on the cell, and each status drops from it
   // to the foot of the cell with its text along it — the bundle of dashed
   // lines down the left of the office's SIMOPRIME sheets.
-  const swStatuses = (sw?.statuses ?? []).map(t => t.trim()).filter(Boolean);
+  const swSignals = (sw?.statuses ?? [])
+    .map((t, k) => ({ text: t.trim(), up: sw?.sld?.statusDirs?.[k] === 'up' })).filter(sg => sg.text);
+  const swStatuses = swSignals.map(sg => sg.text);
+  const swStatusUp = swSignals.map(sg => sg.up);
   if (sw && switchY >= 0 && swStatuses.length) {
     const s3 = pinOf(dk(sw), x, switchY, '3');
     const first = left - 14;
     const lanes = swStatuses.map((_, k) => first - k * 16);
     out.push(dashed([s3, { x: lanes[lanes.length - 1], y: s3.y }]));
-    swStatuses.forEach((t, k) => signalDown(lanes[k], s3.y, t));
+    swStatuses.forEach((t, k) => signalDown(lanes[k], s3.y, t, swStatusUp[k]));
   }
 
   // ── What hangs on the breaker, along the key interlock's line ─────────
@@ -2176,10 +2200,7 @@ function drawMvCellLines(
 
   /** A column of instruments hanging on one line at `ix`, from `y0`. */
   /** A device's serial link and status signals, as its window gives them. */
-  const signalsOf = (item: ChainItem): string[] => [
-    ...(item.serialLink ? [String(item.serialText ?? '').trim() || 'SERIAL LINK'] : []),
-    ...(item.statuses ?? []).map(t => t.trim()).filter(Boolean),
-  ];
+  const signalsOf = (item: ChainItem) => signalList(item);
   /**
    * The relay's and the meters' signals, collected and laid out together
    * once everything on the secondary side is drawn: each one leaves its
@@ -2187,7 +2208,7 @@ function drawMvCellLines(
    * and down to the foot of the cell. A signal that leaves higher up takes a
    * lane further out, so none crosses another on its way.
    */
-  const instrSignals: { lead: Pt[]; y: number; text: string }[] = [];
+  const instrSignals: { lead: Pt[]; y: number; text: string; up?: boolean }[] = [];
 
   /**
    * A meter whose connection point 1 is on its side — the office draws them
@@ -2281,7 +2302,7 @@ function drawMvCellLines(
         beside.px = ptx + labelWidth(item, MV_LABEL.size, MV_LABEL.wrap);
         signalsOf(item).forEach((t, k) => {
           const sy = ry + step(item) - 6 - (signalsOf(item).length - 1 - k) * 6;
-          instrSignals.push({ lead: [{ x: px + symbolRight(dk(item)), y: sy }], y: sy, text: t });
+          instrSignals.push({ lead: [{ x: px + symbolRight(dk(item)), y: sy }], y: sy, text: t.text, up: t.up });
         });
         yy = Math.max(yy, ry + step(item));
         return;
@@ -2321,7 +2342,7 @@ function drawMvCellLines(
           const sigs = signalsOf(r);
           sigs.forEach((t, k) => {
             const sy = my + symbolHeight(dk(r)) + 4 + k * 6;
-            instrSignals.push({ lead: [{ x: re - 4, y: my + symbolHeight(dk(r)) }, { x: re - 4, y: sy }], y: sy, text: t });
+            instrSignals.push({ lead: [{ x: re - 4, y: my + symbolHeight(dk(r)) }, { x: re - 4, y: sy }], y: sy, text: t.text, up: t.up });
           });
           rowStep = Math.max(rowStep, symbolHeight(dk(r)) + 8 + sigs.length * 6);
           rows.set(r, { y: my, feed: tapY, out: cursor, px: re + 6, side: true });
@@ -2383,7 +2404,7 @@ function drawMvCellLines(
       // Its signals leave under its label, one under the other.
       signalsOf(item).forEach((t, k) => {
         const sy = yy + step(item) - 6 - (signalsOf(item).length - 1 - k) * 6;
-        instrSignals.push({ lead: [{ x: rightEdge, y: sy }], y: sy, text: t });
+        instrSignals.push({ lead: [{ x: rightEdge, y: sy }], y: sy, text: t.text, up: t.up });
       });
       yy += step(item);
     });
@@ -2471,7 +2492,7 @@ function drawMvCellLines(
     signals.forEach((t, k) => {
       const sx_ = Math.max(relayBox.cx + 8, relayBox.right - 6 - k * 7);
       const turn = relayBox.bottom + 6 + k * 6;
-      instrSignals.push({ lead: [{ x: sx_, y: relayBox.bottom }, { x: sx_, y: turn }], y: turn, text: t });
+      instrSignals.push({ lead: [{ x: sx_, y: relayBox.bottom }, { x: sx_, y: turn }], y: turn, text: t.text, up: t.up });
     });
     return Math.max(y0 + h, k.bottom + 4 + signals.length * 6);
   };
@@ -2741,7 +2762,7 @@ function drawMvCellLines(
     order.forEach((sg, i) => {
       const lane = base + (order.length - 1 - i) * 16;
       out.push(dashed([...sg.lead, { x: lane, y: sg.y }]));
-      signalDown(lane, sg.y, sg.text);
+      signalDown(lane, sg.y, sg.text, sg.up);
     });
   }
   drawSignals();

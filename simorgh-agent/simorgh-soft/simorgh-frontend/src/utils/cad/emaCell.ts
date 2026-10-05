@@ -23,7 +23,7 @@
 // out to the right along its own row through what it feeds.
 import { PINS, FD, PROTOS, CONNS } from './emaParts';
 import { num, multi, HEAD, emaDocument } from './ema';
-import { templateCell, breakLabel, type ChainItem } from '../eplanSingleLine';
+import { templateCell, breakLabel, signalList, type ChainItem } from '../eplanSingleLine';
 import type { SymbolId } from '../iecSymbols';
 import type { Tier } from '../tiers';
 
@@ -269,6 +269,8 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   const rows: { item: ChainItem; y: number; x: number; purpose: string; text?: string }[] = [];
   page.conn(64, 0, 0, 0);
   let y = -10;
+  /** The lowest point the main line reaches: where it goes on to the load. */
+  let lineEnd = 0;
   /** A device on the line: its top point at `y`, the line on from its bottom. */
   const onLine = (item: ChainItem, n: number, v: number, lx = -14, ly = 0): number | null => {
     const pins = pinsOf(n, v);
@@ -278,6 +280,7 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     page.device('SLD', n, v, 0, insY, [page.textXml(lx, insY + ly, labelOf(item, 22), ly ? 9 : 6)]);
     const bottom = pins.find(p => p.dir === DOWN);
     y = (bottom ? insY + bottom.y : insY - 8) - 10;
+    lineEnd = bottom ? insY + bottom.y : lineEnd;
     return insY;
   };
 
@@ -331,6 +334,7 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     const inPin = pins.find(p => p.dir === LEFT);
     if (!inPin) { skipped(item); return; }
     page.conn(66, 0, 0, y);
+    lineEnd = y;
     const insX = 24 - inPin.x;
     page.device('SLD', n, v, insX, y, [page.textXml(insX, y + 6, labelOf(item, 22), 8)]);
     if (item.id === 'surge-arrester' || item.id === 'surge-limiter') {
@@ -359,8 +363,14 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   }
 
   right.filter(i => !before.includes(i)).forEach(tapRight);
-  // The line's end, named as the cell says.
-  page.text(4, y + 4, String(answers.connectedTo ?? '').trim().toUpperCase(), 7, 2);
+  // The line on to the load: its arrow, and what it goes to — as the sheet
+  // writes it, or as the cell names it.
+  {
+    const tip = lineEnd - 12;
+    page.line(0, lineEnd, 0, tip);
+    page.poly([[-1.5, tip + 3], [0, tip], [1.5, tip + 3]], true);
+    page.text(3, tip + 1.5, String(answers.connectedTo ?? '').trim() || 'to the load', 4, 2);
+  }
 
   // ── Each row of the secondary side ────────────────────────────────────
   // The devices on a row in series, one's right point facing the next one's
@@ -400,7 +410,7 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     relayBox = placeRelay(page, relay, relayX, relayY, protection.slice(1).map((_, k) => -(k + 1) * DCP_STEP));
   }
   /** Signals down to the foot of the cell, drawn once everything stands. */
-  const signals: { x: number; from: number; text: string }[] = [];
+  const signals: { x: number; from: number; text: string; up?: boolean }[] = [];
   for (const row of rows) {
     let cx = row.x + 12;
     const put = (item: ChainItem) => {
@@ -410,7 +420,7 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
       if (!pins || !l) { skipped(item); return; }
       const insX = cx - l.x;
       page.device('SLD', n, v, insX, row.y, [page.textXml(insX, row.y + 5, labelOf(item, 18), 8, 1.6)]);
-      deviceSignals(item).forEach((t, k) => signals.push({ x: insX + 2 + k * 3, from: row.y - 4, text: t }));
+      signalList(item).forEach((t, k) => signals.push({ x: insX + 2 + k * 3, from: row.y - 4, text: t.text, up: t.up }));
       const r = pins.find(p => p.dir === RIGHT);
       cx = (r ? insX + r.x : insX + 6) + 14;
     };
@@ -456,11 +466,11 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   // The relay's serial link and statuses, down from the bottom of its box.
   if (relayBox && relay) {
     // Out of the box's right side, clear of what hangs under it.
-    const sigs = deviceSignals(relay);
+    const sigs = signalList(relay);
     const out = relayBox.x + 32;
     const sy = relayBox.y - 8;
     if (sigs.length) page.dashedPath([[out, sy], [out + 4 + (sigs.length - 1) * 4, sy]]);
-    sigs.forEach((t, k) => signals.push({ x: out + 4 + k * 4, from: sy, text: t }));
+    sigs.forEach((t, k) => signals.push({ x: out + 4 + k * 4, from: sy, text: t.text, up: t.up }));
   }
 
   // ── Beside the breaker: 94 / CR / 74 / 86 ─────────────────────────────
@@ -473,7 +483,7 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
   // The upstream key interlock: down from under the boxes, to the foot.
   if (answers.upstreamInterlock) {
     signals.push({ x: 22, from: -10 - 6 - Math.max(0, boxes.length - 1) * 5,
-      text: String(answers.upstreamText || 'INCOMING FEEDER') });
+      text: String(answers.upstreamText || 'INCOMING FEEDER'), up: answers.upstreamDir === 'up' });
   }
   // The mechanical interlock: from the switch to the earth switch and on to
   // the magnet, and the magnet's own line to the feeder below.
@@ -494,11 +504,13 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     page.dashedPath([[esMid != null ? ES_X - 4 : -4, from], [mbAt.x, from], [mbAt.x, mbAt.y + 4]]);
   }
   if (mbAt && answers.downstreamInterlock !== false) {
-    signals.push({ x: mbAt.x, from: mbAt.y - 4, text: String(answers.downstreamText || 'OUTGOING FEEDER') });
+    signals.push({ x: mbAt.x, from: mbAt.y - 4, text: String(answers.downstreamText || 'OUTGOING FEEDER'),
+      up: answers.downstreamDir === 'up' });
   }
   // The breaker's statuses: on along the interlock's line, out to the left of
   // everything, each down to the foot.
-  const swStatuses = (sw?.statuses ?? []).map(t => t.trim()).filter(Boolean);
+  const swSignals = sw ? signalList({ statuses: sw.statuses, sld: sw.sld }) : [];
+  const swStatuses = swSignals.map(sg => sg.text);
   if (sw && swMid != null && swStatuses.length) {
     // The interlock's line carries on out to the left, just past everything
     // on that side, and each status drops from it.
@@ -506,7 +518,7 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     const lanes = swStatuses.map((_, k) => first - k * 4);
     const from = esMid != null ? spine : -4;
     page.dashedPath([[from, swMid], [lanes[lanes.length - 1], swMid]]);
-    swStatuses.forEach((t, k) => signals.push({ x: lanes[k], from: swMid!, text: t }));
+    swSignals.forEach((t, k) => signals.push({ x: lanes[k], from: swMid!, text: t.text, up: t.up }));
   }
   // Every signal ends on one floor, low enough for the longest text.
   if (signals.length) {
@@ -518,7 +530,10 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
       const half = len(t) / 2 + 1.5;
       page.line(sg.x, sg.from, sg.x, mid + half, true);
       page.line(sg.x, mid - half, sg.x, floor + 2, true);
-      page.poly([[sg.x - 1, floor + 2], [sg.x, floor], [sg.x + 1, floor + 2]], true);
+      // Down: a signal going out; up: one coming in.
+      page.poly(sg.up
+        ? [[sg.x - 1, floor], [sg.x, floor + 2], [sg.x + 1, floor]]
+        : [[sg.x - 1, floor + 2], [sg.x, floor], [sg.x + 1, floor + 2]], true);
       page.text(sg.x, mid, t, 5, 1.8, Math.PI / 2);
     }
   }
@@ -559,11 +574,4 @@ export function renderEmaCell(template: { name?: string } & Record<string, any>,
     return { x: bx, y: by };
   }
 
-  /** A device's serial link and statuses, as its window gives them. */
-  function deviceSignals(item: ChainItem): string[] {
-    return [
-      ...(item.serialLink ? [String(item.serialText ?? '').trim() || 'SERIAL LINK'] : []),
-      ...(item.statuses ?? []).map(t => t.trim()).filter(Boolean),
-    ];
-  }
 }
