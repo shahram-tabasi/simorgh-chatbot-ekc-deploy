@@ -87,7 +87,7 @@ const BpmsSection: React.FC<{
     return (
       <div
         key={tier}
-        className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center justify-between gap-4 bg-gray-50"
+        className="border border-gray-200 rounded-lg px-4 py-3 flex items-center justify-between gap-4 bg-gray-50 min-w-0"
       >
         <div className="flex items-center gap-3 min-w-0">
           <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
@@ -135,7 +135,12 @@ const BpmsSection: React.FC<{
     );
   };
 
-  return <>{(['LV', 'MV'] as BpmsTier[]).map(row)}</>;
+  // LV and MV side by side; one above the other where the window is narrow.
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+      {(['LV', 'MV'] as BpmsTier[]).map(row)}
+    </div>
+  );
 };
 
 // ─── EPLAN single line ────────────────────────────────────────────────────────
