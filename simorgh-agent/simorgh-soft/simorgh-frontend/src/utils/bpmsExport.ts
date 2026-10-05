@@ -104,12 +104,17 @@ const partText = (part: any): string => {
 };
 
 /**
- * A Siemens 3SU part (pushbutton, lamp, selector) already on the line.
+ * The Start/Stop pushbutton already on the line.
  *
- * A project that came from BPMS may carry one the engineer put there; the
- * line then gets no second one — one per line is the rule.
+ * A project that came from BPMS may carry it — the engineer put it there —
+ * and then the line gets no second one: one per line is the rule. Only this
+ * order number counts; other 3SU parts (lamps, other buttons) are their own
+ * parts and do not stand in for it.
  */
-const has3su = (parts: any[]): boolean => parts.some(p => /\b3SU/i.test(partText(p)));
+const hasStartStop = (parts: any[]): boolean => {
+  const code = START_STOP_PART.fullData.OrderNumber.replace(/[\s-]/g, '').toUpperCase();
+  return parts.some(p => partText(p).replace(/[\s-]/g, '').toUpperCase().includes(code));
+};
 
 /**
  * What a GIS cell carries that is not ordered with it.
@@ -273,8 +278,8 @@ export function buildBpmsSheets(data: ProjectData, meta: BpmsMeta = {}): BpmsShe
       const parts = [
         ...onTemplate,
         // The door's pushbutton, on every SFD line and on no template — unless
-        // the line already has its 3SU part.
-        ...(tier === 'LV' && isSfd(row) && !has3su(onTemplate) ? [START_STOP_PART] : []),
+        // the line already has it.
+        ...(tier === 'LV' && isSfd(row) && !hasStartStop(onTemplate) ? [START_STOP_PART] : []),
       ];
       if (parts.length === 0) {
         // A line without parts is still a line — keep it, with the part
