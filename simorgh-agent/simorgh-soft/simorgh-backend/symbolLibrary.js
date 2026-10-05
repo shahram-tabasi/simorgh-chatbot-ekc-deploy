@@ -31,6 +31,8 @@ function clean(body) {
         x: Number(t.x),
         y: Number(t.y),
         name: String(t.name ?? '').trim().slice(0, 16) || String(i + 1),
+        // Which way its wire leaves — the draughtsman's answer, kept.
+        ...(['up', 'down', 'left', 'right'].includes(String(t.dir)) ? { dir: String(t.dir) } : {}),
       }))
     : [];
 
@@ -48,7 +50,23 @@ function clean(body) {
     // A plain string and not a reference: the symbol it names may be deleted,
     // and a variant whose original is gone is still a symbol.
     variantOf: String(body?.variantOf ?? '').trim().slice(0, 120) || undefined,
+    // A library symbol redrawn for the whole office (id `redraw:<symbol>`):
+    // the redraw as a project keeps it — its box, where its conductor runs,
+    // how many cells it takes, which way it lies — so every project draws
+    // it the same. Plain data, size-capped.
+    override: redrawOf(body?.override),
   };
+}
+
+function redrawOf(o) {
+  if (!o || typeof o !== 'object') return undefined;
+  try {
+    const text = JSON.stringify(o);
+    if (text.length > 2_000_000) return undefined;
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
 
 /** The shape of a symbol going back out, with the stored id. */
@@ -62,6 +80,7 @@ const asSymbol = doc => ({
   height: doc.height,
   terminals: doc.terminals ?? [],
   variantOf: doc.variantOf,
+  override: doc.override,
   changedOn: doc.changedOn,
 });
 

@@ -22,6 +22,7 @@ import {
 } from '../../utils/cad/symbolLibraries';
 import {
   forgetOfficeSymbol, loadOfficeSymbols, officeItems, officeSymbols, onOfficeSymbols,
+  saveOfficeRedraw, forgetOfficeRedraw, officeRedraws,
 } from '../../utils/cad/officeSymbols';
 import {
   LIBRARY_FORMAT, LibraryFile, OfficeSymbol, symbolLibraryService,
@@ -377,6 +378,36 @@ export const SymbolLibrary: React.FC<Props> = ({
   };
 
   /**
+   * This project's redraws, made the office's: every project — a new one
+   * too — draws those symbols so from now on, unless it has redrawn one
+   * itself. What makes a project's corrected symbols the rule rather than
+   * that one job's exception.
+   */
+  const shareRedraws = async () => {
+    const own = Object.entries(projectData.symbolOverrides ?? {});
+    if (own.length === 0) { setNote('This project has redrawn no library symbol.'); return; }
+    const ok = await appConfirm(
+      `Use this project's ${own.length} redrawn symbol${own.length > 1 ? 's' : ''} in every project? ` +
+      'Each replaces the office\'s drawing of that symbol; a project that has redrawn one itself keeps its own.');
+    if (!ok) return;
+    setBusy(true);
+    let done = 0;
+    const failed: string[] = [];
+    for (const [id, art] of own) {
+      try {
+        await saveOfficeRedraw(id, art, items.find(i => i.id === id)?.name ?? id);
+        done += 1;
+      } catch {
+        failed.push(id);
+      }
+    }
+    setBusy(false);
+    setNote(failed.length
+      ? `${done} symbol(s) now used in every project; could not save: ${failed.join(', ')}`
+      : `${done} symbol(s) now used in every project.`);
+  };
+
+  /**
    * The commands that are not about the symbol in front of you.
    *
    * One list, drawn as four buttons where the panel is wide enough and as one
@@ -396,6 +427,12 @@ export const SymbolLibrary: React.FC<Props> = ({
     {
       label: t.libFromFile, note: t.libFromFileNote, icon: UploadIcon,
       on: () => file.current?.click(),
+    },
+    {
+      label: 'Use in every project',
+      note: "This project's redrawn symbols become the office's — every project draws them so",
+      icon: LibraryIcon,
+      on: shareRedraws, disabled: busy,
     },
     {
       label: t.libExport, note: t.libExportNote, icon: DownloadIcon,
@@ -535,7 +572,8 @@ export const SymbolLibrary: React.FC<Props> = ({
       t={t}
       lang={lang}
       symbolId={redrawing}
-      override={projectData.symbolOverrides?.[redrawing]}
+      // This project's own redraw, else the office's — what it is drawn with.
+      override={projectData.symbolOverrides?.[redrawing] ?? officeRedraws()[redrawing]}
       onSave={art => {
         const before = projectData.symbolOverrides?.[redrawing];
         patchProjectData(prev => {
@@ -543,6 +581,11 @@ export const SymbolLibrary: React.FC<Props> = ({
           next[redrawing] = art;
           return { symbolOverrides: next };
         });
+        // And for the office: a symbol corrected once is corrected in every
+        // project, a new one included.
+        const title = items.find(i => i.id === redrawing)?.name ?? redrawing;
+        saveOfficeRedraw(redrawing, art, title)
+          .catch(err => setNote(`Kept in this project only — ${err instanceof Error ? err.message : String(err)}`));
         // What is drawn from now on has changed; the sheets already drawn are
         // the editor's to bring up to date, and it asks before it does.
         onRedrawn?.(redrawing, before, art);
@@ -555,6 +598,7 @@ export const SymbolLibrary: React.FC<Props> = ({
         delete next[redrawing];
         return { symbolOverrides: next };
       });
+      forgetOfficeRedraw(redrawing).catch(() => { /* the office keeps it; the project is back to it */ });
       // Going back to the library's own symbol is the same move the other way.
       onRedrawn?.(redrawing, before, undefined);
       setRedrawing(null);

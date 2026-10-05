@@ -26,9 +26,9 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import {
   SymbolId, SymbolOverride, onSymbols, setPackSymbolOverrides,
-  setProjectSymbolOverrides, symbolsVersion, setOfficeSymbolSource, symbolsChanged,
+  setProjectSymbolOverrides, symbolsVersion, setOfficeSymbolSource, symbolsChanged, setOfficeRedrawOverrides,
 } from '../iecSymbols';
-import { loadOfficeSymbols, officeSymbols, onOfficeSymbols } from './officeSymbols';
+import { loadOfficeSymbols, officeSymbols, onOfficeSymbols, officeRedraws } from './officeSymbols';
 import { loadDxfSymbols, onDxfSymbols } from './dxfSymbols';
 import { toSymbolOverrides } from './projectSymbols';
 import { SymbolArtOverride } from '../../types/project';
@@ -125,7 +125,10 @@ export function useSymbolLibrary(
         terminals: s.terminals, title: s.name,
       };
     });
-    loadOfficeSymbols().catch(() => { /* the library draws without them */ });
-    return onOfficeSymbols(() => symbolsChanged());
+    // The office's redraws of the library's symbols: what every project draws
+    // with, under its own.
+    const redraws = () => setOfficeRedrawOverrides(toSymbolOverrides(officeRedraws()));
+    loadOfficeSymbols().then(redraws).catch(() => { /* the library draws without them */ });
+    return onOfficeSymbols(() => { redraws(); symbolsChanged(); });
   }, []);
 }

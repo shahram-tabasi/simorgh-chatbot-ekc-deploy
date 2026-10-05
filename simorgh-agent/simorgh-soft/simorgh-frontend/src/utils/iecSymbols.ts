@@ -687,6 +687,8 @@ export interface SymbolOverride {
 
 let PROJECT_OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
 let PACK_OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
+/** The office's redraws of library symbols: the same in every project. */
+let OFFICE_REDRAWS: Partial<Record<SymbolId, SymbolOverride>> = {};
 let EPLAN_OVERRIDES: Partial<Record<SymbolId, SymbolOverride>> = {};
 
 let VERSION = 0;
@@ -725,6 +727,15 @@ export function setEplanSymbolOverrides(map: Partial<Record<SymbolId, SymbolOver
   announce();
 }
 
+/**
+ * Hand the library the office's redraws of its symbols — what every project
+ * draws a symbol with unless it has redrawn that symbol itself.
+ */
+export function setOfficeRedrawOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
+  OFFICE_REDRAWS = map ?? {};
+  announce();
+}
+
 /** Hand the library the project's own drawings. Passing {} clears them. */
 export function setProjectSymbolOverrides(map: Partial<Record<SymbolId, SymbolOverride>>): void {
   PROJECT_OVERRIDES = map ?? {};
@@ -751,6 +762,7 @@ export const symbolsChanged = (): void => announce();
 export function symbolOverride(id: string): SymbolOverride | undefined {
   if (id.startsWith(OFFICE_PREFIX)) return officeSource(id.slice(OFFICE_PREFIX.length));
   return PROJECT_OVERRIDES[id as SymbolId]
+    ?? OFFICE_REDRAWS[id as SymbolId]
     ?? PACK_OVERRIDES[id as SymbolId]
     ?? EPLAN_OVERRIDES[id as SymbolId];
 }
@@ -760,7 +772,7 @@ export function symbolOverride(id: string): SymbolOverride | undefined {
  * project's drawing of it is put away again.
  */
 export function packSymbolOverride(id: string): SymbolOverride | undefined {
-  return PACK_OVERRIDES[id as SymbolId] ?? EPLAN_OVERRIDES[id as SymbolId];
+  return OFFICE_REDRAWS[id as SymbolId] ?? PACK_OVERRIDES[id as SymbolId] ?? EPLAN_OVERRIDES[id as SymbolId];
 }
 
 /** Which symbols this project draws its own way, for a screen that lists them. */

@@ -16,9 +16,18 @@
 // the screen would not.
 
 import { OfficeSymbol, symbolLibraryService } from '../../services/projectService';
+import type { SymbolArtOverride } from '../../types/project';
 import { LibraryItem } from './symbolSource';
 
 let cache: OfficeSymbol[] = [];
+/**
+ * The office's redraws of library symbols (`redraw:<symbol>`), kept apart:
+ * they are not new symbols to be listed and placed, they are what a library
+ * symbol looks like in every project.
+ */
+let redraws: OfficeSymbol[] = [];
+export const REDRAW_PREFIX = 'redraw:';
+const isRedraw = (s: OfficeSymbol) => s.id.startsWith(REDRAW_PREFIX);
 let version = 0;
 let reading: Promise<void> | null = null;
 
@@ -48,7 +57,8 @@ export const officeVersion = (): number => version;
 export function loadOfficeSymbols(force = false): Promise<void> {
   if (reading && !force) return reading;
   reading = symbolLibraryService.all().then(list => {
-    cache = list;
+    cache = list.filter(s => !isRedraw(s));
+    redraws = list.filter(isRedraw);
     changed();
   }).finally(() => { reading = null; });
   return reading;
@@ -56,6 +66,35 @@ export function loadOfficeSymbols(force = false): Promise<void> {
 
 /** What has been read so far. Empty until the first read lands. */
 export const officeSymbols = (): OfficeSymbol[] => cache;
+
+/** The office's redraws of library symbols, by the symbol they redraw. */
+export function officeRedraws(): Record<string, SymbolArtOverride> {
+  const out: Record<string, SymbolArtOverride> = {};
+  for (const s of redraws) if (s.override?.art) out[s.id.slice(REDRAW_PREFIX.length)] = s.override;
+  return out;
+}
+
+/** Keep a library symbol's redraw for the whole office: every project draws
+ *  it so unless it has redrawn it itself. */
+export async function saveOfficeRedraw(symbolId: string, art: SymbolArtOverride, title = symbolId): Promise<void> {
+  const saved = await symbolLibraryService.save({
+    id: `${REDRAW_PREFIX}${symbolId}`, name: `Redraw of ${title}`, kind: 'sld', group: 'Redrawn library symbols',
+    art: art.art, width: art.width, height: art.height,
+    terminals: (art.terminals ?? []).map(t => ({ x: t.x, y: t.y, name: t.name, dir: t.dir })),
+    override: art,
+  });
+  redraws = [...redraws.filter(s => s.id !== saved.id), saved];
+  changed();
+}
+
+/** Put a library symbol back to the library's own drawing, for the office. */
+export async function forgetOfficeRedraw(symbolId: string): Promise<void> {
+  const id = `${REDRAW_PREFIX}${symbolId}`;
+  if (!redraws.some(s => s.id === id)) return;
+  await symbolLibraryService.remove(id);
+  redraws = redraws.filter(s => s.id !== id);
+  changed();
+}
 
 /** Put one in the cache without re-reading everything. */
 export function rememberOfficeSymbol(symbol: OfficeSymbol): void {

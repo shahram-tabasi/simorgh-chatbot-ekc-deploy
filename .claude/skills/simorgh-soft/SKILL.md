@@ -442,3 +442,14 @@ branches, and no wire drawn: EPLAN autoconnects on insertion. A macro
 numbers its libraries in its own order (A1261 is an index into its ESymLib
 list) — a copied device must be renumbered to the frame's. Never invent an
 object type or attribute: copy it from a macro the office saved.
+
+**A redrawn library symbol is the office's, not one job's.** Redraws used to
+live only in `project.symbolOverrides`, so every other project — a new one too
+— drew the old symbols and laid the cell out by the old connection points.
+Saving a redraw now also saves it to the office library (`/api/symbols`, id
+`redraw:<symbol>`, the whole redraw under `override`); the library draws a
+symbol from the project's own redraw, else the office's, else the pack
+(`OFFICE_REDRAWS` in iecSymbols). "Use in every project" in the symbol library
+copies a project's existing redraws to the office. Redraws are kept out of the
+office's list of new symbols. The server keeps each terminal's `dir`.
+

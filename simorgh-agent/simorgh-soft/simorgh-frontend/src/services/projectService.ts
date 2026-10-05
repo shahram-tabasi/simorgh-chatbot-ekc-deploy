@@ -1,4 +1,4 @@
-import { ProjectData, Revision, RevisionComparison } from '../types/project';
+import { ProjectData, Revision, RevisionComparison, SymbolArtOverride } from '../types/project';
 
 const API_BASE_URL = `${import.meta.env.VITE_API_URL || ''}/api`;
 
@@ -172,6 +172,9 @@ export interface OfficeSymbol {
    * variant whose original is gone is still a symbol.
    */
   variantOf?: string;
+  /** A library symbol redrawn for the whole office (id `redraw:<symbol>`):
+   *  the redraw exactly as a project keeps it. */
+  override?: SymbolArtOverride;
   changedOn?: string;
 }
 
