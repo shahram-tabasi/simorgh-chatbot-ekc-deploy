@@ -2200,7 +2200,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
         </div>
         <div className="flex space-x-2">
           <button
-            className="px-3 py-1 bg-purple-600 text-white rounded text-sm hover:bg-purple-700"
+            className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50"
             onClick={onToggleFullscreen}
             title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
           >
@@ -2208,14 +2208,14 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
           </button>
           <button
-            className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+            className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50"
             onClick={handleAddRow}
           >
             <PlusIcon className="w-4 h-4 inline mr-1" />
             Add Row
           </button>
           <button
-            className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+            className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50"
             onClick={handleImportExcel}
             title="Import from Excel (.xlsx, .xls, .csv). Template column will NOT be imported."
           >
@@ -2229,7 +2229,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
               an MV switchgear. */}
           {LAYOUT_OF[selectedEquipment.type] === 'LV' && (
             <button
-              className="px-3 py-1 bg-orange-600 text-white rounded text-sm hover:bg-orange-700"
+              className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50"
               onClick={handleImportSimaris}
               title="Import a SIMARIS Excel export to pull MODULE NO. from"
             >
@@ -2248,7 +2248,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           {excelFile && (
             <button
               data-update-excel
-              className="px-3 py-1 bg-emerald-700 text-white rounded text-sm hover:bg-emerald-800"
+              className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50"
               onClick={handleUpdateExcel}
               title={`Read ${excelFile.name} again${
                 excelReadAt ? ` — last read at ${excelReadAt.toLocaleTimeString()}` : ''
@@ -2261,7 +2261,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             </button>
           )}
           <button
-            className="px-3 py-1 bg-teal-600 text-white rounded text-sm hover:bg-teal-700"
+            className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50"
             onClick={handleExportExcel}
             title="Export the current device rows to Excel, with the same headers Import Excel expects. Template column is excluded — it can only be assigned inside the software."
           >
@@ -2269,7 +2269,8 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
             Export Excel
           </button>
           <button
-            className="px-3 py-1 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700"
+            className={`px-3 py-1 border border-gray-300 rounded text-sm text-gray-700 ${
+              showTemplateColumns ? 'bg-gray-100 hover:bg-gray-200' : 'bg-white hover:bg-gray-50'}`}
             onClick={() => setShowTemplateColumns(v => !v)}
             title={`Append read-only ${selectedEquipment.type} template item columns to the right of this table, formatted like the Output Types tab`}
           >
@@ -2278,7 +2279,7 @@ const DeviceTable: React.FC<DeviceTableProps> = ({
           </button>
           {clipboardRows.length > 0 && (
             <button
-              className="px-3 py-1 bg-yellow-500 text-white rounded text-sm hover:bg-yellow-600"
+              className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50"
               title={`Paste ${clipboardRows.length} row(s) from clipboard`}
               onClick={() => {
                 const now = Date.now();

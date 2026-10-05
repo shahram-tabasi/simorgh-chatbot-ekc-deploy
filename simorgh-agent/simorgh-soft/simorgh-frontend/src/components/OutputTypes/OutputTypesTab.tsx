@@ -90,10 +90,7 @@ const BpmsSection: React.FC<{
         className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center justify-between gap-4 bg-gray-50"
       >
         <div className="flex items-center gap-3 min-w-0">
-          <span
-            className="text-xs font-bold px-2 py-0.5 rounded-full text-white"
-            style={{ background: tier === 'LV' ? '#0f766e' : '#b45309' }}
-          >
+          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
             BPMS
           </span>
           <div className="min-w-0">
@@ -125,8 +122,7 @@ const BpmsSection: React.FC<{
             disabled={!!downloading || !id}
             onClick={() => trigger(key, () =>
               exportBpmsExcel(projectData, tier, id, revisionNumber))}
-            className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg disabled:opacity-50 shadow-sm font-medium text-sm whitespace-nowrap ${
-              tier === 'LV' ? 'bg-teal-700 hover:bg-teal-800' : 'bg-amber-700 hover:bg-amber-800'}`}
+            className="flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 font-medium text-sm transition-colors whitespace-nowrap"
             title={id ? `Export the BPMS sheet for this switchgear` : 'Pick a switchgear first'}
           >
             {downloading === key
@@ -701,9 +697,9 @@ interface TierEquipmentSectionProps {
 }
 
 const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
-  tier, badge, color, equipments, projectData,
+  tier, badge, equipments, projectData,
 }) => {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const { headers, rows } = buildTierMatrix(projectData, tier);
   const deviceColCount = (tier === 'LV' ? LV_DEVICE_COLS : MV_DEVICE_COLS).length;
   const propCols = tier === 'LV' ? LV_TEMPLATE_PROPERTIES : MV_TEMPLATE_PROPERTIES;
@@ -717,7 +713,7 @@ const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
           className="flex items-center gap-3 text-left flex-1"
           onClick={() => setExpanded(e => !e)}
         >
-          <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: color }}>{badge}</span>
+          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">{badge}</span>
           <span className="font-medium text-sm text-gray-800">
             {tier} Equipment &amp; Templates ({totalEquipments} units, {totalRows} rows)
           </span>
@@ -729,7 +725,7 @@ const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
           <button
             onClick={() => exportTierExcel(projectData, tier)}
             disabled={totalEquipments === 0}
-            className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded text-xs hover:bg-emerald-700 disabled:opacity-50"
+            className="flex items-center gap-1 px-3 py-1.5 border border-gray-300 bg-white text-gray-700 rounded text-xs hover:bg-gray-50 disabled:opacity-50"
             title={`Export ${tier} section to Excel`}
           >
             <FileSpreadsheetIcon className="w-3.5 h-3.5" /> Excel
@@ -737,7 +733,7 @@ const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
           <button
             onClick={() => exportTierPDF(projectData, tier)}
             disabled={totalEquipments === 0}
-            className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white rounded text-xs hover:bg-red-700 disabled:opacity-50"
+            className="flex items-center gap-1 px-3 py-1.5 border border-gray-300 bg-white text-gray-700 rounded text-xs hover:bg-gray-50 disabled:opacity-50"
             title={`Export ${tier} section to PDF`}
           >
             <FileTextIcon className="w-3.5 h-3.5" /> PDF
@@ -757,10 +753,9 @@ const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
                     {headers.map((h, i) => (
                       <th
                         key={h + i}
-                        className="px-2 py-1.5 border border-gray-300 text-left whitespace-nowrap font-semibold"
+                        className={`px-2 py-1.5 border border-gray-300 text-left whitespace-nowrap font-semibold text-gray-700 ${
+                          i === 0 || i <= deviceColCount ? 'bg-gray-100' : 'bg-gray-200'}`}
                         style={{
-                          background: i === 0 || i <= deviceColCount ? color : '#374151',
-                          color: '#fff',
                           minWidth: i === 0 ? '120px' : i <= deviceColCount ? '90px' : '130px',
                         }}
                       >
@@ -802,7 +797,8 @@ const TierEquipmentSection: React.FC<TierEquipmentSectionProps> = ({
 export const OutputTypesTab: React.FC = () => {
   const { projectData, currentRevision, isCurrentRevisionEditable } = useProject();
   const [downloading, setDownloading] = useState<string | null>(null);
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['project', 'tech', 'devices', 'equipment']));
+  // Every section closed on entering the tab; each opens from its own arrow.
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const [showCompareModal, setShowCompareModal] = useState(false);
   const [compareBaseRevision, setCompareBaseRevision] = useState<string>('');
   const [compareTargetRevision, setCompareTargetRevision] = useState<string>('');
@@ -904,7 +900,7 @@ export const OutputTypesTab: React.FC = () => {
     });
   };
 
-  const Section: React.FC<{ id: string; title: string; badge: string; color: string; children: React.ReactNode }> = ({ id, title, badge, color, children }) => {
+  const Section: React.FC<{ id: string; title: string; badge: string; color: string; children: React.ReactNode }> = ({ id, title, badge, children }) => {
     const open = expandedSections.has(id);
     return (
       <div className="border border-gray-200 rounded-lg overflow-hidden mb-3">
@@ -913,7 +909,7 @@ export const OutputTypesTab: React.FC = () => {
           onClick={() => toggleSection(id)}
         >
           <div className="flex items-center gap-3">
-            <span className={`text-xs font-bold px-2 py-0.5 rounded-full text-white`} style={{ background: color }}>{badge}</span>
+            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">{badge}</span>
             <span className="font-medium text-sm text-gray-800">{title}</span>
           </div>
           {open ? <ChevronDownIcon className="w-4 h-4 text-gray-400" /> : <ChevronRightIcon className="w-4 h-4 text-gray-400" />}
@@ -942,7 +938,7 @@ export const OutputTypesTab: React.FC = () => {
           <button
             disabled={!!downloading}
             onClick={() => trigger('xlsx', () => exportExcel(projectData))}
-            className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-60 shadow-sm font-medium text-sm transition-colors"
+            className="flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 font-medium text-sm transition-colors"
           >
             {downloading === 'xlsx'
               ? <span className="animate-spin">⏳</span>
@@ -952,7 +948,7 @@ export const OutputTypesTab: React.FC = () => {
           <button
             disabled={!!downloading}
             onClick={() => trigger('pdf', () => exportPDF(projectData))}
-            className="flex items-center gap-2 px-5 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-60 shadow-sm font-medium text-sm transition-colors"
+            className="flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 font-medium text-sm transition-colors"
           >
             {downloading === 'pdf'
               ? <span className="animate-spin">⏳</span>
@@ -962,7 +958,7 @@ export const OutputTypesTab: React.FC = () => {
           <button
             disabled={!!downloading}
             onClick={() => trigger('html', () => exportHTML(projectData))}
-            className="flex items-center gap-2 px-5 py-2.5 bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-60 shadow-sm font-medium text-sm transition-colors"
+            className="flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 font-medium text-sm transition-colors"
           >
             {downloading === 'html'
               ? <span className="animate-spin">⏳</span>
@@ -972,7 +968,7 @@ export const OutputTypesTab: React.FC = () => {
           <div className="h-8 w-px bg-gray-300 mx-1"></div>
           <button
             onClick={() => { setShowCompareModal(true); setDiff(null); loadRevisions(); }}
-            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm font-medium text-sm transition-colors"
+            className="flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 font-medium text-sm transition-colors"
           >
             🔄 Compare Revisions
           </button>
@@ -990,13 +986,13 @@ export const OutputTypesTab: React.FC = () => {
       {/* Summary Strip */}
       <div className="grid grid-cols-4 gap-3 mb-6">
         {[
-          { label: 'Project',   value: projectData.projectName, color: 'bg-blue-50 border-blue-200 text-blue-700' },
-          { label: 'Devices',   value: `${devices.length} in library`, color: 'bg-green-50 border-green-200 text-green-700' },
-          { label: 'Equipment', value: `${eqs.length} units`,           color: 'bg-orange-50 border-orange-200 text-orange-700' },
-          { label: 'Rows',      value: `${rowTotal} selection rows`,    color: 'bg-purple-50 border-purple-200 text-purple-700' },
+          { label: 'Project',   value: projectData.projectName, color: 'bg-white border-gray-200 text-gray-800' },
+          { label: 'Devices',   value: `${devices.length} in library`, color: 'bg-white border-gray-200 text-gray-800' },
+          { label: 'Equipment', value: `${eqs.length} units`,           color: 'bg-white border-gray-200 text-gray-800' },
+          { label: 'Rows',      value: `${rowTotal} selection rows`,    color: 'bg-white border-gray-200 text-gray-800' },
         ].map(c => (
           <div key={c.label} className={`border rounded-lg px-4 py-3 ${c.color}`}>
-            <div className="text-xs font-semibold uppercase tracking-wide opacity-70">{c.label}</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">{c.label}</div>
             <div className="text-sm font-bold mt-0.5">{c.value}</div>
           </div>
         ))}
@@ -1076,7 +1072,7 @@ export const OutputTypesTab: React.FC = () => {
             <div className="overflow-x-auto">
               <table className="w-full text-xs border-collapse">
                 <thead>
-                  <tr className="bg-green-700 text-white">
+                  <tr className="bg-gray-100 text-gray-700">
                     <th className="px-3 py-2 text-left">#</th>
                     <th className="px-3 py-2 text-left">Name</th>
                     <th className="px-3 py-2 text-left">Type</th>
@@ -1086,13 +1082,12 @@ export const OutputTypesTab: React.FC = () => {
                 <tbody>
                   {devices.map((dev, i) => {
                     const p = dev.properties as Record<string, any>;
-                    const tierColor = TIER_PILL[dev.type as Tier] ?? TIER_PILL.OTHER;
                     return (
                       <tr key={dev.id} className={i % 2 === 1 ? 'bg-gray-50' : 'bg-white'}>
                         <td className="px-3 py-1.5 border-b border-gray-100">{i + 1}</td>
                         <td className="px-3 py-1.5 border-b border-gray-100 font-semibold">{dev.name}</td>
                         <td className="px-3 py-1.5 border-b border-gray-100">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${tierColor}`}>{dev.type}</span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-600">{dev.type}</span>
                         </td>
                         {Object.keys(DEVICE_PROP_LABELS).map(k => (
                           <td key={k} className="px-3 py-1.5 border-b border-gray-100 whitespace-nowrap">
@@ -1112,8 +1107,8 @@ export const OutputTypesTab: React.FC = () => {
       {/* The single line, the layout and the mechanical items live in their
           own tab now — Simorgh Draw — where each one is previewed before it is
           downloaded. */}
-      <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center gap-3 bg-blue-50/40">
-        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-blue-700">SIMORGH DRAW</span>
+      <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center gap-3 bg-gray-50">
+        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">SIMORGH DRAW</span>
         <p className="text-sm text-gray-700">
           Single line, panel layout and mechanical items have moved to the <strong>Simorgh Draw</strong> tab.
         </p>
