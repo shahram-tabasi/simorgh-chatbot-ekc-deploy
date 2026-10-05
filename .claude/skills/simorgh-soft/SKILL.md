@@ -334,6 +334,11 @@ on `TEMPLATE_GRAPHIC_CHANNEL`, and a Save there comes back as a message that
 ProjectContext applies through `patchProjectData` — the same edit gate.
 With the project's tab closed it is read-only from the server.
 
+**What a screen looks like follows the simorgh-ui skill** (`.claude/skills/simorgh-ui/`):
+neutral surfaces, one blue accent for the primary action, colour only for
+status, sections closed at first, no inline hex colours. Read it before any
+change to how a screen looks.
+
 Comments here explain *why*, in prose, and are worth keeping — match that.
 
 ## The PLC page
