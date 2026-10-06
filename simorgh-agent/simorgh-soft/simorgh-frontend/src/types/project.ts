@@ -58,6 +58,18 @@ export interface DeviceLibraryItem {
   /** For an MV (AIS) scope: the switchgear family it is filed under —
    *  SIMOPRIME-WORLD, SIMOPRIME-A4 or EK36. */
   family?: string;
+  /** SION 3AE5 breaker codes worked out for this scope, by feeder row id
+   *  ('' for the switchgear as a whole) — see utils/sion3ae5. */
+  breakerCodes?: Record<string, BreakerCodeRecord>;
+}
+
+/** A breaker code as it was saved: the text, every answer, the result. */
+export interface BreakerCodeRecord {
+  spec: string;
+  /** The builder's state (utils/sion3ae5/engine SionState), kept whole. */
+  state: unknown;
+  code: string;
+  savedAt: string;
 }
 
 // ==============================
