@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 380">
+  <!-- Cloud files (Nextcloud) — three linked circles -->
+  <rect width="380" height="380" fill="#1e293b"/>
+  <circle cx="190" cy="190" r="58" fill="none" stroke="#0082c9" stroke-width="26"/>
+  <circle cx="88" cy="190" r="32" fill="none" stroke="#38bdf8" stroke-width="20"/>
+  <circle cx="292" cy="190" r="32" fill="none" stroke="#38bdf8" stroke-width="20"/>
+</svg>

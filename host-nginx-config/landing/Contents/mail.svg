@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 380">
+  <!-- Mail (mailcow) — an envelope -->
+  <rect width="380" height="380" fill="#1e293b"/>
+  <rect x="70" y="115" width="240" height="160" rx="18" fill="#fbbf24"/>
+  <path d="M80 130 L190 215 L300 130" fill="none" stroke="#1e293b" stroke-width="16" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 380">
+  <!-- Event streams (Kafka) — a broker linked to its peers -->
+  <rect width="380" height="380" fill="#1e293b"/>
+  <g stroke="#e2e8f0" stroke-width="12" fill="none">
+    <line x1="190" y1="110" x2="190" y2="270"/>
+    <line x1="190" y1="190" x2="275" y2="140"/>
+    <line x1="190" y1="190" x2="275" y2="240"/>
+  </g>
+  <g fill="#1e293b" stroke="#e2e8f0" stroke-width="14">
+    <circle cx="190" cy="100" r="28"/>
+    <circle cx="190" cy="190" r="38"/>
+    <circle cx="190" cy="280" r="28"/>
+    <circle cx="285" cy="135" r="24"/>
+    <circle cx="285" cy="245" r="24"/>
+  </g>
+</svg>

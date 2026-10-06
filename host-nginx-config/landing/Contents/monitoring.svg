@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 380">
+  <!-- Monitoring (Prometheus + Grafana) — a dashboard panel with a live trace -->
+  <rect width="380" height="380" fill="#1e293b"/>
+  <rect x="70" y="95" width="240" height="170" rx="18" fill="#0f172a" stroke="#f46800" stroke-width="10"/>
+  <polyline points="95,215 140,185 175,200 215,140 250,165 285,120" fill="none" stroke="#fbbf24" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="285" cy="120" r="11" fill="#e6522c"/>
+  <rect x="150" y="275" width="80" height="12" rx="6" fill="#f46800"/>
+</svg>

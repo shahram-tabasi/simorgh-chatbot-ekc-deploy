@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 380">
+  <!-- Meetings (Jitsi) — a video camera -->
+  <rect width="380" height="380" fill="#1e293b"/>
+  <rect x="70" y="120" width="170" height="140" rx="24" fill="#1d76ba"/>
+  <path d="M250 175 L315 135 V245 L250 205 Z" fill="#60a5fa"/>
+  <circle cx="155" cy="190" r="26" fill="#1e293b"/>
+</svg>
