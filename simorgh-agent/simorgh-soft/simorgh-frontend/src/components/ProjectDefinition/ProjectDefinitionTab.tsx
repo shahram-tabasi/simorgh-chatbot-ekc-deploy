@@ -797,7 +797,6 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   // still to enter, because a blank the engineer cannot see is a blank that
   // never gets filled.
   const renderDeviceBreakdown = (item: DeviceLibraryItem) => {
-    const facts = tpmsFactsFor(item);
     const props = (item.properties ?? {}) as Record<string, any>;
     const show = (key: string) => {
       const value = props[key];
@@ -806,12 +805,10 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     };
 
     return (
-      <div className="pl-12 pr-4 py-3 border-b bg-gray-50/70">
+      <div className="pl-9 pr-4 py-3 border-b border-gray-100 bg-gray-50">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-gray-600 mb-3">
-          {facts.switchgearType && <span><span className="text-gray-400">Switchgear</span> <strong>{facts.switchgearType}</strong></span>}
-          {facts.cellCount && <span><span className="text-gray-400">Cells</span> <strong>{facts.cellCount}</strong></span>}
-          <span><span className="text-gray-400">Feeders</span> <strong>{facts.rows}</strong></span>
-          {item.tpmsScopeId != null && <span><span className="text-gray-400">TPMS scope</span> <strong>{item.tpmsScopeId}</strong></span>}
+          {/* Switchgear type, cells and feeders are on the scope's own row. */}
+          {item.tpmsScopeId != null && <span><span className="text-gray-500">TPMS scope</span> <strong>{item.tpmsScopeId}</strong></span>}
           <button
             className="ml-auto px-2.5 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1"
             onClick={() => setDeviceModal({ visible: true, item, mode: 'edit' })}
@@ -844,22 +841,14 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
   const renderDeviceLibrary = () => (
     <div>
-      <div className="flex items-start justify-between gap-4 mb-3">
-        <p className="text-sm text-gray-500">
-          Right-click on a group to add a scope; right-click a scope to copy its specification
-          and paste it into another, whole or tab by tab. Click a scope to break out its
-          specification, double-click to open it.
-        </p>
-      </div>
-
-      <div className="border border-gray-200 rounded-md overflow-hidden">
-        {/* Root header */}
-        <div className="px-4 py-2 bg-gray-100 border-b font-semibold text-sm flex items-center gap-2 select-none">
-          <span>📦</span> Scope Library
-          <span className="ml-auto text-xs font-normal text-gray-500">
-            {TIERS.reduce((n, t) => n + (deviceLibrary[t] ?? []).length, 0)} scope(s)
-          </span>
-        </div>
+      {/* No heading and no instructions line: the sub-tab already says Scope
+          Library, and how to use it is on hover and in Help. The voltage
+          levels are grey bands; the scopes under them are white rows set in,
+          so a group never reads as one of its own scopes. */}
+      <div
+        className="border border-gray-200 rounded-md overflow-hidden"
+        title="Right-click a group to add a scope; right-click a scope to copy its specification and paste it into another, whole or tab by tab. Click a scope to break out its specification, double-click to open it."
+      >
 
         {TIERS.map(t => {
           const items    = deviceLibrary[t] ?? [];
@@ -869,7 +858,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
             <div key={t}>
               {/* Voltage level row */}
               <div
-                className="flex items-center justify-between px-4 py-2 border-b cursor-pointer hover:bg-gray-50 select-none"
+                className="flex items-center justify-between px-3 py-2 bg-gray-100 border-b border-gray-200 cursor-pointer hover:bg-gray-200 select-none"
                 onClick={() => {
                   const s = new Set(expandedTypes);
                   s.has(t) ? s.delete(t) : s.add(t);
@@ -885,21 +874,16 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                     ? <ChevronDownIcon  className="w-4 h-4 text-gray-500" />
                     : <ChevronRightIcon className="w-4 h-4 text-gray-500" />}
                   <span className={`text-xs px-2 py-0.5 rounded font-bold ${typeColor(t)}`}>{t}</span>
-                  <span className="text-sm font-medium">
+                  <span className={`text-xs font-bold uppercase tracking-wide ${items.length ? 'text-gray-800' : 'text-gray-500'}`}>
                     {TIER_LABEL[t]}
                   </span>
                 </div>
-                <span className="text-xs text-gray-400">{items.length} scope{items.length !== 1 ? 's' : ''}</span>
+                <span className="text-xs text-gray-500">{items.length}</span>
               </div>
 
               {/* Device items */}
-              {expanded && (
-                <div>
-                  {items.length === 0 && (
-                    <div className="pl-12 py-2 text-xs text-gray-400 italic border-b bg-white">
-                      No scopes — right-click to add
-                    </div>
-                  )}
+              {expanded && items.length > 0 && (
+                <div className="ml-8 border-l-2 border-gray-300">
                   {items.map(item => {
                     const facts = tpmsFactsFor(item);
                     const filled = filledPropertyCount(item.properties as Record<string, unknown>);
@@ -907,7 +891,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                     return (
                       <React.Fragment key={item.id}>
                         <div
-                          className="flex items-center gap-3 pl-8 pr-4 py-2 border-b hover:bg-blue-50 cursor-pointer text-sm group"
+                          className="flex items-center gap-3 pl-3 pr-4 py-2 bg-white border-b border-gray-100 hover:bg-gray-50 cursor-pointer text-sm group"
                           onClick={() => toggleDevice(item.id)}
                           onDoubleClick={() => setDeviceModal({ visible: true, item, mode: 'view' })}
                           onContextMenu={e => {
@@ -919,7 +903,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                           {open
                             ? <ChevronDownIcon  className="w-4 h-4 text-gray-400 shrink-0" />
                             : <ChevronRightIcon className="w-4 h-4 text-gray-400 shrink-0" />}
-                          <span className="shrink-0">🔧 {item.name}</span>
+                          <span className="shrink-0 text-gray-800">{item.name}</span>
                           {facts.switchgearType && (
                             <span className="text-xs text-gray-500 truncate">{facts.switchgearType}</span>
                           )}
@@ -929,8 +913,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                             </span>
                           )}
                           <span className="ml-auto flex items-center gap-3 shrink-0 text-xs">
-                            {facts.cellCount && <span className="text-gray-400">{facts.cellCount} cell(s)</span>}
-                            <span className="text-gray-400">{facts.rows} feeder(s)</span>
+                            {facts.cellCount && <span className="text-gray-500">{facts.cellCount} cell(s)</span>}
+                            <span className="text-gray-500">{facts.rows} feeder(s)</span>
                             <span className={filled === 0 ? 'text-amber-600' : 'text-gray-500'}>
                               {filled}/{DEVICE_PROP_TOTAL} spec
                             </span>
