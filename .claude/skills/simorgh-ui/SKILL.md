@@ -90,6 +90,24 @@ button is red. Disabled: `disabled:opacity-50`, with a `title` that says why.
 - Related cards sit **side by side** on a wide window and stack on a narrow
   one: `grid grid-cols-1 lg:grid-cols-2 gap-3`.
 
+## Say it once — no repetition, explanations on hover
+
+The owner's words: bring clutter and repetition to zero.
+
+- **The app header says it once.** Project name, revision, standard, save
+  status and the Simorgh Draw button live in the header; File / Edit / View /
+  Help sit at the start of the tab row. A tab never repeats the project name
+  or its own tab name as a heading, and no command appears twice on one screen
+  (the header's Simorgh Draw button replaced the one on the Simorgh Draw tab).
+- **What a thing is for goes on hover** (`title`), not as a grey line under
+  it: PanelFrame's `note` is the heading's tooltip; card and tab subtitles,
+  footnotes and long empty-state paragraphs become the `title` of the control
+  they explain. The full explanation lives in Help (`public/help.html`) —
+  update it when a screen changes.
+- **Not on hover:** status and warnings (save failed, read-only, missing
+  symbols) and data. The specs under each section in Create Template's tree
+  ("Motor, Feeder, MODULLAR · 0") stay visible — the owner asked for that.
+
 ## Placement
 
 - A panel's own commands go **in its header, at the right end** (Fullscreen

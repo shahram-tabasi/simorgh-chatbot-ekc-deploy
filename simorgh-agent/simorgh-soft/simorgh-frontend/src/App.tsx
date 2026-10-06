@@ -249,7 +249,7 @@ interface MenuBarProps {
   /** Raising a revision is allowed even though the open one is read-only. */
   canRaiseRevision?: boolean;
 }
-const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, onImportFromTpms, currentRevision, isCurrentRevisionEditable, canRaiseRevision }) => {
+const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRevision, onImportFromTpms, isCurrentRevisionEditable, canRaiseRevision }) => {
   const { theme, setTheme } = useTheme();
   const [activeMenu,    setActiveMenu]    = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -427,35 +427,35 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
   };
 
   return (
-    <div className="bg-gray-800 text-white text-sm font-sans" ref={menuRef}>
+    <div className="text-sm font-sans shrink-0 mr-3 pr-3 border-r border-gray-200" ref={menuRef}>
       <div className="flex items-center h-8">
         {/* File Menu */}
         <div className="relative">
           <button
-            className={`px-3 py-1 h-8 hover:bg-gray-700 ${activeMenu === 'file' ? 'bg-gray-700' : ''}`}
+            className={`px-3 py-1 h-8 rounded text-gray-700 hover:bg-gray-100 ${activeMenu === 'file' ? 'bg-gray-100' : ''}`}
             onClick={() => handleMenuClick('file')}
           >
             File
           </button>
           {activeMenu === 'file' && (
-            <div className="absolute left-0 top-8 bg-gray-700 border border-gray-600 shadow-lg z-50 min-w-48">
+            <div className="absolute left-0 top-8 bg-white text-gray-800 border border-gray-200 rounded shadow-lg z-50 min-w-48">
               <div className="py-1">
                 {/* One entry, not two: "New Project" and "Open Project" both
                     went to the project selection screen, which is where a
                     project is both opened and started. */}
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={onShowProjectSelection}
                   title="Open an existing project, or start a new one"
                 >
                   📁 Projects…
                 </button>
-                <div className="border-t border-gray-600 my-1"></div>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleSave}>
+                <div className="border-t border-gray-200 my-1"></div>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-100" onClick={handleSave}>
                   💾 Save
                 </button>
                 <button 
-                  className={`block w-full text-left px-4 py-2 hover:bg-gray-600 ${!canCreateRevision ? 'opacity-50 cursor-not-allowed' : ''}`} 
+                  className={`block w-full text-left px-4 py-2 hover:bg-gray-100 ${!canCreateRevision ? 'opacity-50 cursor-not-allowed' : ''}`} 
                   onClick={handleCreateRevisionClick}
                   disabled={!canCreateRevision}
                 >
@@ -468,7 +468,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                     it is the one that answers "it was there this morning"
                     without anybody needing a file or a database client. */}
                 <button
-                  className={`block w-full text-left px-4 py-2 hover:bg-gray-600 ${
+                  className={`block w-full text-left px-4 py-2 hover:bg-gray-100 ${
                     projectData._id ? '' : 'opacity-50 cursor-not-allowed'}`}
                   disabled={!projectData._id}
                   onClick={() => { setShowHistory(true); setActiveMenu(null); }}
@@ -479,14 +479,14 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                   🕘 History &amp; restore…
                 </button>
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={() => { downloadProjectCopy(); setActiveMenu(null); }}
                   title="Write the whole project to a .json file on this computer"
                 >
                   🗂️ Save a copy to disk…
                 </button>
                 <label
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600 cursor-pointer"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100 cursor-pointer"
                   title="Read a project back from a .json file this application wrote"
                 >
                   📂 Restore from a copy…
@@ -502,22 +502,22 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                     }}
                   />
                 </label>
-                <div className="border-t border-gray-600 my-1"></div>
+                <div className="border-t border-gray-200 my-1"></div>
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={() => { onImportFromTpms(); setActiveMenu(null); }}
                 >
                   🗄️ Import from TPMS…
                 </button>
-                <div className="border-t border-gray-600 my-1"></div>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handleExport}>
+                <div className="border-t border-gray-200 my-1"></div>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-100" onClick={handleExport}>
                   📤 Export JSON
                 </button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={handlePrint}>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-100" onClick={handlePrint}>
                   🖨️ Print
                 </button>
-                <div className="border-t border-gray-600 my-1"></div>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={() => window.close()}>
+                <div className="border-t border-gray-200 my-1"></div>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-100" onClick={() => window.close()}>
                   ❌ Exit
                 </button>
               </div>
@@ -528,22 +528,22 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
         {/* Edit Menu */}
         <div className="relative">
           <button
-            className={`px-3 py-1 h-8 hover:bg-gray-700 ${activeMenu === 'edit' ? 'bg-gray-700' : ''}`}
+            className={`px-3 py-1 h-8 rounded text-gray-700 hover:bg-gray-100 ${activeMenu === 'edit' ? 'bg-gray-100' : ''}`}
             onClick={() => handleMenuClick('edit')}
           >
             Edit
           </button>
           {activeMenu === 'edit' && (
-            <div className="absolute left-0 top-8 bg-gray-700 border border-gray-600 shadow-lg z-50 min-w-48">
+            <div className="absolute left-0 top-8 bg-white text-gray-800 border border-gray-200 rounded shadow-lg z-50 min-w-48">
               <div className="py-1">
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={() => handleClipboard('cut')}>
-                  ✂️ Cut <span className="text-xs text-gray-400 float-right">Ctrl+X</span>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-100" onClick={() => handleClipboard('cut')}>
+                  ✂️ Cut <span className="text-xs text-gray-500 float-right">Ctrl+X</span>
                 </button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={() => handleClipboard('copy')}>
-                  📋 Copy <span className="text-xs text-gray-400 float-right">Ctrl+C</span>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-100" onClick={() => handleClipboard('copy')}>
+                  📋 Copy <span className="text-xs text-gray-500 float-right">Ctrl+C</span>
                 </button>
-                <button className="block w-full text-left px-4 py-2 hover:bg-gray-600" onClick={() => handleClipboard('paste')}>
-                  📄 Paste <span className="text-xs text-gray-400 float-right">Ctrl+V</span>
+                <button className="block w-full text-left px-4 py-2 hover:bg-gray-100" onClick={() => handleClipboard('paste')}>
+                  📄 Paste <span className="text-xs text-gray-500 float-right">Ctrl+V</span>
                 </button>
                 {/* Find was a disabled entry promising something, and the
                     shortcuts dialog is on the Help menu where such things
@@ -556,42 +556,42 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
         {/* View Menu */}
         <div className="relative">
           <button
-            className={`px-3 py-1 h-8 hover:bg-gray-700 ${activeMenu === 'view' ? 'bg-gray-700' : ''}`}
+            className={`px-3 py-1 h-8 rounded text-gray-700 hover:bg-gray-100 ${activeMenu === 'view' ? 'bg-gray-100' : ''}`}
             onClick={() => handleMenuClick('view')}
           >
             View
           </button>
           {activeMenu === 'view' && (
-            <div className="absolute left-0 top-8 bg-gray-700 border border-gray-600 shadow-lg z-50 min-w-48">
+            <div className="absolute left-0 top-8 bg-white text-gray-800 border border-gray-200 rounded shadow-lg z-50 min-w-48">
               <div className="py-1">
-                <div className="px-4 py-1 text-[11px] uppercase tracking-wider text-gray-400">Theme</div>
+                <div className="px-4 py-1 text-[11px] uppercase tracking-wider text-gray-500">Theme</div>
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={() => { setTheme('light'); setActiveMenu(null); }}
                 >
                   ☀️ Light {theme === 'light' && <span className="float-right">✓</span>}
                 </button>
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={() => { setTheme('dark'); setActiveMenu(null); }}
                 >
                   🌙 Dark {theme === 'dark' && <span className="float-right">✓</span>}
                 </button>
-                <div className="my-1 border-t border-gray-600" />
+                <div className="my-1 border-t border-gray-200" />
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={() => setZoom(z => Math.min(200, z + 10))}
                 >
-                  🔍 Zoom In <span className="text-xs text-gray-400 float-right">{zoom}%</span>
+                  🔍 Zoom In <span className="text-xs text-gray-500 float-right">{zoom}%</span>
                 </button>
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={() => setZoom(z => Math.max(50, z - 10))}
                 >
                   🔍 Zoom Out
                 </button>
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={() => setZoom(100)}
                 >
                   🔄 Reset View
@@ -602,26 +602,26 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                     so putting something away can always be undone. */}
                 {panels.length > 0 && (
                   <>
-                    <div className="border-t border-gray-600 my-1"></div>
-                    <div className="px-4 py-1 text-[11px] uppercase tracking-wide text-gray-400">
+                    <div className="border-t border-gray-200 my-1"></div>
+                    <div className="px-4 py-1 text-[11px] uppercase tracking-wide text-gray-500">
                       Panels
                     </div>
                     {panels.map(panel => (
                       <button
                         key={panel.id}
-                        className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                        className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                         onClick={() => togglePanel(panel.id)}
                         title={panel.note}
                       >
                         <span className="inline-block w-4">{isPanelOpen(panel.id) ? '☑' : '☐'}</span>
                         {panel.label}
                         {panel.group && (
-                          <span className="text-xs text-gray-400 float-right">{panel.group}</span>
+                          <span className="text-xs text-gray-500 float-right">{panel.group}</span>
                         )}
                       </button>
                     ))}
                     <button
-                      className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                      className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                       onClick={() => { showAllPanels(); setActiveMenu(null); }}
                     >
                       <span className="inline-block w-4"></span>
@@ -637,42 +637,42 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
         {/* Help Menu */}
         <div className="relative">
           <button
-            className={`px-3 py-1 h-8 hover:bg-gray-700 ${activeMenu === 'help' ? 'bg-gray-700' : ''}`}
+            className={`px-3 py-1 h-8 rounded text-gray-700 hover:bg-gray-100 ${activeMenu === 'help' ? 'bg-gray-100' : ''}`}
             onClick={() => handleMenuClick('help')}
           >
             Help
           </button>
           {activeMenu === 'help' && (
-            <div className="absolute left-0 top-8 bg-gray-700 border border-gray-600 shadow-lg z-50 min-w-48">
+            <div className="absolute left-0 top-8 bg-white text-gray-800 border border-gray-200 rounded shadow-lg z-50 min-w-48">
               <div className="py-1">
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={() => openHelp()}
                 >
-                  ❓ Help Contents <span className="text-xs text-gray-400 float-right">F1</span>
+                  ❓ Help Contents <span className="text-xs text-gray-500 float-right">F1</span>
                 </button>
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={() => openHelp('#overview')}
                 >
                   📚 Tutorials
                 </button>
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={openDrawingGuide}
                 >
                   📐 Simorgh Draw guide
                 </button>
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={() => { setShowShortcuts(true); setActiveMenu(null); }}
                 >
                   ⌨️ Keyboard Shortcuts
                 </button>
-                <div className="border-t border-gray-600 my-1"></div>
+                <div className="border-t border-gray-200 my-1"></div>
                 {desktopInstaller.available && (
                   <a
-                    className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                    className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                     href={projectService.desktopDownloadUrl()}
                     onClick={() => setActiveMenu(null)}
                   >
@@ -680,7 +680,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
                   </a>
                 )}
                 <button
-                  className="block w-full text-left px-4 py-2 hover:bg-gray-600"
+                  className="block w-full text-left px-4 py-2 hover:bg-gray-100"
                   onClick={() => { setShowAbout(true); setActiveMenu(null); }}
                 >
                   ℹ️ About Simorgh
@@ -690,38 +690,6 @@ const MenuBar: React.FC<MenuBarProps> = ({ onShowProjectSelection, onCreateNewRe
           )}
         </div>
 
-        {/* Project Info - نمایش نام پروژه */}
-        <div className="ml-auto flex items-center space-x-4 text-xs text-gray-300 px-4">
-          <span className="flex items-center">
-            <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
-            Project: <strong className="ml-1 text-white">{projectData.projectName}</strong>
-          </span>
-          {currentRevision && (
-            <span>Revision: <strong className="text-blue-300">REV {currentRevision.revisionNumber}</strong></span>
-          )}
-          <span>Standard: <strong>{projectData.standard}</strong></span>
-          {/* What the database has, not what the screen has. This used to show
-              projectData.changedOn, which is stamped on every edit — so it read
-              as freshly saved while nothing had been written for an hour. */}
-          {saveError ? (
-            <span
-              className="flex items-center text-red-300"
-              title={`${saveError} — still trying. Do not close this window.`}
-            >
-              <span className="inline-block w-2 h-2 bg-red-400 rounded-full mr-2" />
-              Not saved{lastSavedAt && ` since ${lastSavedAt.toLocaleTimeString()}`}
-            </span>
-          ) : saving ? (
-            <span className="flex items-center">
-              <span className="inline-block w-2 h-2 bg-amber-300 rounded-full mr-2 animate-pulse" />
-              Saving…
-            </span>
-          ) : (
-            <span>
-              Last saved: <strong>{lastSavedAt ? lastSavedAt.toLocaleTimeString() : '—'}</strong>
-            </span>
-          )}
-        </div>
       </div>
       {showShortcuts && <KeyboardShortcutsDialog onClose={() => setShowShortcuts(false)} />}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
@@ -1211,15 +1179,6 @@ const MainApp: React.FC = () => {
 
   return (
     <div className="flex flex-col w-full h-screen overflow-hidden bg-gray-100">
-      {/* Menu Bar */}
-      <MenuBar
-        onShowProjectSelection={() => window.location.reload()}
-        onCreateNewRevision={handleCreateNewRevision}
-        onImportFromTpms={() => setShowTpmsImport(true)}
-        currentRevision={currentRevision}
-        isCurrentRevisionEditable={isCurrentRevisionEditable}
-        canRaiseRevision={isTpmsMastered}
-      />
       
       {/* Header with Revision Dropdown */}
       <div className="bg-white shadow-md border-b">
@@ -1379,6 +1338,26 @@ const MainApp: React.FC = () => {
                 <span className="font-medium">Standard:</span> {projectData.standard || 'N/A'}
               </div>
               
+              {/* What the database has, not what the screen has — see
+                  lastSavedAt. Said once, here, beside the project. */}
+              {saveError ? (
+                <span className="flex items-center gap-1.5 text-xs text-red-700"
+                  title={`${saveError} — still trying. Do not close this window.`}>
+                  <span className="inline-block w-2 h-2 bg-red-500 rounded-full" />
+                  Not saved{lastSavedAt && ` since ${lastSavedAt.toLocaleTimeString()}`}
+                </span>
+              ) : saving ? (
+                <span className="flex items-center gap-1.5 text-xs text-gray-600">
+                  <span className="inline-block w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
+                  Saving…
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5 text-xs text-gray-600" title="Last saved to the database">
+                  <span className="inline-block w-2 h-2 bg-green-500 rounded-full" />
+                  {lastSavedAt ? `Saved ${lastSavedAt.toLocaleTimeString()}` : 'Not saved yet'}
+                </span>
+              )}
+
               {/* Device Count */}
               <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
                 {projectData.devices.length} scopes
@@ -1405,7 +1384,22 @@ const MainApp: React.FC = () => {
           in-page stepper), same pattern as the logo header above it. */}
       <div className="bg-white border-b shadow-sm">
         <div className="w-full px-4">
-          <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={requestTab} />
+          {/* The menus sit at the start of the tab row: one band, not two,
+              and the project's name, revision and standard are said once —
+              in the header above. */}
+          <div className="flex items-center">
+            <MenuBar
+              onShowProjectSelection={() => window.location.reload()}
+              onCreateNewRevision={handleCreateNewRevision}
+              onImportFromTpms={() => setShowTpmsImport(true)}
+              currentRevision={currentRevision}
+              isCurrentRevisionEditable={isCurrentRevisionEditable}
+              canRaiseRevision={isTpmsMastered}
+            />
+            <div className="flex-1 min-w-0">
+              <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={requestTab} />
+            </div>
+          </div>
         </div>
       </div>
 

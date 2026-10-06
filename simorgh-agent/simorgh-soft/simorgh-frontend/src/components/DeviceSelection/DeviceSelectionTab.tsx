@@ -3719,15 +3719,9 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
         style={{ right: 'var(--simorgh-chat-w, 0px)' }}
       >
         {/* Held to the screen like the tab is: the panels scroll, each on its
-            own, and the heading stays where it is. Exit Fullscreen is on the
+            own. No heading — the project's name is in the app header. Exit Fullscreen is on the
             Device Specifications panel, where Fullscreen was pressed. */}
         <div className="p-4 flex-1 min-h-0 flex flex-col">
-          <div className="flex justify-between items-center mb-3 shrink-0">
-            <h2 className="text-xl font-semibold">
-              Scope Selection — {projectData.projectName}
-            </h2>
-          </div>
-
           {workspace}
         </div>
 
@@ -3738,7 +3732,6 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
 
   return (
     <div className="h-full min-h-0 flex flex-col">
-      <h2 className="text-xl font-semibold mb-4 shrink-0">Scope Selection - {projectData.projectName}</h2>
 
       {/* Templates and Equipment Tree get just enough fixed width for their
           content (names/tree labels); Device Specifications takes all the

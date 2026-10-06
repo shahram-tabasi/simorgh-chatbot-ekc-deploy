@@ -562,16 +562,9 @@ export const SendToEplanTab: React.FC = () => {
         onHide={() => setShowSlides(false)}
       />
 
-      <div className="mb-5">
-        <h2 className="text-xl font-bold text-gray-800">Send to EPLAN</h2>
-        <p className="text-sm text-gray-500 mt-0.5">
-          {projectData.projectName}{currentRevision ? ` — REV ${currentRevision.revisionNumber}` : ''} — pick one
-          switchgear, then Project (single line / outline drawings) or Mechanical (items list).
-        </p>
-      </div>
-
       {/* ── Switchgear (required, one at a time) ── */}
-      <div className="border border-gray-200 rounded-lg p-4 mb-5 bg-gray-50">
+      <div className="border border-gray-200 rounded-lg p-4 mb-5 bg-gray-50"
+        title="Pick one switchgear, then Project (single line / outline drawings) or Mechanical (items list)">
         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Switchgear</label>
         <select
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full max-w-md focus:outline-none focus:border-blue-400"
@@ -590,9 +583,7 @@ export const SendToEplanTab: React.FC = () => {
         )}
       </div>
 
-      {!equipmentId ? (
-        <p className="text-sm text-gray-500 px-1">Select a switchgear above to continue.</p>
-      ) : (
+      {!equipmentId ? null : (
         <>
           {/* ── Project vs Mechanical ── */}
           <div className="flex gap-3 mb-5">

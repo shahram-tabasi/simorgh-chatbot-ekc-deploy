@@ -129,15 +129,14 @@ export const PanelFrame: React.FC<Props> = ({
           {collapsed ? <ChevronRightIcon className="w-4 h-4" /> : <FoldIcon className="w-4 h-4" />}
         </button>
 
-        {/* The whole heading is the fold control, the way a tree node is. */}
+        {/* The whole heading is the fold control, the way a tree node is.
+            What the panel is for shows on hover, not as a line under it. */}
         <button
           onClick={() => setCollapsed(c => !c)}
+          title={note}
           className="min-w-0 flex-1 text-left"
         >
           <h4 className="text-sm font-medium text-gray-800 truncate">{title}</h4>
-          {note && !collapsed && (
-            <p className="text-[11px] text-gray-500 leading-snug">{note}</p>
-          )}
         </button>
 
         <div className="flex items-center gap-1 shrink-0">

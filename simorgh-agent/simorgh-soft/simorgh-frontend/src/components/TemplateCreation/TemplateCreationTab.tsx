@@ -256,7 +256,6 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
   if (!projectData) {
     return (
       <div className="flex flex-col h-full">
-        <h2 className="text-xl font-semibold mb-4">Create Template</h2>
         <div className="flex items-center justify-center h-48 text-gray-500">
           <p>Project data is not available. Please check your project configuration.</p>
         </div>
@@ -282,11 +281,6 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex justify-between items-center mb-4 shrink-0">
-        <h2 className="text-xl font-semibold">Create Template</h2>
-      </div>
-
       <div className="flex flex-grow min-h-0 border border-gray-200 rounded-md overflow-hidden">
         {/* Closed, the tree leaves no column behind it: the properties take
             the whole width rather than three quarters of it. */}

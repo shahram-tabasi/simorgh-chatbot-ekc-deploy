@@ -444,44 +444,23 @@ export const EplanixTab: React.FC<{
   const Tab: React.FC<{ id: View; label: string; note: string }> = ({ id, label, note }) => (
     <button
       onClick={() => { setView(id); setSheet(0); }}
+      title={note}
       className={`px-4 py-2 rounded-lg text-sm text-left border ${
         view === id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
       }`}
     >
       <div className="font-medium">{label}</div>
-      <div className={`text-[11px] ${view === id ? 'text-blue-100' : 'text-gray-500'}`}>{note}</div>
     </button>
   );
 
   return (
     <div>
-      <div className="flex justify-between items-start mb-5 gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-gray-800">Simorgh Draw</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {projectData.projectName} — single line, panel layout and mechanical items,
-            drawn from Scope Selection and the templates behind it.
-          </p>
-        </div>
+      {/* No heading: the tab is named Simorgh Draw and the project is in the
+          app header. The commands are the top of the page. */}
+      <div className="flex justify-end items-start mb-5 gap-4">
         <div className="flex items-center flex-wrap gap-2">
-          {/* The way into the drawing set, and it says so by name.
-              It was a tab, and then a button called Pages; both undersold it.
-              What is behind it is the drawing environment — the set, the
-              canvas, the symbol library, the assistant — and that is what
-              this office calls Simorgh Draw. A button named after the part
-              of the screen it opens is a button nobody presses twice. */}
-          <button
-            onClick={openPages}
-            disabled={!isCurrentRevisionEditable && drawPages.length === 0}
-            title="Open Simorgh Draw on this project's pages — wiring diagrams, single lines and layouts, with the page tree on the ribbon"
-            className="flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm font-medium text-sm whitespace-nowrap bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
-          >
-            <PencilRulerIcon className="w-4 h-4" />
-            Simorgh Draw
-            <span className="text-[11px] font-normal text-amber-100">
-              {drawPages.length || 'new'}
-            </span>
-          </button>
+          {/* The way into the drawing set is the Simorgh Draw button in the
+              app header — one button for one job, on every tab. */}
           {docButtons(false)}
           <label className="text-sm text-gray-600">Switchgear</label>
           <select
@@ -520,11 +499,9 @@ export const EplanixTab: React.FC<{
             <div className="flex items-start gap-3 min-w-0">
               <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white bg-blue-700">EPLAN</span>
               <div className="min-w-0">
-                <p className="font-medium text-sm text-gray-800">
+                <p className="font-medium text-sm text-gray-800"
+                  title={`One sheet per ${perPage} feeders · supply, busbar, scope chain and a data block per feeder`}>
                   {preview ? `${preview.name} — ${preview.devices?.length ?? 0} feeders` : 'No switchgear with feeder lines'}
-                </p>
-                <p className="text-xs text-gray-500">
-                  One sheet per {perPage} feeders · supply, busbar, scope chain and a data block per feeder.
                 </p>
                 <p className="text-[11px] text-blue-700 mt-0.5">{symbolNote}</p>
               </div>

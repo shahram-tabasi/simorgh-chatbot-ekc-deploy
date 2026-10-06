@@ -286,9 +286,9 @@ export const PlcTab: React.FC = () => {
         <div className="max-w-xl text-center">
           <CpuIcon className="w-12 h-12 mx-auto text-gray-500" />
           <h2 className="mt-4 text-xl font-semibold">{t.startTitle}</h2>
-          <p className="mt-2 text-sm text-gray-600 leading-relaxed">{t.startWhat}</p>
           <button
             onClick={start}
+            title={`${t.startWhat}\n\n${t.startNote}`}
             disabled={!editable}
             className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded bg-blue-600 text-white
                        font-medium hover:bg-blue-700 disabled:opacity-40"
@@ -298,7 +298,6 @@ export const PlcTab: React.FC = () => {
           {!editable && (
             <p className="mt-3 text-xs text-amber-700">{t.startReadOnly}</p>
           )}
-          <p className="mt-4 text-[11px] text-gray-500">{t.startNote}</p>
         </div>
       </div>
     );

@@ -111,7 +111,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
   }, [tabs]);
 
   return (
-    <div className="flex items-center justify-center py-4">
+    <div className="flex items-center [justify-content:safe_center] py-4 overflow-x-auto">
       {tabs.map((tab, index) => {
         const isActive = index === activeTab;
         const isLast = index === tabs.length - 1;
@@ -122,7 +122,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
             ref={el => { buttonRefs.current[index] = el; }}
             type="button"
             onClick={() => onTabChange(index)}
-            className={`flex items-start shrink-0 bg-transparent border-0 p-0 cursor-pointer ${isLast ? '' : 'mr-8'}`}
+            className={`flex items-start shrink-0 bg-transparent border-0 p-0 cursor-pointer ${isLast ? '' : 'mr-3 xl:mr-4 min-[1800px]:mr-8'}`}
           >
             <StepCircle n={index + 1} active={isActive} endPoint={endPoints[index] ?? FALLBACK_END} />
             {/* Underline spans the FULL column width (from x=0, flush
@@ -130,7 +130,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
                 indented — so the wire visibly runs from the circle,
                 continues under the text, and lines up with its end. */}
             <span className="inline-flex flex-col items-stretch">
-              <span className="text-base font-bold whitespace-nowrap ml-2" style={{ color }}>{tab.title}</span>
+              <span className="text-sm xl:text-base font-bold whitespace-nowrap ml-2" style={{ color }}>{tab.title}</span>
               <span
                 ref={el => { underlineRefs.current[index] = el; }}
                 className="h-[2px] w-full mt-2"

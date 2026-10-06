@@ -120,109 +120,151 @@
   <img src="favicon.jpg" alt="Simorgh" onerror="this.style.display='none'" />
   <div>
     <h1>راهنمای نرم‌افزار طراحی برق سیمرغ (Simorgh Electrical Design)</h1>
-    <p>مسیر کامل کار: تعریف پروژه ← ساخت تمپلیت ← انتخاب تجهیزات ← خروجی‌ها</p>
+    <p>مسیر کار: تعریف پروژه ← ساخت تمپلیت ← انتخاب اسکوپ ← خروجی‌ها ← Simorgh Draw ← ارسال به EPLAN</p>
   </div>
 </header>
 
 <div class="layout">
   <nav>
     <div class="nav-title">فهرست مطالب</div>
-    <a href="#overview">۱. آشنایی کلی</a>
+    <a href="#overview">۱. آشنایی کلی و سربرگ</a>
     <a href="#project-def">۲. تعریف پروژه</a>
     <a href="#templates">۳. ساخت تمپلیت</a>
-    <a href="#device-selection">۴. انتخاب تجهیزات</a>
+    <a href="#device-selection">۴. انتخاب اسکوپ (Scope Selection)</a>
     <a href="#excel">&nbsp;&nbsp;&nbsp;• ورودی/خروجی اکسل</a>
     <a href="#template-items">&nbsp;&nbsp;&nbsp;• نمایش آیتم‌های تمپلیت</a>
-    <a href="#freeze">&nbsp;&nbsp;&nbsp;• فریز ستون‌ها</a>
+    <a href="#freeze">&nbsp;&nbsp;&nbsp;• فریز ستون و ردیف</a>
     <a href="#output-types">۵. خروجی‌ها (Output Types)</a>
-    <a href="#revisions">۶. مدیریت ریویژن</a>
-    <a href="#faq">۷. سوالات پرتکرار</a>
+    <a href="#bpms">&nbsp;&nbsp;&nbsp;• گزارش BPMS</a>
+    <a href="#draw">۶. Simorgh Draw</a>
+    <a href="#plc">۷. PLC</a>
+    <a href="#documents">۸. Documents</a>
+    <a href="#send-eplan">۹. Send to EPLAN</a>
+    <a href="#revisions">۱۰. ریویژن و TPMS</a>
+    <a href="#faq">۱۱. سوالات پرتکرار</a>
   </nav>
 
   <main>
     <section id="overview">
-      <h2><span class="num">۱</span>آشنایی کلی</h2>
-      <p>نرم‌افزار سیمرغ در چهار مرحله (تب) کار می‌کند که از بالای صفحه به ترتیب طی می‌شوند:</p>
+      <h2><span class="num">۱</span>آشنایی کلی و سربرگ</h2>
+      <p>نرم‌افزار در هشت تب کار می‌کند که از چپ به راست طی می‌شوند:</p>
       <table>
-        <thead><tr><th>#</th><th>مرحله</th><th>هدف</th></tr></thead>
+        <thead><tr><th>#</th><th>تب</th><th>کار</th></tr></thead>
         <tbody>
-          <tr><td>۱</td><td>Project Definition</td><td>اطلاعات کلی پروژه، تنظیمات فنی و کتابخانه تجهیزات</td></tr>
-          <tr><td>۲</td><td>Create Template</td><td>ساخت تمپلیت‌های LV/MV/HV و اختصاص پارت از SQL Server به هر ردیف</td></tr>
-          <tr><td>۳</td><td>Device Selection</td><td>تعریف تجهیزات (Equipment)، ردیف‌های دستگاه و اتصال هر ردیف به یک تمپلیت</td></tr>
-          <tr><td>۴</td><td>Output Types</td><td>گزارش‌گیری نهایی (Excel / PDF / HTML) و مقایسه ریویژن‌ها</td></tr>
+          <tr><td>۱</td><td>Project Definition</td><td>اطلاعات پروژه، تنظیمات فنی و کتابخانه اسکوپ‌ها</td></tr>
+          <tr><td>۲</td><td>Create Template</td><td>ساخت تمپلیت‌های LV، MV، HV، GIS و Other و پارت‌های هر ردیف</td></tr>
+          <tr><td>۳</td><td>Scope Selection</td><td>تجهیزات (Equipment)، ردیف‌های اسکوپ و اتصال هر ردیف به تمپلیت</td></tr>
+          <tr><td>۴</td><td>Output Types</td><td>گزارش BPMS، Excel، PDF، HTML و مقایسه ریویژن‌ها</td></tr>
+          <tr><td>۵</td><td>Simorgh Draw</td><td>صفحه‌های نقشه: تک‌خطی، چیدمان، نقشه سیم‌کشی و خروجی DXF/PDF/EMA</td></tr>
+          <tr><td>۶</td><td>PLC</td><td>بلوک‌ها، تگ‌ها و برنامه کنترلر</td></tr>
+          <tr><td>۷</td><td>Documents</td><td>فایل‌های پروژه به تفکیک دسته (SPEC، SLD-OLD، Data sheet و …)</td></tr>
+          <tr><td>۸</td><td>Send to EPLAN</td><td>ارسال یک تابلو به EPLAN (Project یا Mechanical)</td></tr>
         </tbody>
       </table>
-      <div class="tip">تمام تغییرات به‌صورت خودکار ذخیره می‌شوند (Auto-save)، اما بهتر است هر چند وقت یک‌بار از منوی <code>File → Save</code> هم استفاده کنید.</div>
+      <h3>سربرگ</h3>
+      <ul>
+        <li>نام پروژه، ریویژن (منوی REV)، استاندارد، وضعیت ذخیره و تعداد اسکوپ‌ها فقط یک بار و در سربرگ نمایش داده می‌شوند؛ تب‌ها دوباره آن‌ها را تکرار نمی‌کنند.</li>
+        <li>وضعیت ذخیره: نقطه سبز «Saved» یعنی در دیتابیس ذخیره شده، نقطه نارنجی «Saving…» در حال ذخیره، و قرمز «Not saved» یعنی ذخیره نشده — پنجره را نبندید.</li>
+        <li>دکمه <b>Simorgh Draw</b> از هر تبی مستقیم صفحه‌های نقشه پروژه را باز می‌کند؛ عدد کنار آن تعداد صفحه‌هاست.</li>
+        <li>منوهای <b>File / Edit / View / Help</b> ابتدای ردیف تب‌ها هستند.</li>
+      </ul>
+      <div class="tip">توضیح هر پنل، دکمه و بخش با نگه داشتن ماوس روی آن نمایش داده می‌شود؛ صفحه‌ها خلوت هستند و توضیح‌ها در همین راهنما و در hover آمده‌اند. همه تغییرات خودکار ذخیره می‌شوند؛ <code>File → Save</code> هم در دسترس است.</div>
     </section>
 
     <section id="project-def">
       <h2><span class="num">۲</span>تعریف پروژه</h2>
-      <p>در این تب اطلاعات پایه پروژه (نام، کارفرما، استاندارد، محل اجرا)، تنظیمات فنی (ولتاژ، فرکانس، سطح مقطع کابل و ...) و کتابخانه تجهیزات (Device Library) وارد می‌شود. این اطلاعات در گزارش‌های نهایی (تب Output Types) استفاده می‌شوند.</p>
+      <p>اطلاعات پایه پروژه (نام، کارفرما، استاندارد، محل اجرا)، تنظیمات فنی (ولتاژ، فرکانس و …) و کتابخانه اسکوپ‌ها (Scope Library) در این تب وارد می‌شود و در گزارش‌ها به کار می‌رود.</p>
     </section>
 
     <section id="templates">
       <h2><span class="num">۳</span>ساخت تمپلیت (Create Template)</h2>
-      <p>هر تمپلیت مجموعه‌ای از ردیف‌های تجهیزاتی (Property) است — مثلاً برای LV: <code>CB ORDER</code>, <code>ACCESSORY</code>, <code>PROTECTION RELAY</code> و ... . برای هر ردیف می‌توانید:</p>
+      <p>پنل <b>Project Templates</b> درخت تمپلیت‌ها به تفکیک LV، MV، HV، GIS و Other و بخش‌های زیر آن‌هاست (و BPMS: تمپلیت‌های خوانده‌شده از TPMS). مشخصات هر بخش (مثلاً «Motor, Feeder, MODULLAR») زیر نام آن نوشته شده است. با راست‌کلیک روی هر سطح، تمپلیت جدید ساخته می‌شود.</p>
       <ul>
-        <li>روی «Add Part from SQL Server» کلیک کرده و پارت مورد نظر را از دیتابیس Eplan جستجو و انتخاب کنید.</li>
-        <li>Label، Quantity و Priority هر پارت را ویرایش کنید.</li>
-        <li>با کلیک روی آیکون مداد ✎، نام ردیف را تغییر دهید (Rename) — این تغییر همه‌جا (Device Selection، Output Types) به‌روز می‌شود.</li>
-        <li>ردیف‌های SPARE اضافه (SPARE 4 به بعد) فقط وقتی فعال می‌شوند که ردیف‌های اصلی خالی مانده باشند.</li>
+        <li>برای هر ردیف (Property) پارت را از دیتابیس EPLAN جستجو و اضافه کنید؛ Label، Quantity و Priority قابل ویرایش‌اند.</li>
+        <li>با آیکون مداد ✎ نام ردیف عوض می‌شود و این تغییر همه‌جا اعمال می‌شود.</li>
+        <li>برای پارت‌های تک‌خطی (کلید، رله، CT، مگنت، VT و …) سوال‌های تک‌خطی پرسیده می‌شود: اتصال سری/موازی، جهت فلش سیگنال‌ها (بالا/پایین)، اینترلاک و متن‌ها.</li>
+        <li>در تمپلیت‌های MV از Simorgh Draw خروجی ماکروی EPLAN (<code>.ema</code>) با اتصال خودکار گرفته می‌شود.</li>
       </ul>
       <h3>ستون Eplanix چیست؟</h3>
-      <p>مقدار این ستون از <code>Order Number</code> پارت انتخاب‌شده گرفته می‌شود؛ اگر خالی یا <code>-</code>/<code>_</code> باشد، به‌جای آن <code>Designation 3</code> نمایش داده می‌شود. همین مقدار در تب Output Types و در ستون‌های «Template Items» تب Device Selection هم استفاده می‌شود.</p>
+      <p>از <code>Order Number</code> پارت گرفته می‌شود؛ اگر خالی یا <code>-</code>/<code>_</code> باشد، <code>Designation 3</code> جای آن می‌نشیند.</p>
     </section>
 
     <section id="device-selection">
-      <h2><span class="num">۴</span>انتخاب تجهیزات (Device Selection)</h2>
-      <p>در این تب سه پنل کنار هم قرار دارند:</p>
+      <h2><span class="num">۴</span>انتخاب اسکوپ (Scope Selection)</h2>
       <ul>
-        <li><b>Templates</b> (سمت چپ): لیست تمپلیت‌های ساخته‌شده — با drag & drop روی سلول Template هر ردیف رها می‌شوند.</li>
-        <li><b>Device Specifications</b> (وسط): جدول ردیف‌های دستگاه برای Equipment انتخاب‌شده.</li>
-        <li><b>Equipment Tree</b> (راست): درخت تجهیزات پروژه به تفکیک LV/MV/HV.</li>
+        <li><b>Templates</b> (چپ): تمپلیت‌هایی که روی ردیف‌های اسکوپ کشیده و رها می‌شوند.</li>
+        <li><b>Scope Specifications</b> (وسط): جدول ردیف‌های تجهیز انتخاب‌شده. دکمه <b>Fullscreen</b> در سربرگ همین پنل است و همان دکمه از تمام‌صفحه خارج می‌کند.</li>
+        <li><b>Equipment Tree</b> (راست): تابلوهای پروژه به تفکیک سطح ولتاژ.</li>
       </ul>
+      <p>هر پنل با فلش کنار عنوانش جمع و باز می‌شود و با × بسته می‌شود؛ <code>View → Panels</code> آن را برمی‌گرداند.</p>
 
       <h3 id="excel">ورودی و خروجی اکسل</h3>
-      <p>دو دکمه در بالای جدول وجود دارد:</p>
       <ul>
-        <li><b>Import Excel</b>: فایل اکسل/CSV را می‌خواند و همه ردیف‌های جدول فعلی را با محتوای فایل جایگزین می‌کند. ستون‌های شناخته‌شده: Bus Section، Feeder No، Wiring Type، Rating Power، FLC (A)، TAG، DESCRIPTION، CABLE SIZE و برای LV: SFD/HFD، MODULE NO.، SIZE.</li>
-        <li><b>Export Excel</b>: همان ردیف‌های فعلی جدول را با همان هدرهایی که Import انتظار دارد، به یک فایل اکسل خروجی می‌دهد — می‌توانید فایل را پر کرده و دوباره Import کنید (چرخه خروجی → پرکردن → ورودی).</li>
+        <li><b>Import Excel</b>: ردیف‌های جدول را با محتوای فایل جایگزین می‌کند. ستون‌ها: Bus Section، Feeder No، Wiring Type، Rating Power، FLC (A)، TAG، DESCRIPTION، CABLE SIZE و برای LV: SFD/HFD، MODULE NO.، SIZE.</li>
+        <li><b>Import from SIMARIS</b>: ردیف‌ها را از خروجی SIMARIS می‌خواند.</li>
+        <li><b>Export Excel</b>: همان ردیف‌ها با همان هدرها — پر کنید و دوباره Import کنید.</li>
       </ul>
-      <div class="warn">ستون <b>Template</b> در هیچ‌کدام از خروجی/ورودی اکسل شرکت نمی‌کند — تمپلیت فقط از داخل خود نرم‌افزار (کشیدن‌ورهاکردن یا راست‌کلیک) قابل اتصال است.</div>
+      <div class="warn">ستون <b>Template</b> در اکسل نیست؛ تمپلیت فقط داخل نرم‌افزار (کشیدن‌ورهاکردن یا راست‌کلیک) وصل می‌شود.</div>
 
       <h3 id="template-items">نمایش آیتم‌های تمپلیت (Show Template Items)</h3>
-      <p>با کلیک روی دکمه بنفش «Show Template Items»، ستون‌های خواندنی مربوط به ردیف‌های تمپلیت (متناسب با نوع تجهیز انتخاب‌شده — LV یا MV یا HV) به انتهای همان جدول اضافه می‌شوند. هر سلول به فرمت زیر نمایش داده می‌شود:</p>
-      <p style="text-align:center"><code>لیبل:مقدار‌Eplanix xتعداد</code> &nbsp;مثال:&nbsp; <code>Q:3VA2116-5JP32-0AA0 x2</code></p>
-      <p>وقتی تعداد (Qty) برابر ۱ باشد، «xN» نمایش داده نمی‌شود.</p>
+      <p>ستون‌های پارت‌های تمپلیت هر ردیف را به انتهای جدول اضافه می‌کند، به فرمت <code>لیبل:مقدار‌Eplanix xتعداد</code> (مثال: <code>Q:3VA2116-5JP32-0AA0 x2</code>؛ تعداد ۱ نوشته نمی‌شود).</p>
 
-      <h3 id="freeze">فریز کردن ستون‌ها (Freeze)</h3>
-      <p>چون با فعال کردن «Show Template Items» تعداد ستون‌ها زیاد می‌شود، از کنترل «Freeze» (کنار فیلترها) استفاده کنید: عددی وارد کنید تا همان تعداد ستون از سمت چپ (شامل ستون #) هنگام اسکرول افقی ثابت بماند و بقیه ستون‌ها رد شوند — دقیقاً مثل Freeze Panes در اکسل.</p>
+      <h3 id="freeze">فریز ستون و ردیف</h3>
+      <p><b>Freeze … cols</b> تعداد ستون از چپ، <b>Freeze … rows</b> تعداد ردیف از بالا و <b>Freeze header</b> سطر عنوان را هنگام اسکرول ثابت نگه می‌دارد. دکمه روشن خاکستری پررنگ دیده می‌شود.</p>
     </section>
 
     <section id="output-types">
       <h2><span class="num">۵</span>خروجی‌ها (Output Types)</h2>
-      <p>در این تب می‌توانید گزارش کامل پروژه را در سه فرمت بگیرید:</p>
       <ul>
-        <li><b>Excel</b>: شامل چند شیت (Project Overview، Technical Settings، Device Library، Equipment & Selections، Template Components).</li>
-        <li><b>PDF</b>: با دکمه «Print / Save as PDF» در پنجره باز‌شده.</li>
-        <li><b>HTML</b>: گزارش تک‌فایلی قابل مشاهده در مرورگر.</li>
+        <li><b>Excel / PDF Report / HTML Report</b>: گزارش کامل پروژه.</li>
+        <li><b>Compare Revisions</b>: مقایسه دو ریویژن با خروجی Excel.</li>
+        <li>بخش‌های پایین صفحه (Project Overview، LV/MV Equipment &amp; Templates و …) بسته باز می‌شوند؛ هر کدام را خواستید با فلش آن باز کنید.</li>
       </ul>
-      <p>بخش‌های «LV Equipment & Templates» و «MV Equipment & Templates» ماتریسی از همه تجهیزات و ستون‌های تمپلیت هر ردیف نشان می‌دهند — با همان فرمت <code>لیبل:Eplanix xتعداد</code> که در Device Selection هم دیدید.</p>
+      <p>تک‌خطی، چیدمان و آیتم‌های مکانیکال در تب Simorgh Draw هستند.</p>
+
+      <h3 id="bpms">گزارش BPMS</h3>
+      <p>BPMS Report — LV و BPMS Report — MV کنار هم هستند؛ هر بار برای یک تابلو گرفته می‌شوند (شیت <code>D.L</code> و <code>D.M</code>، یک ردیف به ازای هر پارت).</p>
+      <ul>
+        <li><b>LV</b>: هر ردیف SFD یک عدد شستی Start/Stop با کد <code>3SU1200-0FB10-0AA0</code> می‌گیرد — مگر آن ردیف همین کد را از قبل داشته باشد (مثلاً از BPMS آمده باشد). هر ردیف حداکثر یک عدد.</li>
+        <li><b>MV — تابلوهای GIS</b>: دژنکتورهای <code>3AH4</code>، ترانس‌های جریان و ولتاژ، نشان‌دهنده ولتاژ خازنی و سکسیونرهای دو و سه حالته در اکسل نمی‌آیند، چون داخل تابلوی GIS از سازنده می‌آیند.</li>
+      </ul>
+    </section>
+
+    <section id="draw">
+      <h2><span class="num">۶</span>Simorgh Draw</h2>
+      <p>صفحه‌های نقشه پروژه (SLD، WD، OLD) از Scope Selection و تمپلیت‌ها کشیده می‌شوند. دکمه Simorgh Draw (در همین تب یا سربرگ) محیط نقشه‌کشی را باز می‌کند؛ جزئیات در <a href="help-drawing.html">راهنمای Simorgh Draw</a>.</p>
+      <p>اصلاح سیمبل‌ها در کتابخانه سیمبل با «Use in every project» برای همه پروژه‌های دفتر اعمال می‌شود.</p>
+    </section>
+
+    <section id="plc">
+      <h2><span class="num">۷</span>PLC</h2>
+      <p>برنامه کنترلر: درخت پروژه، بلوک‌ها (OB، FB، FC، DB، UDT)، جدول تگ‌ها، کاتالوگ دستورها و دستیار PLC.</p>
+    </section>
+
+    <section id="documents">
+      <h2><span class="num">۸</span>Documents</h2>
+      <p>فایل‌های پروژه در دسته‌های SPEC، SLD-OLD، Site Layout، Logic، Load List، Io List، Data sheet، Cover و Other نگه داشته می‌شوند و دستیار سیمرغ هم آن‌ها را می‌خواند.</p>
+    </section>
+
+    <section id="send-eplan">
+      <h2><span class="num">۹</span>Send to EPLAN</h2>
+      <p>یک تابلو را انتخاب کنید، بعد <b>Project</b> (تک‌خطی و نقشه‌های چیدمان) یا <b>Mechanical</b> (لیست آیتم‌ها).</p>
     </section>
 
     <section id="revisions">
-      <h2><span class="num">۶</span>مدیریت ریویژن (Revision)</h2>
-      <p>از منوی <code>Project → New Revision</code> می‌توانید یک اسنپ‌شات جدید از پروژه بسازید. فقط از روی آخرین ریویژن می‌توان ریویژن تازه ساخت؛ سوییچ به ریویژن قدیمی‌تر با پیام خطا مسدود می‌شود. مقایسه دو ریویژن (Excel/PDF) از تب Output Types در دسترس است.</p>
+      <h2><span class="num">۱۰</span>ریویژن و TPMS</h2>
+      <p>ریویژن جدید از <code>File → Create New Revision</code> ساخته می‌شود و از منوی <b>REV</b> در سربرگ بین ریویژن‌ها جابه‌جا می‌شوید. فقط آخرین ریویژن قابل ویرایش است. <code>File → History &amp; restore</code> نسخه‌های ذخیره‌شده را برمی‌گرداند.</p>
+      <p>پروژه‌ای که از TPMS خوانده شده (<code>File → Import from TPMS</code>) تا وقتی ریویژن تازه نسازید فقط‌خواندنی است؛ نوار کهربایی بالای صفحه همین را می‌گوید.</p>
     </section>
 
     <section id="faq">
-      <h2><span class="num">۷</span>سوالات پرتکرار</h2>
+      <h2><span class="num">۱۱</span>سوالات پرتکرار</h2>
       <h3>چرا ستون Template در اکسل نیست؟</h3>
-      <p>عمداً حذف شده — اتصال تمپلیت باید همیشه از داخل نرم‌افزار انجام شود تا خطای انسانی در تایپ اسم تمپلیت رخ ندهد.</p>
+      <p>اتصال تمپلیت باید داخل نرم‌افزار انجام شود تا اسم تمپلیت اشتباه تایپ نشود.</p>
       <h3>چرا بعضی ردیف‌های SPARE غیرفعال هستند؟</h3>
-      <p>ردیف‌های SPARE اضافه فقط زمانی فعال می‌شوند که ردیف‌های اصلی بالای آن‌ها خالی مانده باشند؛ آیکون قفل 🔒 روی ردیف نشان می‌دهد که با یک SPARE گسترده جایگزین شده است.</p>
-      <h3>چطور نام یک ردیف تجهیز را تغییر بدهم؟</h3>
-      <p>در تب Create Template، کنار نام ردیف، آیکون مداد را بزنید. این تغییر همه‌جا (از جمله گزارش‌های Output Types) به‌روز می‌شود چون همه بخش‌ها از یک منبع داده مشترک می‌خوانند.</p>
+      <p>ردیف‌های SPARE اضافه فقط وقتی فعال می‌شوند که ردیف‌های اصلی بالای آن‌ها خالی مانده باشند.</p>
+      <h3>توضیح یک پنل یا دکمه را کجا ببینم؟</h3>
+      <p>ماوس را روی عنوان پنل یا دکمه نگه دارید.</p>
     </section>
   </main>
 </div>

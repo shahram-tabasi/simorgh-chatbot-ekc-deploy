@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx-js-style';
 import { useProject } from '../../context/ProjectContext';
 import {
   FileSpreadsheetIcon, FileTextIcon, FileCode2Icon,
-  DownloadIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon
+  ChevronDownIcon, ChevronRightIcon
 } from 'lucide-react';
 import { ProjectData, Revision } from '../../types/project';
 import { projectService } from '../../services/projectService';
@@ -934,15 +934,13 @@ export const OutputTypesTab: React.FC = () => {
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <div>
-          <h2 className="text-xl font-bold text-gray-800">Project Report &amp; Export</h2>
-          <p className="text-sm text-gray-500 mt-0.5">{projectData.projectName}</p>
-        </div>
+        <h2 className="text-xl font-bold text-gray-800">Project Report &amp; Export</h2>
         {/* Export Buttons */}
         <div className="flex gap-3 items-center">
           <button
             disabled={!!downloading}
             onClick={() => trigger('xlsx', () => exportExcel(projectData))}
+            title="Project Overview, Technical Settings, Scope Library and Equipment & Selections — the same data as the PDF and HTML reports"
             className="flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 font-medium text-sm transition-colors"
           >
             {downloading === 'xlsx'
@@ -953,6 +951,7 @@ export const OutputTypesTab: React.FC = () => {
           <button
             disabled={!!downloading}
             onClick={() => trigger('pdf', () => exportPDF(projectData))}
+            title="The same data as the Excel and HTML reports, laid out for printing"
             className="flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 font-medium text-sm transition-colors"
           >
             {downloading === 'pdf'
@@ -963,6 +962,7 @@ export const OutputTypesTab: React.FC = () => {
           <button
             disabled={!!downloading}
             onClick={() => trigger('html', () => exportHTML(projectData))}
+            title="One file that opens in a browser, with a Print / Save as PDF button — the same data as Excel and PDF"
             className="flex items-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 font-medium text-sm transition-colors"
           >
             {downloading === 'html'
@@ -989,9 +989,8 @@ export const OutputTypesTab: React.FC = () => {
       />
 
       {/* Summary Strip */}
-      <div className="grid grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-3 gap-3 mb-6">
         {[
-          { label: 'Project',   value: projectData.projectName, color: 'bg-white border-gray-200 text-gray-800' },
           { label: 'Scopes',   value: `${devices.length} in library`, color: 'bg-white border-gray-200 text-gray-800' },
           { label: 'Equipment', value: `${eqs.length} units`,           color: 'bg-white border-gray-200 text-gray-800' },
           { label: 'Rows',      value: `${rowTotal} selection rows`,    color: 'bg-white border-gray-200 text-gray-800' },
@@ -1109,19 +1108,6 @@ export const OutputTypesTab: React.FC = () => {
         }
       </Section>
 
-      {/* The single line, the layout and the mechanical items live in their
-          own tab now — Simorgh Draw — where each one is previewed before it is
-          downloaded. */}
-      <div className="border border-gray-200 rounded-lg mb-3 px-4 py-3 flex items-center gap-3 bg-gray-50">
-        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">SIMORGH DRAW</span>
-        <p className="text-sm text-gray-700">
-          Single line, panel layout and mechanical items have moved to the <strong>Simorgh Draw</strong> tab.
-        </p>
-        <span className="text-sm text-gray-600 ml-auto" dir="rtl">
-          Single line, panel layout and mechanical items have moved to the Simorgh Draw tab.
-        </span>
-      </div>
-
       {/* ── Section 04: LV Equipment & Template Matrix ─────────────────────
           Wide table — every row is one device-row from an LV equipment, and
           every template property becomes its own column. Empty cells mean
@@ -1146,12 +1132,6 @@ export const OutputTypesTab: React.FC = () => {
       {/* (HV equipment breakdown intentionally omitted — covered by the full
           Excel/PDF export buttons at the top.) */}
 
-      <div className="mt-4 flex items-center gap-2 text-xs text-gray-400">
-        <CheckCircleIcon className="w-3.5 h-3.5 text-green-500" />
-        All three formats contain identical data — Project Overview, Technical Settings, Scope Library, and Equipment & Selections.
-        <DownloadIcon className="w-3.5 h-3.5 ml-2" />
-        HTML report includes a "Print / Save as PDF" button for browser-based PDF export.
-      </div>
 
       {/* Compare revisions — for a TPMS project these are TPMS's own
           revisions, so this is where its changes are read. */}
