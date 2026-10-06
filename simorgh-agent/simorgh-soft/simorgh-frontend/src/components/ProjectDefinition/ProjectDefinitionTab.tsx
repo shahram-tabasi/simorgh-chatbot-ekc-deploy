@@ -16,6 +16,7 @@ import {
 } from '../../utils/deviceProperties';
 import { readSpecUpdateFromTpms, TpmsSpecUpdate } from '../../services/tpmsSync';
 import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, emptyTiers } from '../../utils/tiers';
+import { TEMPLATE_FAMILIES } from '../../utils/templateFamilies';
 import { appConfirm } from '../shared/AppDialog';
 
 // ──────────────────────────────────────────────────────────────
@@ -378,12 +379,15 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
   const [activeSubTab,       setActiveSubTab]       = useState<SubTab>('project-data');
   const [projectNameEditing, setProjectNameEditing] = useState(false);
-  const [expandedTypes,      setExpandedTypes]      = useState<Set<string>>(new Set(TIERS));
+  const [expandedTypes,      setExpandedTypes]      = useState<Set<string>>(
+    new Set([...TIERS, 'MV/AIS', 'MV/GIS', ...TEMPLATE_FAMILIES.MV.map(f => `MV/AIS/${f.id}`)]));
 
   const [ctxMenu, setCtxMenu] = useState<{
     visible: boolean; x: number; y: number;
     typeNode: Tier | null;
     itemId:   string | null;
+    /** The AIS family a right-click on MV was under, if any. */
+    family?:  string;
   }>({ visible: false, x: 0, y: 0, typeNode: null, itemId: null });
 
   // Which devices in the library have their specification open. The breakdown
@@ -400,7 +404,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
   const [copiedDevice, setCopiedDevice] = useState<DeviceLibraryItem | null>(null);
   const [pasteNameModal, setPasteNameModal] = useState<{
-    visible: boolean; targetType: Tier | null; suggestedName: string;
+    visible: boolean; targetType: Tier | null; suggestedName: string; targetFamily?: string;
   }>({ visible: false, targetType: null, suggestedName: '' });
 
   const [deviceModal, setDeviceModal] = useState<{
@@ -408,6 +412,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     item:     DeviceLibraryItem | null;
     mode:     ModalMode;
     addType?: Tier;
+    /** The AIS family a scope is being added under. */
+    addFamily?: string;
   }>({ visible: false, item: null, mode: 'add' });
 
   // Pending Device Library deletion — held until the user confirms in the
@@ -551,8 +557,13 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   };
 
   const closeDeviceModal = () => setDeviceModal({ visible: false, item: null, mode: 'add' });
-  const handleDeviceSave = (item: DeviceLibraryItem) =>
-    deviceModal.mode === 'add' ? addLib(item) : updateLib(item);
+  const handleDeviceSave = (item: DeviceLibraryItem) => {
+    // The AIS family the scope was added under (or already had) stays with
+    // it while it is MV.
+    const family = deviceModal.mode === 'add' ? deviceModal.addFamily : deviceModal.item?.family;
+    const kept = item.type === 'MV' && family ? { ...item, family } : item;
+    return deviceModal.mode === 'add' ? addLib(kept) : updateLib(kept);
+  };
 
   const handlePasteDevice = (newName: string) => {
     if (!copiedDevice || !pasteNameModal.targetType) return;
@@ -560,7 +571,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
       ...copiedDevice,
       id:   `lib-${Date.now()}`,
       name: newName.trim() || `${copiedDevice.name} (Copy)`,
-      type: pasteNameModal.targetType
+      type: pasteNameModal.targetType,
+      family: pasteNameModal.targetType === 'MV' ? pasteNameModal.targetFamily : undefined,
     };
     addLib(pasted);
     setPasteNameModal({ visible: false, targetType: null, suggestedName: '' });
@@ -839,6 +851,102 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
     );
   };
 
+  // ── Scope Library tree pieces ─────────────────────────────────────────
+  // GIS is not a top-level group here: it sits under MV, beside AIS.
+  const TOP_TIERS = TIERS.filter(t => t !== 'GIS');
+  const MV_FAMILIES = TEMPLATE_FAMILIES.MV;
+
+  /** The AIS family a MV scope belongs to: the one it was added under, or
+   *  what its TPMS switchgear type or its name says. */
+  const scopeFamily = (item: DeviceLibraryItem): string | null => {
+    if (item.family && MV_FAMILIES.some(f => f.id === item.family)) return item.family;
+    const text = `${tpmsFactsFor(item).switchgearType} ${item.name}`.toUpperCase();
+    if (/EK\s*-?\s*36/.test(text)) return 'EK36';
+    if (/SIMOPRIME\s*-?\s*A4|\bA4\b/.test(text)) return 'SIMOPRIME-A4';
+    if (/SIMOPRIME|WORLD/.test(text)) return 'SIMOPRIME-WORLD';
+    return null;
+  };
+
+  const isOpen = (key: string) => expandedTypes.has(key);
+  const toggleOpen = (key: string) => {
+    const next = new Set(expandedTypes);
+    next.has(key) ? next.delete(key) : next.add(key);
+    setExpandedTypes(next);
+  };
+
+  /** A group row: level 0 is a voltage level, 1 is AIS / GIS, 2 an AIS family. */
+  const groupRow = (
+    key: string, level: 0 | 1 | 2, count: number,
+    target: { tier: Tier; family?: string }, label: string, pill?: Tier,
+  ) => (
+    <div
+      className={`flex items-center justify-between pr-4 py-2 border-b cursor-pointer select-none ${
+        level === 0 ? 'px-3 bg-gray-100 border-gray-200 hover:bg-gray-200'
+          : level === 1 ? 'pl-3 bg-gray-50 border-gray-100 hover:bg-gray-100'
+          : 'pl-3 bg-white border-gray-100 hover:bg-gray-50'}`}
+      onClick={() => toggleOpen(key)}
+      onContextMenu={e => {
+        e.preventDefault();
+        setCtxMenu({ visible: true, x: e.clientX, y: e.clientY, typeNode: target.tier, itemId: null, family: target.family });
+      }}
+    >
+      <div className="flex items-center gap-2">
+        {isOpen(key)
+          ? <ChevronDownIcon  className="w-4 h-4 text-gray-500" />
+          : <ChevronRightIcon className="w-4 h-4 text-gray-500" />}
+        {pill && <span className={`text-xs px-2 py-0.5 rounded font-bold ${typeColor(pill)}`}>{pill}</span>}
+        <span className={`${
+          level === 0 ? 'text-xs font-bold uppercase tracking-wide'
+            : level === 1 ? 'text-[13px] font-semibold' : 'text-[13px] font-medium'} ${
+          count ? 'text-gray-800' : 'text-gray-500'}`}>
+          {label}
+        </span>
+      </div>
+      <span className="text-xs text-gray-500">{count}</span>
+    </div>
+  );
+
+  const scopeRow = (item: DeviceLibraryItem, t: Tier, family?: string) => {
+    const facts = tpmsFactsFor(item);
+    const filled = filledPropertyCount(item.properties as Record<string, unknown>);
+    const open = expandedDevices.has(item.id);
+    // The family is the group it sits in; saying it again on the row is noise.
+    const type = facts.switchgearType && facts.switchgearType.toUpperCase() !== family ? facts.switchgearType : '';
+    return (
+      <React.Fragment key={item.id}>
+        <div
+          className="flex items-center gap-3 pl-3 pr-4 py-2 bg-white border-b border-gray-100 hover:bg-gray-50 cursor-pointer text-sm group"
+          onClick={() => toggleDevice(item.id)}
+          onDoubleClick={() => setDeviceModal({ visible: true, item, mode: 'view' })}
+          onContextMenu={e => {
+            e.preventDefault();
+            e.stopPropagation();
+            setCtxMenu({ visible: true, x: e.clientX, y: e.clientY, typeNode: t, itemId: item.id, family });
+          }}
+        >
+          {open
+            ? <ChevronDownIcon  className="w-4 h-4 text-gray-400 shrink-0" />
+            : <ChevronRightIcon className="w-4 h-4 text-gray-400 shrink-0" />}
+          <span className="shrink-0 text-gray-800">{item.name}</span>
+          {type && <span className="text-xs text-gray-500 truncate">{type}</span>}
+          {item.source === 'tpms' && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200 shrink-0">
+              TPMS
+            </span>
+          )}
+          <span className="ml-auto flex items-center gap-3 shrink-0 text-xs">
+            {facts.cellCount && <span className="text-gray-500">{facts.cellCount} cell(s)</span>}
+            <span className="text-gray-500">{facts.rows} feeder(s)</span>
+            <span className={filled === 0 ? 'text-amber-600' : 'text-gray-500'}>
+              {filled}/{DEVICE_PROP_TOTAL} spec
+            </span>
+          </span>
+        </div>
+        {open && renderDeviceBreakdown(item)}
+      </React.Fragment>
+    );
+  };
+
   const renderDeviceLibrary = () => (
     <div>
       {/* No heading and no instructions line: the sub-tab already says Scope
@@ -850,80 +958,47 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
         title="Right-click a group to add a scope; right-click a scope to copy its specification and paste it into another, whole or tab by tab. Click a scope to break out its specification, double-click to open it."
       >
 
-        {TIERS.map(t => {
-          const items    = deviceLibrary[t] ?? [];
-          const expanded = expandedTypes.has(t);
-
+        {TOP_TIERS.map(t => {
+          const items = deviceLibrary[t] ?? [];
+          if (t !== 'MV') {
+            return (
+              <div key={t}>
+                {groupRow(t, 0, items.length, { tier: t }, TIER_LABEL[t], t)}
+                {isOpen(t) && items.length > 0 && (
+                  <div className="ml-8 border-l-2 border-gray-300">{items.map(item => scopeRow(item, t))}</div>
+                )}
+              </div>
+            );
+          }
+          // MV is AIS and GIS; AIS is split by switchgear family, the way the
+          // Create Template tree files MV templates.
+          const gis = deviceLibrary.GIS ?? [];
+          const byFamily = MV_FAMILIES.map(fam => ({ fam, list: items.filter(i => scopeFamily(i) === fam.id) }));
+          const loose = items.filter(i => scopeFamily(i) === null);
           return (
             <div key={t}>
-              {/* Voltage level row */}
-              <div
-                className="flex items-center justify-between px-3 py-2 bg-gray-100 border-b border-gray-200 cursor-pointer hover:bg-gray-200 select-none"
-                onClick={() => {
-                  const s = new Set(expandedTypes);
-                  s.has(t) ? s.delete(t) : s.add(t);
-                  setExpandedTypes(s);
-                }}
-                onContextMenu={e => {
-                  e.preventDefault();
-                  setCtxMenu({ visible: true, x: e.clientX, y: e.clientY, typeNode: t, itemId: null });
-                }}
-              >
-                <div className="flex items-center gap-2">
-                  {expanded
-                    ? <ChevronDownIcon  className="w-4 h-4 text-gray-500" />
-                    : <ChevronRightIcon className="w-4 h-4 text-gray-500" />}
-                  <span className={`text-xs px-2 py-0.5 rounded font-bold ${typeColor(t)}`}>{t}</span>
-                  <span className={`text-xs font-bold uppercase tracking-wide ${items.length ? 'text-gray-800' : 'text-gray-500'}`}>
-                    {TIER_LABEL[t]}
-                  </span>
-                </div>
-                <span className="text-xs text-gray-500">{items.length}</span>
-              </div>
-
-              {/* Device items */}
-              {expanded && items.length > 0 && (
+              {groupRow('MV', 0, items.length + gis.length, { tier: 'MV' }, TIER_LABEL.MV, 'MV')}
+              {isOpen('MV') && (
                 <div className="ml-8 border-l-2 border-gray-300">
-                  {items.map(item => {
-                    const facts = tpmsFactsFor(item);
-                    const filled = filledPropertyCount(item.properties as Record<string, unknown>);
-                    const open = expandedDevices.has(item.id);
-                    return (
-                      <React.Fragment key={item.id}>
-                        <div
-                          className="flex items-center gap-3 pl-3 pr-4 py-2 bg-white border-b border-gray-100 hover:bg-gray-50 cursor-pointer text-sm group"
-                          onClick={() => toggleDevice(item.id)}
-                          onDoubleClick={() => setDeviceModal({ visible: true, item, mode: 'view' })}
-                          onContextMenu={e => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setCtxMenu({ visible: true, x: e.clientX, y: e.clientY, typeNode: t, itemId: item.id });
-                          }}
-                        >
-                          {open
-                            ? <ChevronDownIcon  className="w-4 h-4 text-gray-400 shrink-0" />
-                            : <ChevronRightIcon className="w-4 h-4 text-gray-400 shrink-0" />}
-                          <span className="shrink-0 text-gray-800">{item.name}</span>
-                          {facts.switchgearType && (
-                            <span className="text-xs text-gray-500 truncate">{facts.switchgearType}</span>
+                  {groupRow('MV/AIS', 1, items.length, { tier: 'MV' }, 'AIS — Air Insulated Switchgear')}
+                  {isOpen('MV/AIS') && (
+                    <div className="ml-8 border-l-2 border-gray-200">
+                      {byFamily.map(({ fam, list }) => (
+                        <div key={fam.id}>
+                          {groupRow(`MV/AIS/${fam.id}`, 2, list.length, { tier: 'MV', family: fam.id }, fam.label)}
+                          {isOpen(`MV/AIS/${fam.id}`) && list.length > 0 && (
+                            <div className="ml-8 border-l-2 border-gray-200">{list.map(item => scopeRow(item, 'MV', fam.id))}</div>
                           )}
-                          {item.source === 'tpms' && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200 shrink-0">
-                              TPMS
-                            </span>
-                          )}
-                          <span className="ml-auto flex items-center gap-3 shrink-0 text-xs">
-                            {facts.cellCount && <span className="text-gray-500">{facts.cellCount} cell(s)</span>}
-                            <span className="text-gray-500">{facts.rows} feeder(s)</span>
-                            <span className={filled === 0 ? 'text-amber-600' : 'text-gray-500'}>
-                              {filled}/{DEVICE_PROP_TOTAL} spec
-                            </span>
-                          </span>
                         </div>
-                        {open && renderDeviceBreakdown(item)}
-                      </React.Fragment>
-                    );
-                  })}
+                      ))}
+                      {/* MV scopes no family can be read from stay in AIS, not lost. */}
+                      {loose.map(item => scopeRow(item, 'MV'))}
+                    </div>
+                  )}
+                  {groupRow('MV/GIS', 1, gis.length, { tier: 'GIS' }, 'GIS — Gas Insulated Switchgear')}
+                  {isOpen('MV/GIS') && gis.length > 0 && (
+                    <div className="ml-8 border-l-2 border-gray-200">{gis.map(item => scopeRow(item, 'GIS'))}</div>
+                  )}
                 </div>
               )}
             </div>
@@ -944,7 +1019,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
               <button
                 className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
                 onClick={() => {
-                  setDeviceModal({ visible: true, item: null, mode: 'add', addType: ctxMenu.typeNode! });
+                  setDeviceModal({ visible: true, item: null, mode: 'add', addType: ctxMenu.typeNode!, addFamily: ctxMenu.family });
                   setCtxMenu(prev => ({ ...prev, visible: false }));
                 }}
               >
@@ -957,6 +1032,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                     setPasteNameModal({
                       visible: true,
                       targetType: ctxMenu.typeNode,
+                      targetFamily: ctxMenu.family,
                       suggestedName: `${copiedDevice.name} (Copy)`
                     });
                     setCtxMenu(prev => ({ ...prev, visible: false }));
@@ -1029,6 +1105,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
                       setPasteNameModal({
                         visible: true,
                         targetType: ctxMenu.typeNode,
+                        targetFamily: ctxMenu.family,
                         suggestedName: `${copiedDevice.name} (Copy)`
                       });
                       setCtxMenu(prev => ({ ...prev, visible: false }));

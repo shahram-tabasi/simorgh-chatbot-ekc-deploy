@@ -55,6 +55,9 @@ export interface DeviceLibraryItem {
   /** 'tpms' when this entry was read from TPMS rather than typed here. */
   source?: 'tpms';
   tpmsScopeId?: number;
+  /** For an MV (AIS) scope: the switchgear family it is filed under —
+   *  SIMOPRIME-WORLD, SIMOPRIME-A4 or EK36. */
+  family?: string;
 }
 
 // ==============================
