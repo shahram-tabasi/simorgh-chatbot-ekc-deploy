@@ -81,7 +81,7 @@ export const EXTRAS: [string, string][] = [
  * types the panel takes, and whether each must carry D50 and D59. W66 and F20
  * are mandatory on every one; the breaker is motor operated with 12 NO + 12 NC.
  */
-const SIMOPRIME_WORLD: Record<string, [d50: boolean, d59: boolean]> = {
+export const SIMOPRIME_WORLD: Record<string, [d50: boolean, d59: boolean]> = {
   '3AE5124-1': [false, true],
   '3AE5285-3': [true, false],
   '3AE5124-2': [false, true],

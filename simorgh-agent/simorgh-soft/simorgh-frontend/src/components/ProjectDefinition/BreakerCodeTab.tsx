@@ -9,13 +9,14 @@
 // green when stated, amber when assumed, red while missing. Saved with the
 // scope, so the code is still there next time.
 import React, { useEffect, useMemo, useState } from 'react';
-import { CopyIcon, ChevronDownIcon, ChevronRightIcon, RefreshCwIcon } from 'lucide-react';
+import { CopyIcon, ChevronDownIcon, ChevronRightIcon, RefreshCwIcon, FanIcon } from 'lucide-react';
 import type { BreakerCodeRecord, DeviceLibraryItem, ProjectData } from '../../types/project';
 import {
   evaluate, setField, confirm, toggleExtra, fieldOptions, EXTRAS, FIELD_LABEL, FORM_GROUPS,
   type SionState, type FieldStatus,
 } from '../../utils/sion3ae5/engine';
-import { specFromProject, equipmentOf, decodeDraft } from '../../utils/sion3ae5/fromProject';
+import { specFromProject, equipmentOf, decodeDraft, scopeFamily, worldPanelFor } from '../../utils/sion3ae5/fromProject';
+import { panelKindLabel } from '../../utils/sion3ae5/simoprimeWorld';
 
 interface Props {
   projectData: ProjectData;
@@ -38,6 +39,11 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave }) => {
   const row = rows.find(r => r.id === rowId);
 
   const draft = useMemo(() => (scope ? specFromProject(projectData, scope, row) : null), [scope, row, projectData]);
+  // SIMOPRIME World: every cell's panel, straight from the design catalogue.
+  const isWorld = !!scope && scopeFamily(scope, String((equipmentOf(projectData, scope)?.properties?.tpms as any)?.switchgearType ?? '')) === 'SIMOPRIME-WORLD';
+  const panels = useMemo(
+    () => (isWorld && scope ? rows.map(r => ({ row: r, panel: worldPanelFor(projectData, scope, r) })) : []),
+    [isWorld, scope, rows, projectData]);
   const saved = scope?.breakerCodes?.[rowId];
 
   const [spec, setSpec] = useState('');
@@ -129,6 +135,56 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave }) => {
         </button>
       </div>
 
+      {/* SIMOPRIME World: the panel of every cell */}
+      {isWorld && panels.length > 0 && (
+        <section className="border border-gray-200 rounded-md overflow-hidden">
+          <header className="px-3 py-2 bg-gray-50 border-b border-gray-200">
+            <h4 className="text-sm font-medium text-gray-800"
+              title="SIMOPRIME World design catalogue (issue 23, 06/2026): 2.2 configuration of panels, 2.2.3.3 width / ventilation / withdrawable VTs, 2.2.2.9 breakers. Click a cell to work out its breaker code.">
+              Cells — SIMOPRIME World
+            </h4>
+          </header>
+          <div className="max-h-72 overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-100 text-gray-700 sticky top-0">
+                <tr>
+                  {['Feeder', 'Template', 'Current (A)', 'Panel', 'Width (mm)', 'Ventilation', 'Withdrawable VT', 'Breaker'].map(h => (
+                    <th key={h} className="px-2 py-1.5 text-left font-medium whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {panels.map(({ row: r, panel: p }) => (
+                  <tr
+                    key={r.id}
+                    onClick={() => setRowId(r.id)}
+                    title={p.notes.join('\n')}
+                    className={`border-t border-gray-100 cursor-pointer ${r.id === rowId ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                  >
+                    <td className="px-2 py-1 whitespace-nowrap text-gray-800">{r.feederNo || `Row ${r.rowNumber}`}{scope?.breakerCodes?.[r.id] ? ' ✓' : ''}</td>
+                    <td className="px-2 py-1 text-gray-700 truncate max-w-[12rem]">{r.templateName}</td>
+                    <td className="px-2 py-1 text-gray-700">{p.feederA ?? (p.kind === 'circuit-breaker' ? <span className="text-red-700">?</span> : '—')}</td>
+                    <td className="px-2 py-1 text-gray-700 whitespace-nowrap">
+                      {panelKindLabel(p.kind).replace('Switching device panel with ', '')}{p.typicalA ? ` · ${p.typicalA} A` : ''}
+                    </td>
+                    <td className="px-2 py-1 text-gray-700">{p.width ?? '—'}</td>
+                    <td className="px-2 py-1 whitespace-nowrap">
+                      {p.ventilation === 'Without'
+                        ? <span className="text-gray-500">Without</span>
+                        : <span className="inline-flex items-center gap-1 font-semibold text-gray-900"><FanIcon className="w-3.5 h-3.5" />{p.ventilation}</span>}
+                    </td>
+                    <td className="px-2 py-1 text-gray-700">{p.withdrawableVT == null ? '—' : p.withdrawableVT ? 'Possible' : 'Not possible'}</td>
+                    <td className="px-2 py-1 font-mono text-gray-800 whitespace-nowrap">
+                      {p.breaker ? p.breaker[0] : p.kind === 'circuit-breaker' ? <span className="text-red-700">?</span> : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       {/* The article number */}
       {result && (
         <div className="border border-gray-200 rounded-md bg-gray-50 px-4 py-3">
@@ -161,6 +217,13 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave }) => {
             >
               <CopyIcon className="w-3.5 h-3.5" /> {copied === 'code' ? 'Copied' : 'Copy'}
             </button>
+            {draft?.world && (
+              <span className="text-gray-700" title={draft.world.notes.join('\n')}>
+                {draft.world.width ? `${draft.world.width} mm panel` : ''}
+                {draft.world.ventilation !== 'Without' ? ` · ${draft.world.ventilation.toLowerCase()} ventilation` : ''}
+                {draft.world.notes.length ? ` · ${draft.world.notes.length} note${draft.world.notes.length > 1 ? 's' : ''}` : ''}
+              </span>
+            )}
             <span className="ml-auto" title="Green: read from the text or chosen · amber: assumed, please confirm · red: missing">
               <b className="text-red-700">{result.questions.filter(q => q.status !== 'amb').length}</b> missing ·{' '}
               <b className="text-amber-800">{result.questions.filter(q => q.status === 'amb').length}</b> to confirm ·{' '}
@@ -252,9 +315,9 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave }) => {
                 </button>
               </header>
               <pre className="px-3 py-2 text-xs text-gray-800 whitespace-pre-wrap font-sans">{result.description}</pre>
-              {result.notes.length > 0 && (
+              {(result.notes.length > 0 || (draft?.world?.notes.length ?? 0) > 0) && (
                 <ul className="px-3 pb-3 space-y-1 text-xs list-disc list-inside">
-                  {result.notes.map((n, i) => (
+                  {[...(draft?.world?.notes ?? []).map(text => ({ text, warn: /confirm|No 3AE5|above/.test(text) })), ...result.notes].map((n, i) => (
                     <li key={i} className={n.warn ? 'text-red-700' : 'text-gray-600'}>{n.text}</li>
                   ))}
                 </ul>

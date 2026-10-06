@@ -16,6 +16,7 @@ import type { DeviceLibraryItem, ProjectData, DeviceTableRow } from '../../types
 import { stripLocaleTags } from '../tierEquipmentMatrix';
 import { TIERS } from '../tiers';
 import { decode, type SionState } from './engine';
+import { worldPanel, panelKindOf, type WorldPanel } from './simoprimeWorld';
 
 const KV_STEPS = [7.2, 12, 17.5, 24];
 const KA_STEPS = [16, 20, 25, 31.5, 40];
@@ -77,6 +78,34 @@ export interface DraftSpec {
   notes: string[];
   /** The panel whose catalogue narrows the breaker ('SIMOPRIME-WORLD'). */
   panel: string | null;
+  /** SIMOPRIME World: the cell's panel and breaker, from the design catalogue. */
+  world?: WorldPanel;
+}
+
+/** The current a feeder has to carry: its FLC, else its breaker part's rating. */
+export function feederCurrent(data: ProjectData, row: DeviceTableRow): number | null {
+  const flc = num(row.flc);
+  if (flc != null && flc > 0) return flc;
+  const m = feederBreakerText(data, row).toUpperCase().match(/(\d{3,4})\s*A\b/);
+  return m ? +m[1] : null;
+}
+
+/** The scope's rated voltage and short-circuit current, raised to catalogue steps. */
+export function scopeRatings(data: ProjectData, item: DeviceLibraryItem): { kv: number | null; ka: number | null } {
+  const p = (item.properties ?? {}) as Record<string, unknown>;
+  let kv = num(p.ratedInsulationVoltage) ?? num(p.serviceVoltage) ?? num(data.technicalSettings?.mediumVoltage?.nominalVoltage);
+  if (kv != null && kv > 100) kv /= 1000;
+  const ka = num(p.isc) ?? num(p.ratedShortTimeWithstandCurrent);
+  return { kv: kv != null ? stepUp(kv, KV_STEPS) : null, ka: ka != null ? stepUp(ka, KA_STEPS) : null };
+}
+
+/** SIMOPRIME World: the panel of one cell (or, for the switchgear as a
+ *  whole, of a breaker carrying the busbar current). */
+export function worldPanelFor(data: ProjectData, item: DeviceLibraryItem, row?: DeviceTableRow): WorldPanel {
+  const { kv, ka } = scopeRatings(data, item);
+  const p = (item.properties ?? {}) as Record<string, unknown>;
+  const current = row ? feederCurrent(data, row) : num(p.mainBusbarRatedCurrent);
+  return worldPanel(row ? panelKindOf(row.templateName) : 'circuit-breaker', current, kv, ka);
 }
 
 export function specFromProject(data: ProjectData, item: DeviceLibraryItem, row?: DeviceTableRow): DraftSpec {
@@ -107,9 +136,15 @@ export function specFromProject(data: ProjectData, item: DeviceLibraryItem, row?
       if (ka !== kaRaw) { assumed.push('ka'); notes.push(`Short-circuit current ${kaRaw} kA raised to the 3AE5 step ${ka} kA.`); }
     }
   }
+  // SIMOPRIME World: the cell's panel picks the breaker from the catalogue.
+  const family = scopeFamily(item, String(tpms.switchgearType ?? ''));
+  const panel = family === 'SIMOPRIME-WORLD' ? family : null;
+  const world = panel ? worldPanelFor(data, item, row) : undefined;
   // The feeder's own breaker, when its template has one, says the most.
   const breaker = row ? feederBreakerText(data, row) : '';
-  if (breaker) {
+  if (world?.breaker) {
+    parts.push(`${world.breaker[5]}A`);
+  } else if (breaker) {
     parts.push(breaker);
     notes.push('Breaker part of the feeder template read.');
   } else {
@@ -128,19 +163,17 @@ export function specFromProject(data: ProjectData, item: DeviceLibraryItem, row?
   const hz = num(p.frequency);
   if (hz === 50 || hz === 60) parts.push(`${hz}HZ`);
   // Which switchgear it goes into.
-  const family = scopeFamily(item, String(tpms.switchgearType ?? ''));
   if (family?.startsWith('SIMOPRIME')) parts.push('FOR SIMOPRIME');
-  const panel = family === 'SIMOPRIME-WORLD' ? family : null;
-  if (panel) notes.push('SIMOPRIME World: only the 3AE5 types its design catalogue lists, with W66, F20 and D50/D59 as it requires.');
+  if (world?.breaker) notes.push(`SIMOPRIME World design catalogue: ${world.breaker[0]} in a ${world.width} mm panel.`);
 
-  return { text: parts.join(', '), assumed, notes, panel };
+  return { text: parts.join(', '), assumed, notes, panel, world };
 }
 
 /**
  * A specification read into the builder, with what the project only
  * suggested marked to confirm, and the panel's own rules applied.
  */
-export function decodeDraft(text: string, draft?: Pick<DraftSpec, 'assumed' | 'panel'>): SionState {
+export function decodeDraft(text: string, draft?: Pick<DraftSpec, 'assumed' | 'panel' | 'world'>): SionState {
   const s = decode(text);
   (draft?.assumed ?? []).forEach(f => { if ((s as any)[f] != null) s.st[f] = 'assumed'; });
   if (draft?.panel === 'SIMOPRIME-WORLD') {
@@ -149,6 +182,12 @@ export function decodeDraft(text: string, draft?: Pick<DraftSpec, 'assumed' | 'p
     // breaker; the breaker itself is the fixed-mounted one (W66).
     if (s.aux == null) { s.aux = '12'; s.st.aux = 'found'; }
     if (s.inst == null) { s.inst = '0'; s.st.inst = 'assumed'; }
+    // The cell's panel fixes the breaker type: its ratings are the catalogue's.
+    const b = draft.world?.breaker;
+    if (b) {
+      s.kv = b[1]; s.ka = b[2]; s.pcd = b[3]; s.vdt = b[4]; s.ir = b[5];
+      (['kv', 'ka', 'pcd', 'vdt', 'ir'] as const).forEach(f => { s.st[f] = 'found'; });
+    }
   }
   return s;
 }
