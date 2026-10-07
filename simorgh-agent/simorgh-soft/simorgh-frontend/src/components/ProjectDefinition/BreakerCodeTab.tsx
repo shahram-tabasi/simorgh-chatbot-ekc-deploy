@@ -12,9 +12,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { CopyIcon, ChevronDownIcon, ChevronRightIcon, RefreshCwIcon, FanIcon } from 'lucide-react';
 import type { BreakerCodeRecord, DeviceLibraryItem, ProjectData } from '../../types/project';
 import {
-  evaluate, setField, confirm, toggleExtra, fieldOptions, EXTRAS, FIELD_LABEL, FORM_GROUPS,
+  evaluate, setField, confirm, toggleExtra, toggleCode, fieldOptions, EXTRAS, FIELD_LABEL, FORM_GROUPS,
   type SionState, type FieldStatus,
 } from '../../utils/sion3ae5/engine';
+import { StockConvert } from './StockConvert';
 import { specFromProject, decodeDraft, familyOf, worldPanelFor, equipmentOf } from '../../utils/sion3ae5/fromProject';
 import { catalogueOf } from '../../utils/sion3ae5/catalogue';
 import { ah3FromProject, evaluateAh3, type Ah3State } from '../../utils/sion3ae5/ah3';
@@ -54,7 +55,17 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
   const ah3Draft = (r?: typeof rows[number]): Ah3State | null => {
     if (!scope) return null;
     const typ = r ? worldPanelFor(projectData, scope, r).typicalA : null;
-    return ah3FromProject(scope.properties as Record<string, unknown>, { ir: typ });
+    return { ...ah3FromProject(scope.properties as Record<string, unknown>, { ir: typ }), off: scope.codeOff ?? [] };
+  };
+  /** A 3AE5 as the project gives it, without the codes taken off the scope. */
+  const ae5Draft = (d: NonNullable<typeof draft>): SionState => ({ ...decodeDraft(d.text, d), off: scope?.codeOff ?? [] });
+  /** An order code ticked on or off: an option the engineer added goes for
+   *  this breaker only; one the rules add goes for every breaker of the scope. */
+  const scopeCodeOff = (code: string, on: boolean) => {
+    if (!scope) return;
+    const now = new Set(scope.codeOff ?? []);
+    if (on) now.delete(code); else now.add(code);
+    onUpdate({ ...scope, codeOff: [...now] });
   };
   /** What was saved for a 3AH3 cell, if it was saved by the 3AH3 builder. */
   const ah3Saved = (id: string): Ah3State | null => {
@@ -78,11 +89,12 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
         rec = { spec: '3AH3', state: st, code, savedAt: '' };
       } else if (panel.breaker) {
         const d = specFromProject(projectData, scope, r);
-        const st = decodeDraft(d.text, d);
+        const kept = scope.breakerCodes?.[r.id];
+        const st = kept && kept.spec !== '3AH3' ? (kept.state as SionState) : ae5Draft(d);
         const ev = evaluate(st);
         code = ev.code;
         open = ev.questions.length;
-        rec = { spec: d.text, state: st, code, savedAt: '' };
+        rec = { spec: kept?.spec ?? d.text, state: st, code, savedAt: '' };
       }
       return { row: r, panel, code, open, rec };
     });
@@ -123,9 +135,9 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
   // specification the project gives.
   useEffect(() => {
     if (!scope || !draft) { setSpec(''); setState(null); return; }
-    if (saved) { setSpec(saved.spec); setState(saved.state as SionState); return; }
+    if (saved && saved.spec !== '3AH3') { setSpec(saved.spec); setState(saved.state as SionState); return; }
     setSpec(draft.text);
-    setState(decodeDraft(draft.text, draft));
+    setState(ae5Draft(draft));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeId, rowId]);
 
@@ -314,6 +326,7 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
           fromProject={ah3Draft(row)!}
           saved={scope.breakerCodes?.[rowId]}
           onSave={rec => onSave(scope, rowId, rec)}
+          onScopeCodeOff={scopeCodeOff}
         />
       )}
 
@@ -333,12 +346,35 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
                 </span>
               </React.Fragment>
             ))}
-            {result.codes.length > 0 && (
+            {(result.codes.length > 0 || result.removed.length > 0) && (
               <span className="flex items-end gap-1.5 ml-2 shrink-0">
                 <span className="font-mono text-xl text-gray-500 pb-1">-Z</span>
-                {result.codes.map(c => (
-                  <span key={c} className="font-mono text-sm font-semibold px-1.5 py-1 mb-1 rounded bg-gray-100 border border-gray-200 text-gray-800">{c}</span>
-                ))}
+                {[...result.codes, ...result.removed].map(c => {
+                  const on = result.codes.includes(c);
+                  const own = result.state.extras.includes(c);
+                  return (
+                    <label
+                      key={c}
+                      title={on
+                        ? (own ? 'Untick to take this option off this breaker' : 'Untick to take it off — the rules add it; it stays off for every breaker of this scope')
+                        : 'Taken off — tick to put it back'}
+                      className={`flex items-center gap-1 font-mono text-sm font-semibold px-1.5 py-1 mb-1 rounded border cursor-pointer ${
+                        on ? 'bg-gray-100 border-gray-200 text-gray-800' : 'bg-white border-dashed border-gray-300 text-gray-500 line-through'}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={e => {
+                          const v = e.target.checked;
+                          if (!v && own) { setState(s => (s ? toggleExtra(s, c, false) : s)); return; }
+                          setState(s => (s ? toggleCode(s, c, v) : s));
+                          scopeCodeOff(c, v);
+                        }}
+                      />
+                      {c}
+                    </label>
+                  );
+                })}
               </span>
             )}
           </div>
@@ -366,6 +402,8 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
         </div>
       )}
 
+      {result && <StockConvert wanted={result.code} family="3AE5" />}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="space-y-4">
           {/* Specification */}
@@ -375,14 +413,14 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
                 Specification
               </h4>
               <button
-                onClick={() => { if (draft) { setSpec(draft.text); setState(decodeDraft(draft.text, draft)); } }}
+                onClick={() => { if (draft) { setSpec(draft.text); setState(ae5Draft(draft)); } }}
                 title="Write the text again from the project's specification"
                 className="ml-auto flex items-center gap-1 px-2 py-1 border border-gray-300 bg-white text-gray-700 rounded text-xs hover:bg-gray-50"
               >
                 <RefreshCwIcon className="w-3.5 h-3.5" /> From project
               </button>
               <button
-                onClick={() => setState(decodeDraft(spec, { assumed: [], panel: draft?.panel ?? null }))}
+                onClick={() => setState({ ...decodeDraft(spec, { assumed: [], panel: draft?.panel ?? null }), off: scope?.codeOff ?? [] })}
                 className="px-2 py-1 border border-gray-300 bg-white text-gray-700 rounded text-xs hover:bg-gray-50"
               >
                 Decode

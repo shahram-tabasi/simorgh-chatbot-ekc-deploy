@@ -50,7 +50,7 @@ export const RELEASE_LABEL: Record<Release, string> = {
   uv: 'Undervoltage release',
 };
 // [9th position, 2nd release, 3rd release, order codes]
-const COMBOS: [string, Release, Release, string[]][] = [
+export const AH3_COMBOS: [string, Release, Release, string[]][] = [
   ['M', 'none', 'none', []],
   ['N', 'shunt', 'none', []],
   ['N', 'shunt', 'shunt', ['F15']],
@@ -72,17 +72,17 @@ const COMBOS: [string, Release, Release, string[]][] = [
   ['V', 'ctp20', 'none', ['A45']],
 ];
 /** The 3rd releases the catalogue pairs with a 2nd one. */
-export const thirdOptions = (r2: Release): Release[] => [...new Set(COMBOS.filter(c => c[1] === r2).map(c => c[2]))];
-export const SECOND_OPTIONS: Release[] = [...new Set(COMBOS.map(c => c[1]))];
+export const thirdOptions = (r2: Release): Release[] => [...new Set(AH3_COMBOS.filter(c => c[1] === r2).map(c => c[2]))];
+export const SECOND_OPTIONS: Release[] = [...new Set(AH3_COMBOS.map(c => c[1]))];
 
 // ── 10th–14th positions: voltages ───────────────────────────────────────
 export const STD_V = ['DC 24 V', 'DC 48 V', 'DC 60 V', 'DC 110 V', 'DC 220 V', 'AC 100 V', 'AC 110 V', 'AC 230 V'];
 export const SPECIAL_V = ['DC 30 V', 'DC 32 V', 'DC 120 V', 'DC 125 V', 'DC 127 V', 'DC 240 V', 'AC 120 V', 'AC 125 V', 'AC 240 V'];
-const SPECIAL_SUFFIX = 'ABCDEFKLM';
-const CLOSE_MECH = 'BCDEFHJK';
-const CLOSE_MANUAL = 'MNPQRTUV';
-const DIGITS = '12345678';
-const MOTOR = 'BCDEFHJK';
+export const SPECIAL_SUFFIX = 'ABCDEFKLM';
+export const CLOSE_MECH = 'BCDEFHJK';
+export const CLOSE_MANUAL = 'MNPQRTUV';
+export const DIGITS = '12345678';
+export const MOTOR = 'BCDEFHJK';
 
 /** "110V DC", "DC110", "110 VDC" → "DC 110 V" — or null when it is not one. */
 export function normVoltage(v: unknown): string | null {
@@ -161,6 +161,8 @@ export interface Ah3State {
   extras: string[];
   /** Where each value came from. */
   st: Record<string, Mark>;
+  /** Order codes the engineer took off, though the rules add them. */
+  off?: string[];
 }
 
 export interface Ah3Result {
@@ -168,6 +170,8 @@ export interface Ah3Result {
   pos: string[];
   code: string;
   orderCodes: string[];
+  /** Order codes the rules gave but the engineer took off. */
+  removed: string[];
   primary: Ah3Primary | null;
   missing: string[];
   notes: string[];
@@ -213,7 +217,7 @@ export function evaluateAh3(s: Ah3State): Ah3Result {
   }
 
   // 9: release combination.
-  const combo = COMBOS.find(c => c[1] === s.rel2 && c[2] === s.rel3);
+  const combo = AH3_COMBOS.find(c => c[1] === s.rel2 && c[2] === s.rel3);
   if (combo) { pos[8] = combo[0]; codes.push(...combo[3]); }
   else missing.push('Release combination');
   if (combo?.[0] === 'Q') notes.push('9th position Q; the catalogue lists U with the same 0.5 A c.t.-operated release — confirm with Siemens if U is meant.');
@@ -257,10 +261,13 @@ export function evaluateAh3(s: Ah3State): Ah3Result {
   else { pos[15] = '9'; codes.push(l); }
 
   codes.push(...s.extras.filter(e => !codes.includes(e)));
-  const uniq = [...new Set(codes)];
+  const off = new Set(s.off ?? []);
+  const removed = [...new Set(codes)].filter(c => off.has(c));
+  if (removed.length) notes.push(`Taken off by hand: ${removed.join(', ')} — tick again to restore.`);
+  const uniq = [...new Set(codes)].filter(c => !off.has(c));
   const base = `${pos.slice(0, 7).join('')}-${pos.slice(7, 12).join('')}-${pos.slice(12, 16).join('')}`;
   return {
-    pos, primary, missing, notes, orderCodes: uniq,
+    pos, primary, missing, notes, orderCodes: uniq, removed,
     code: uniq.length ? `${base}-Z ${uniq.join('+')}` : base,
   };
 }

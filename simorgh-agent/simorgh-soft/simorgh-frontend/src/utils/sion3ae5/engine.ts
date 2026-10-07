@@ -18,8 +18,8 @@ import { DATA, type PrimaryRow } from './data';
 // ── Catalog tables ──────────────────────────────────────────────────────
 // key, label, closing/motor letter (pos 10/14), release digit (pos 11/12),
 // special suffix (L1x / M1x), 3rd-release J-code
-type Volt = [string, string, string, string, string | null, string];
-const VOLTS: Volt[] = [
+export type Volt = [string, string, string, string, string | null, string];
+export const VOLTS: Volt[] = [
   ['DC24', 'DC 24 V', 'B', '1', null, 'J80'], ['DC30', 'DC 30 V', 'M', '9', 'A', 'J81'], ['DC32', 'DC 32 V', 'N', '9', 'B', 'J82'],
   ['DC48', 'DC 48 V', 'C', '2', null, 'J83'], ['DC60', 'DC 60 V', 'D', '3', null, 'J84'], ['DC110', 'DC 110 V', 'E', '4', null, 'J85'],
   ['DC120', 'DC 120 V', 'P', '9', 'C', 'J86'], ['DC125', 'DC 125 V', 'Q', '9', 'D', 'J87'], ['DC127', 'DC 127 V', 'R', '9', 'E', 'J88'],
@@ -35,14 +35,14 @@ export const REL: Record<string, string> = {
   ctp: 'C.t.-operated release, pulse ≥0.1 Ws (20 Ω)',
 };
 // [2nd, 3rd, position 9, order codes]
-const COMBOS: [string, string, string, string[]][] = [
+export const COMBOS: [string, string, string, string[]][] = [
   ['none', 'none', 'A', []], ['sh30', 'none', 'B', ['G39']], ['sh45', 'none', 'B', []], ['uv', 'none', 'F', []],
   ['ct05', 'none', 'G', []], ['ct5', 'none', 'G', ['A49']], ['ct1', 'none', 'H', []], ['ctp', 'none', 'C', []],
   ['sh45', 'sh45', 'B', ['F15']], ['sh45', 'ct05', 'T', []], ['sh45', 'ct5', 'T', ['A49']], ['sh45', 'ct1', 'T', ['A46']], ['sh45', 'ctp', 'T', ['A45']],
   ['uv', 'sh45', 'S', []], ['uv', 'ct05', 'V', []], ['uv', 'ct5', 'V', ['A49']], ['uv', 'ct1', 'V', ['A46']], ['uv', 'ctp', 'V', ['A45']],
   ['ct05', 'ct05', 'U', []], ['ct5', 'ct5', 'U', ['A49']],
 ];
-const INST: Record<string, [string, string[], string]> = {
+export const INST: Record<string, [string, string[], string]> = {
   '0': ['0', [], 'Fixed mounting, circuit-breaker only'],
   'F2': ['2', ['M22'], 'Fixed mounting, with contact arms and contact systems'],
   'F3': ['3', ['M23'], 'Fixed mounting, with contact arms, contact systems, bushings and fixed contacts'],
@@ -54,7 +54,7 @@ const INST: Record<string, [string, string[], string]> = {
 };
 const IFACE: Record<string, string> = { '20': 'Internal 20-pole connection strip', '64': '64-pole plug', 'X': 'Extended cable harness with 64-pole plug' };
 const HARNESS: Record<string, string> = { B02: '500 mm', B01: '800 mm', B04: '1200 mm', B05: '1500 mm', B03: '2000 mm', B06: '2500 mm', B07: '3000 mm', B08: '3500 mm' };
-const LANG: Record<string, [string, number]> = { de: ['German', 0], en: ['English', 2], fr: ['French', 4], es: ['Spanish', 6] };
+export const LANG: Record<string, [string, number]> = { de: ['German', 0], en: ['English', 2], fr: ['French', 4], es: ['Spanish', 6] };
 const GEAR: Record<string, string> = {
   std: 'Siemens racking concept (standard)', nxair: 'For NXAIR (W63)', simo: 'For SIMOPRIME (W66)',
   w89: 'Third-party withdrawable part, Siemens contacts (W89)', w88: 'Third-party withdrawable part and contacts (W88)',
@@ -74,6 +74,17 @@ export const EXTRAS: [string, string][] = [
   ['F20', 'Routine test certificate enclosed'], ['F21', 'Routine test certificate, stamped and signed'], ['F23', 'Routine test certificate by e-mail'], ['F17', 'Extended routine test certificate'],
   ['F27', 'Operating sequence O-3 min-CO-3 min-CO'], ['F38', 'Operating sequence O-0.3 s-CO-3 min-CO'],
   ['B00', 'Additional nameplate, loose'], ['W70', 'Warranty 24 months'], ['W71', 'Warranty 36 months'], ['W72', 'Warranty 60 months'], ['W73', 'Warranty 84 months'],
+  // The rest of HG 11.02 pages 31–32, so every order code can be ticked.
+  ['A13', 'Flat connector with insulating sleeve'], ['A31', 'Version free of silicone emissions'],
+  ['B17', 'Lower part of plug at the end of the extended harness + upper part, enclosed (15th position X)'],
+  ['B23', 'Without upper part of plug'], ['B24', 'Without material pack'], ['B99', 'Special circuit diagram (on request)'],
+  ['D28', 'Protective barrier angled at the top (24 kV; <2000 A only with D59)'],
+  ['D55', 'Protective barrier between pole side and operating mechanism side (not with D59)'],
+  ['D56', 'Circuit-breaker shaft cover (not with D59)'], ['D59', 'Circuit-breaker with wide housing'],
+  ['D98', 'Insulating shell, only lower part (24 kV, with D90 or D91)'], ['E02', '2 kV / 1 min test for secondary systems instead of 1 kV / 1 s'],
+  ['J18', 'Fixing bracket for fixed mounting'],
+  ['M04', 'Third-party withdrawable part, motorized racking 110 V DC (W88/W89)'], ['M05', 'Third-party withdrawable part, motorized racking 220 V DC (W88/W89)'],
+  ['Y40', 'Operating instructions and special labels for USA'], ['Y99', 'Other special version (clear text)'],
 ];
 
 /**
@@ -157,6 +168,9 @@ export interface SionState {
   st: Record<string, Source>;
   /** What the parser had to say about the text. */
   parseNotes: string[];
+  /** Order codes the engineer took off, though the rules add them (W66 on a
+   *  project at home, for one). */
+  off?: string[];
 }
 
 /** Defaults: 64-pole plug, English instructions, Siemens racking. */
@@ -170,7 +184,7 @@ export function blank(): SionState {
   };
 }
 
-const clone = (s: SionState): SionState => ({ ...s, extras: [...s.extras], st: { ...s.st }, parseNotes: [...s.parseNotes] });
+const clone = (s: SionState): SionState => ({ ...s, extras: [...s.extras], st: { ...s.st }, parseNotes: [...s.parseNotes], off: [...(s.off ?? [])] });
 
 // ── Parser ──────────────────────────────────────────────────────────────
 function volt(txt: string): { key: string | null; raw: string }[] {
@@ -360,6 +374,8 @@ export interface Evaluation {
   description: string;
   /** The state with derived ratings filled in. */
   state: SionState;
+  /** Order codes the rules gave but the engineer took off. */
+  removed: string[];
 }
 
 const QUESTION_ORDER = ['kv', 'ka', 'ir', 'pcd', 'vdt', 'gear', 'inst', 'rel2', 'rel3', 'vClose', 'vRel1', 'vRel2', 'vRel3',
@@ -461,6 +477,9 @@ export function evaluate(input: SionState): Evaluation {
     else warn(`“${c}” is not a valid order code (format letter + 2 digits).`);
   });
 
+  // What the engineer took off stays off — said once, not hidden.
+  const removed = (S.off ?? []).filter(c => codes.delete(c));
+  if (removed.length) notes.push({ text: `Taken off by hand: ${removed.join(', ')} — tick again to restore.` });
   const codeList = [...codes].sort();
   const n = needs(S);
   const status: Record<string, FieldStatus> = {};
@@ -480,7 +499,7 @@ export function evaluate(input: SionState): Evaluation {
 
   return {
     pos, codes: codeList, notes, primary: r, candidates: cand.length, questions, status, code,
-    description: describe(S, r), state: S,
+    description: describe(S, r), state: S, removed,
   };
 }
 
@@ -569,6 +588,15 @@ export function confirm(input: SionState, f: string): SionState {
 export function toggleExtra(input: SionState, code: string, on: boolean): SionState {
   const S = clone(input);
   S.extras = on ? [...new Set([...S.extras, code])] : S.extras.filter(c => c !== code);
+  if (on) S.off = (S.off ?? []).filter(c => c !== code);
+  return S;
+}
+
+/** An order code in the result ticked on or off — the rules' own as well. */
+export function toggleCode(input: SionState, code: string, on: boolean): SionState {
+  const S = clone(input);
+  S.off = on ? (S.off ?? []).filter(c => c !== code) : [...new Set([...(S.off ?? []), code])];
+  if (!on) S.extras = S.extras.filter(c => c !== code);
   return S;
 }
 

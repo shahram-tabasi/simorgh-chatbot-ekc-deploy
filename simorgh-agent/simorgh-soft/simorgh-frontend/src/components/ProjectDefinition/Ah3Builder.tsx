@@ -6,6 +6,7 @@
 import React, { useMemo, useState } from 'react';
 import { ChevronDownIcon, ChevronRightIcon, CopyIcon } from 'lucide-react';
 import type { BreakerCodeRecord } from '../../types/project';
+import { StockConvert } from './StockConvert';
 import {
   evaluateAh3, primaryOptions, thirdOptions, SECOND_OPTIONS, RELEASE_LABEL, STD_V, SPECIAL_V, AUX, auxLabel,
   LANGS, AH3_EXTRAS, type Ah3State, type Release,
@@ -18,11 +19,13 @@ interface Props {
   fromProject: Ah3State;
   saved?: BreakerCodeRecord;
   onSave: (record: BreakerCodeRecord) => void;
+  /** An order code the rules add, taken off (or put back) for the scope. */
+  onScopeCodeOff?: (code: string, on: boolean) => void;
 }
 
 const VOLTAGES = [...STD_V, ...SPECIAL_V];
 
-export const Ah3Builder: React.FC<Props> = ({ initial, fromProject, saved, onSave }) => {
+export const Ah3Builder: React.FC<Props> = ({ initial, fromProject, saved, onSave, onScopeCodeOff }) => {
   const [s, setS] = useState<Ah3State>(initial);
   const [showExtras, setShowExtras] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -85,8 +88,36 @@ export const Ah3Builder: React.FC<Props> = ({ initial, fromProject, saved, onSav
               </span>
             </React.Fragment>
           ))}
-          {r.orderCodes.length > 0 && (
-            <span className="ml-2 pb-1 font-mono text-sm text-gray-800">-Z {r.orderCodes.join('+')}</span>
+          {(r.orderCodes.length > 0 || r.removed.length > 0) && (
+            <span className="flex items-end gap-1.5 ml-2 shrink-0">
+              <span className="font-mono text-xl text-gray-500 pb-1">-Z</span>
+              {[...r.orderCodes, ...r.removed].map(c => {
+                const on = r.orderCodes.includes(c);
+                const own = s.extras.includes(c);
+                return (
+                  <label
+                    key={c}
+                    title={on
+                      ? (own ? 'Untick to take this option off this breaker' : 'Untick to take it off — the rules add it; it stays off for every breaker of this scope')
+                      : 'Taken off — tick to put it back'}
+                    className={`flex items-center gap-1 font-mono text-sm font-semibold px-1.5 py-1 mb-1 rounded border cursor-pointer ${
+                      on ? 'bg-gray-100 border-gray-200 text-gray-800' : 'bg-white border-dashed border-gray-300 text-gray-500 line-through'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={e => {
+                        const v = e.target.checked;
+                        if (!v && own) { set('extras', s.extras.filter(x => x !== c)); return; }
+                        setS(prev => ({ ...prev, off: v ? (prev.off ?? []).filter(x => x !== c) : [...new Set([...(prev.off ?? []), c])] }));
+                        onScopeCodeOff?.(c, v);
+                      }}
+                    />
+                    {c}
+                  </label>
+                );
+              })}
+            </span>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-3 mt-2 text-sm">
@@ -164,6 +195,8 @@ export const Ah3Builder: React.FC<Props> = ({ initial, fromProject, saved, onSav
         </section>
       </div>
 
+      <StockConvert wanted={r.code} family="3AH3" />
+
       {/* Additional equipment */}
       <section className="border border-gray-200 rounded-md">
         <button
@@ -182,7 +215,14 @@ export const Ah3Builder: React.FC<Props> = ({ initial, fromProject, saved, onSav
                 <input
                   type="checkbox"
                   checked={s.extras.includes(c)}
-                  onChange={e => set('extras', e.target.checked ? [...s.extras, c] : s.extras.filter(x => x !== c))}
+                  onChange={e => {
+                    const v = e.target.checked;
+                    setS(prev => ({
+                      ...prev,
+                      extras: v ? [...prev.extras, c] : prev.extras.filter(x => x !== c),
+                      off: v ? (prev.off ?? []).filter(x => x !== c) : prev.off,
+                    }));
+                  }}
                   className="mt-0.5"
                 />
                 <span><span className="font-mono text-gray-900">{c}</span> {l}</span>
