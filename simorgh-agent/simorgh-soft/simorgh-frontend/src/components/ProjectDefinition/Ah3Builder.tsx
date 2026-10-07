@@ -6,7 +6,6 @@
 import React, { useMemo, useState } from 'react';
 import { ChevronDownIcon, ChevronRightIcon, CopyIcon } from 'lucide-react';
 import type { BreakerCodeRecord } from '../../types/project';
-import { StockConvert } from './StockConvert';
 import {
   evaluateAh3, primaryOptions, thirdOptions, SECOND_OPTIONS, RELEASE_LABEL, STD_V, SPECIAL_V, AUX, auxLabel,
   LANGS, AH3_EXTRAS, type Ah3State, type Release,
@@ -194,8 +193,6 @@ export const Ah3Builder: React.FC<Props> = ({ initial, fromProject, saved, onSav
           </div>
         </section>
       </div>
-
-      <StockConvert wanted={r.code} family="3AH3" />
 
       {/* Additional equipment */}
       <section className="border border-gray-200 rounded-md">

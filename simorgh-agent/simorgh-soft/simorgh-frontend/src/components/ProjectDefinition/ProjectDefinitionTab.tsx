@@ -18,6 +18,7 @@ import { readSpecUpdateFromTpms, TpmsSpecUpdate } from '../../services/tpmsSync'
 import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, emptyTiers } from '../../utils/tiers';
 import { TEMPLATE_FAMILIES } from '../../utils/templateFamilies';
 import { BreakerCodeTab } from './BreakerCodeTab';
+import { StockCompareTab } from './StockCompareTab';
 import {
   OFFICE_CHOICES, OFFICE_ALIASES, type FieldRule, type WorldSiteInfo,
 } from '../../utils/sion3ae5/simoprimeWorldScope';
@@ -117,7 +118,7 @@ const PropCheckbox: React.FC<PropCheckboxProps> = ({ propKey, label, checked, is
 // ──────────────────────────────────────────────────────────────
 // Constants
 // ──────────────────────────────────────────────────────────────
-type SubTab = 'project-data' | 'device-library' | 'breaker-code';
+type SubTab = 'project-data' | 'device-library' | 'breaker-code' | 'stock-compare';
 
 const DEFAULT_TECH_SETTINGS: TechSettings = {
   general:          { altitudeAboveSeaLevel: '1000', designTemperature: '45' },
@@ -1402,6 +1403,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           { id: 'project-data'   as SubTab, label: '📋 Project Data' },
           { id: 'device-library' as SubTab, label: '📦 Scope Library' },
           { id: 'breaker-code'   as SubTab, label: '⚡ Breaker Code' },
+          { id: 'stock-compare'  as SubTab, label: '🔁 Stock Compare' },
         ] as const).map(tab => (
           <button
             key={tab.id}
@@ -1440,6 +1442,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           onUpdate={updateLib}
         />
       )}
+      {activeSubTab === 'stock-compare' && <StockCompareTab projectData={projectData} />}
 
       {/* What TPMS would change, before it changes it. */}
       {(tpmsUpdate.busy || tpmsUpdate.result || tpmsUpdate.error) && (

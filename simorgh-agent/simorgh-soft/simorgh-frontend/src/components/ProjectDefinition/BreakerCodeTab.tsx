@@ -15,7 +15,6 @@ import {
   evaluate, setField, confirm, toggleExtra, toggleCode, fieldOptions, EXTRAS, FIELD_LABEL, FORM_GROUPS,
   type SionState, type FieldStatus,
 } from '../../utils/sion3ae5/engine';
-import { StockConvert } from './StockConvert';
 import { specFromProject, decodeDraft, familyOf, worldPanelFor, equipmentOf } from '../../utils/sion3ae5/fromProject';
 import { catalogueOf } from '../../utils/sion3ae5/catalogue';
 import { ah3FromProject, evaluateAh3, type Ah3State } from '../../utils/sion3ae5/ah3';
@@ -401,8 +400,6 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
           </div>
         </div>
       )}
-
-      {result && <StockConvert wanted={result.code} family="3AE5" />}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="space-y-4">
