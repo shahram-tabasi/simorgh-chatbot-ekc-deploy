@@ -15,7 +15,8 @@ import {
   evaluate, setField, confirm, toggleExtra, fieldOptions, EXTRAS, FIELD_LABEL, FORM_GROUPS,
   type SionState, type FieldStatus,
 } from '../../utils/sion3ae5/engine';
-import { specFromProject, equipmentOf, decodeDraft, scopeFamily, worldPanelFor } from '../../utils/sion3ae5/fromProject';
+import { specFromProject, decodeDraft, familyOf, worldPanelFor, equipmentOf } from '../../utils/sion3ae5/fromProject';
+import { catalogueOf } from '../../utils/sion3ae5/catalogue';
 import { panelKindLabel } from '../../utils/sion3ae5/simoprimeWorld';
 import { ROLE_LABEL, SOURCE_LABEL, HAS_BREAKER } from '../../utils/sion3ae5/cells';
 
@@ -42,8 +43,9 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
   const row = rows.find(r => r.id === rowId);
 
   const draft = useMemo(() => (scope ? specFromProject(projectData, scope, row) : null), [scope, row, projectData]);
-  // SIMOPRIME World: every cell's panel, straight from the design catalogue.
-  const isWorld = !!scope && scopeFamily(scope, String((equipmentOf(projectData, scope)?.properties?.tpms as any)?.switchgearType ?? '')) === 'SIMOPRIME-WORLD';
+  // SIMOPRIME World / A4: every cell's panel, straight from the design catalogue.
+  const cat = scope ? catalogueOf(familyOf(projectData, scope)) : null;
+  const isWorld = !!cat;
   // …and each breaker cell's code as the rules and defaults give it, so the
   // whole switchgear is read at a glance and saved in one go.
   const panels = useMemo(() => {
@@ -179,17 +181,16 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
         </button>
       </div>
 
-      {/* SIMOPRIME World: the panel of every cell */}
-      {isWorld && panels.length > 0 && (
+      {/* SIMOPRIME World / A4: the panel of every cell */}
+      {cat && panels.length > 0 && (
         <section className="border border-gray-200 rounded-md overflow-hidden">
           <header className="flex items-center gap-3 px-3 py-2 bg-gray-50 border-b border-gray-200">
-            <h4 className="text-sm font-medium text-gray-800"
-              title="SIMOPRIME World design catalogue (issue 23, 06/2026): table 3.7 picks the typical, width, ventilation and breaker from the cell's current at the design temperature and frequency; 2.2.3.3 withdrawable VTs; 2.2.2.9 mandatory order codes. Click a cell to open its code below.">
-              Cells — SIMOPRIME World
+            <h4 className="text-sm font-medium text-gray-800" title={cat.cellsAbout}>
+              Cells — {cat.name}
             </h4>
-            <span className="text-xs text-gray-600" title="Option points the catalogue leaves open: 1 shunt release, no 2nd or 3rd release, fixed-mounted breaker (W66), 12 NO + 12 NC, 64-pole plug, English — change any of them on a cell's code">
+            {cat.family === 'SIMOPRIME-WORLD' && <span className="text-xs text-gray-600" title="Option points the catalogue leaves open: 1 shunt release, no 2nd or 3rd release, fixed-mounted breaker (W66), 12 NO + 12 NC, 64-pole plug, English — change any of them on a cell's code">
               Defaults: 1 shunt release · W66 fixed · 12 NO + 12 NC · 64-pole · English
-            </span>
+            </span>}
             <button
               onClick={saveAll}
               title="Keep every breaker cell's code with the scope — cells already saved keep theirs"
@@ -247,8 +248,7 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
                         className={`border rounded px-1 py-0.5 text-xs bg-white focus:outline-none focus:border-blue-500 ${p.manual?.width ? 'border-gray-500 font-semibold text-gray-900' : 'border-gray-300 text-gray-700'}`}
                       >
                         <option value="">{p.manual?.width ? 'Auto' : `${p.width ?? '—'} (auto)`}</option>
-                        <option value="600">600</option>
-                        <option value="800">800</option>
+                        {cat.widths.map(w => <option key={w} value={w}>{w}</option>)}
                       </select>
                     </td>
                     <td className="px-2 py-1 whitespace-nowrap" onClick={e => e.stopPropagation()}>
@@ -257,7 +257,7 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
                         <select
                           value={scope?.cellPanels?.[r.id]?.ventilation ?? ''}
                           onChange={e => setCellPanel(r.id, 'ventilation', e.target.value)}
-                          title={p.manual?.ventilation ? 'Set by hand — choose Auto to go back to the catalogue' : 'From the catalogue (table 3.7) — choose one to set it by hand'}
+                          title={p.manual?.ventilation ? 'Set by hand — choose Auto to go back to the catalogue' : `From the catalogue (${cat.table}) — choose one to set it by hand`}
                           className={`border rounded px-1 py-0.5 text-xs bg-white focus:outline-none focus:border-blue-500 ${
                             p.manual?.ventilation ? 'border-gray-500 font-semibold text-gray-900'
                               : p.ventilation !== 'Without' ? 'border-gray-300 font-semibold text-gray-900' : 'border-gray-300 text-gray-600'}`}

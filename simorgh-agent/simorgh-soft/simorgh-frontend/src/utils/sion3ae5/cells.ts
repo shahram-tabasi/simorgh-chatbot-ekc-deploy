@@ -14,18 +14,20 @@ import type { DeviceLibraryItem, DeviceTableRow } from '../../types/project';
 
 export type CellRole =
   | 'incomer' | 'coupler' | 'motor' | 'transformer' | 'capacitor' | 'outgoing'
-  | 'metering' | 'bus-riser' | 'bus-connection' | 'contactor' | 'dummy';
+  | 'metering' | 'bus-riser' | 'bus-connection' | 'contactor' | 'load-break' | 'fused-load-break' | 'dummy';
 
 export const ROLE_LABEL: Record<CellRole, string> = {
   incomer: 'Incomer', coupler: 'Bus coupler', motor: 'Motor feeder', transformer: 'Transformer feeder',
   capacitor: 'Capacitor feeder', outgoing: 'Outgoing feeder', metering: 'Metering', 'bus-riser': 'Bus riser',
-  'bus-connection': 'Bus connection', contactor: 'Contactor (CFC)', dummy: 'Dummy',
+  'bus-connection': 'Bus connection', contactor: 'Contactor (CFC)', 'load-break': 'Load-break switch',
+  'fused-load-break': 'Fused load-break switch', dummy: 'Dummy',
 };
 
 /** Roles whose panel carries a circuit-breaker. */
 export const HAS_BREAKER: Record<CellRole, boolean> = {
   incomer: true, coupler: true, motor: true, transformer: true, capacitor: true, outgoing: true,
-  metering: false, 'bus-riser': false, 'bus-connection': false, contactor: false, dummy: false,
+  metering: false, 'bus-riser': false, 'bus-connection': false, contactor: false,
+  'load-break': false, 'fused-load-break': false, dummy: false,
 };
 
 /** What the template name says the cell is. */
@@ -36,6 +38,8 @@ export function cellRole(templateName = ''): CellRole {
   if (/\bMET(ER(ING)?)?\b|\bMEASUR/.test(t)) return 'metering';
   if (/\bDUMMY\b/.test(t)) return 'dummy';
   if (/CONTACTOR|\bCFC\b/.test(t)) return 'contactor';
+  if (/\bFLBS\b|FUSED\s*(LOAD|LBS|SWITCH)|SWITCH\s*-?\s*FUSE/.test(t)) return 'fused-load-break';
+  if (/\bLBS\b|LOAD\s*-?\s*BREAK/.test(t)) return 'load-break';
   if (/\bINC(OMING|OMER)?\b|\bINCOMMING\b/.test(t)) return 'incomer';
   if (/\bCOUP(LER|LING)?\b|\bB\.?\s*C\b|SECTIONALI[SZ]ER|BUS\s*SECTION/.test(t)) return 'coupler';
   if (/MOTOR|\bMOT\b/.test(t)) return 'motor';

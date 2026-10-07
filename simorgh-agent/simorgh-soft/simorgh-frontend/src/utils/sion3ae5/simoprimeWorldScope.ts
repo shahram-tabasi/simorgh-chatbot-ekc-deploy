@@ -61,7 +61,7 @@ const DURATION = [1, 3];
 const kvText = (v: number) => `${v % 1 ? v.toFixed(1) : v} kV`;
 
 // ── 1.5 ─────────────────────────────────────────────────────────────────
-const SUPPLY = ['DC 24 V', 'DC 30 V', 'DC 32 V', 'DC 48 V', 'DC 60 V', 'DC 110 V', 'DC 120 V', 'DC 125 V',
+export const SUPPLY = ['DC 24 V', 'DC 30 V', 'DC 32 V', 'DC 48 V', 'DC 60 V', 'DC 110 V', 'DC 120 V', 'DC 125 V',
   'DC 127 V', 'DC 220 V', 'DC 240 V', 'AC 100 V', 'AC 110 V', 'AC 120 V', 'AC 125 V', 'AC 230 V', 'AC 240 V'];
 const HEATER = ['AC 220–240 V', 'AC 110 V'];
 

@@ -19,8 +19,9 @@ import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, emptyTiers } from 
 import { TEMPLATE_FAMILIES } from '../../utils/templateFamilies';
 import { BreakerCodeTab } from './BreakerCodeTab';
 import {
-  applyWorldRules, isAllowed, worldFieldRule, WORLD_FIELDS, OFFICE_CHOICES, OFFICE_ALIASES, type FieldRule, type WorldSiteInfo,
+  OFFICE_CHOICES, OFFICE_ALIASES, type FieldRule, type WorldSiteInfo,
 } from '../../utils/sion3ae5/simoprimeWorldScope';
+import { catalogueOf, allowedIn } from '../../utils/sion3ae5/catalogue';
 import { scopeVentilation, scopeCells } from '../../utils/sion3ae5/fromProject';
 import { appConfirm } from '../shared/AppDialog';
 
@@ -140,11 +141,11 @@ interface DevicePropertiesModalProps {
   /** The device whose specification was copied, if any — see SpecClipboard. */
   clip:      DeviceLibraryItem | null;
   onCopy:    (item: DeviceLibraryItem) => void;
-  /** The AIS family the scope is filed under — SIMOPRIME-WORLD holds the
-   *  form to that catalogue. */
+  /** The AIS family the scope is filed under — SIMOPRIME-WORLD and
+   *  SIMOPRIME-A4 hold the form to their design catalogues. */
   family?:   string | null;
   site?:     WorldSiteInfo;
-  /** SIMOPRIME World: the ventilation its cells need, and why. */
+  /** SIMOPRIME World / A4: the ventilation its cells need, and why. */
   ventilation?: { value: string; why: string } | null;
   /** What the project gives a scope that has not said otherwise. */
   defaults?: { designTemperature?: string; numberOfCells?: string };
@@ -185,28 +186,29 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
   // window (and two columns of fields) instead of a 760px dialog.
   const [fullScreen, setFullScreen] = useState(false);
 
-  // SIMOPRIME World: the catalogue's dropdowns, and what one choice settles.
-  const world = family === 'SIMOPRIME-WORLD' && type === 'MV';
+  // SIMOPRIME World / A4: the catalogue's dropdowns, and what one choice settles.
+  const cat = type === 'MV' ? catalogueOf(family) : null;
+  const world = !!cat;
   const [autos, setAutos] = useState<Set<string>>(() => new Set((item?.properties as any)?.catalogueAuto ?? []));
   // The site, and what the scope's cells already need.
   const worldSite: WorldSiteInfo = { ...site, cellsVentilation: ventilation?.value ?? null };
 
   const setProp = (key: keyof DeviceLibraryProperties, value: string | boolean) => {
     const next = { ...props, [key]: value };
-    if (!world) { setProps(next); return; }
-    const r = applyWorldRules(next, key as string, autos, worldSite);
+    if (!cat) { setProps(next); return; }
+    const r = cat.apply(next, key as string, autos, worldSite);
     setProps(r.props);
     setAutos(r.autos);
   };
 
   // Opening a scope to edit: a value written another way ("yes", "tin
-  // plated") takes the dropdown's spelling, and for a World scope the
+  // plated") takes the dropdown's spelling, and for a World or A4 scope the
   // catalogue fills in what it alone decides.
   useEffect(() => {
     if (mode === 'view') return;
     const fixed: Record<string, any> = { ...props };
     Object.keys(fixed).forEach(k => {
-      const rule = (world && WORLD_FIELDS.includes(k) ? worldFieldRule(k, fixed, site) : null) ?? OFFICE_CHOICES[k];
+      const rule = (cat?.fields.includes(k) ? cat.fieldRule(k, fixed, site) : null) ?? OFFICE_CHOICES[k];
       const v = String(fixed[k] ?? '').trim().toLowerCase();
       const alias = OFFICE_ALIASES[k]?.[v];
       const hit = rule?.options.find(o => o.value.toLowerCase() === (alias ?? v).toLowerCase());
@@ -221,16 +223,16 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
     });
     fixed.catalogueAuto = [...auto];
     setAutos(prev => new Set([...prev, ...auto]));
-    if (!world) { setProps(fixed as DeviceLibraryProperties); return; }
-    const r = applyWorldRules(fixed as DeviceLibraryProperties, null, new Set(), worldSite);
+    if (!cat) { setProps(fixed as DeviceLibraryProperties); return; }
+    const r = cat.apply(fixed as DeviceLibraryProperties, null, new Set(), worldSite);
     setProps(r.props);
     setAutos(r.autos);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [world, mode === 'view']);
+  }, [cat?.family, mode === 'view']);
 
   /** One specification field: the catalogue's dropdown where it speaks, else text. */
   const F = (key: keyof DeviceLibraryProperties, label: string) => {
-    const rule = (world && WORLD_FIELDS.includes(key as string) ? worldFieldRule(key as string, props, site) : null)
+    const rule = (cat?.fields.includes(key as string) ? cat.fieldRule(key as string, props, site) : null)
       ?? OFFICE_CHOICES[key as string] ?? null;
     const value = String((props as any)[key] ?? '');
     if (!rule) {
@@ -239,7 +241,7 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
     return (
       <CatalogueField
         key={key as string} label={label} value={value} isEditable={isEditable} rule={rule}
-        allowed={world ? isAllowed(key as string, props, site) : !value || rule.options.some(o => o.value === value)}
+        allowed={cat ? allowedIn(cat, key as string, props, site) : !value || rule.options.some(o => o.value === value)}
         auto={autos.has(key as string)}
         onChange={v => setProp(key, v)}
       />
@@ -304,10 +306,9 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
             {mode !== 'add' && (
               <span className={`text-xs px-2 py-0.5 rounded font-semibold ${typeColor}`}>{type}</span>
             )}
-            {world && (
-              <span className="text-xs text-gray-600"
-                title="SIMOPRIME World design catalogue (issue 23, 06/2026): each field offers only what the catalogue allows with the rest, and one choice fills in what it settles (1.1 technical data, 1.2 busbars, 1.3 design, 1.5 supply voltages, 3.2 dimensions, 3.8 busbar currents)">
-                SIMOPRIME World catalogue
+            {cat && (
+              <span className="text-xs text-gray-600" title={cat.about}>
+                {cat.name} catalogue
               </span>
             )}
           </div>
@@ -1309,7 +1310,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
             ? deviceModal.addFamily ?? null
             : deviceModal.item ? scopeFamily(deviceModal.item) : null}
           site={{ ambientC: parseFloat(String(projectData.techSettings?.general?.designTemperature ?? '')) || null }}
-          ventilation={deviceModal.item && scopeFamily(deviceModal.item) === 'SIMOPRIME-WORLD'
+          ventilation={deviceModal.item && catalogueOf(scopeFamily(deviceModal.item))
             ? scopeVentilation(projectData, deviceModal.item) : null}
           defaults={{
             designTemperature: String(projectData.techSettings?.general?.designTemperature ?? '') || undefined,

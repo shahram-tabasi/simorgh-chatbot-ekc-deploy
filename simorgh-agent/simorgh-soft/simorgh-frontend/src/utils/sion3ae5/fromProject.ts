@@ -17,6 +17,7 @@ import { stripLocaleTags } from '../tierEquipmentMatrix';
 import { TIERS } from '../tiers';
 import { decode, type SionState } from './engine';
 import { worldPanel, type WorldPanel, type PanelKind } from './simoprimeWorld';
+import { catalogueOf } from './catalogue';
 import { cellRole, cellCurrent, HAS_BREAKER, type CellRole, type CellCurrent } from './cells';
 
 const KV_STEPS = [7.2, 12, 17.5, 24];
@@ -103,8 +104,14 @@ export function scopeRatings(data: ProjectData, item: DeviceLibraryItem): { kv: 
 const KIND_OF: Record<CellRole, PanelKind> = {
   incomer: 'circuit-breaker', coupler: 'circuit-breaker', motor: 'circuit-breaker', transformer: 'circuit-breaker',
   capacitor: 'circuit-breaker', outgoing: 'circuit-breaker', metering: 'metering', 'bus-riser': 'bus-riser',
-  'bus-connection': 'bus-connection', contactor: 'contactor', dummy: 'dummy',
+  'bus-connection': 'bus-connection', contactor: 'contactor', 'load-break': 'load-break',
+  'fused-load-break': 'fused-load-break', dummy: 'dummy',
 };
+
+/** A scope's family, reading its TPMS switchgear type too. */
+export function familyOf(data: ProjectData, item: DeviceLibraryItem): string | null {
+  return scopeFamily(item, String((equipmentOf(data, item)?.properties?.tpms as any)?.switchgearType ?? ''));
+}
 
 /** A cell's role and current, as the project says them. */
 export function cellOf(data: ProjectData, item: DeviceLibraryItem, row: DeviceTableRow): { role: CellRole; current: CellCurrent } {
@@ -118,8 +125,9 @@ export function cellOf(data: ProjectData, item: DeviceLibraryItem, row: DeviceTa
   return { role, current: cellCurrent(item, row, role, feederBreakerText(data, row), item.cellCurrents?.[row.id]) };
 }
 
-/** SIMOPRIME World: the panel of one cell (or, for the switchgear as a
- *  whole, of a breaker carrying the busbar current). */
+/** The panel of one cell from its family's design catalogue — SIMOPRIME
+ *  World or A4 (or, for the switchgear as a whole, of a breaker carrying the
+ *  busbar current). */
 export function worldPanelFor(data: ProjectData, item: DeviceLibraryItem, row?: DeviceTableRow): WorldPanel & { role?: CellRole; current?: CellCurrent } {
   const p = (item.properties ?? {}) as Record<string, unknown>;
   const site = {
@@ -128,10 +136,12 @@ export function worldPanelFor(data: ProjectData, item: DeviceLibraryItem, row?: 
     ambientC: num(p.designTemperature) ?? num(data.techSettings?.general?.designTemperature),
     frequencyHz: num(p.frequency),
     frontAccess: /^front/i.test(String(p.switchgearAccess ?? '')),
+    busbarA: num(p.mainBusbarRatedCurrent),
   };
-  if (!row) return worldPanel('circuit-breaker', num(p.mainBusbarRatedCurrent), site);
+  const panelOf = catalogueOf(familyOf(data, item))?.panel ?? worldPanel;
+  if (!row) return panelOf('circuit-breaker', num(p.mainBusbarRatedCurrent), site);
   const { role, current } = cellOf(data, item, row);
-  const panel = worldPanel(KIND_OF[role], current.value, site, item.cellPanels?.[row.id]);
+  const panel = panelOf(KIND_OF[role], current.value, site, item.cellPanels?.[row.id]);
   if (current.note) panel.notes.unshift(current.note);
   return { ...panel, role, current };
 }
@@ -166,9 +176,9 @@ export function specFromProject(data: ProjectData, item: DeviceLibraryItem, row?
       if (ka !== kaRaw) { assumed.push('ka'); notes.push(`Short-circuit current ${kaRaw} kA raised to the 3AE5 step ${ka} kA.`); }
     }
   }
-  // SIMOPRIME World: the cell's panel picks the breaker from the catalogue.
+  // SIMOPRIME World / A4: the cell's panel picks the breaker from the catalogue.
   const family = scopeFamily(item, String(tpms.switchgearType ?? ''));
-  const panel = family === 'SIMOPRIME-WORLD' ? family : null;
+  const panel = catalogueOf(family) ? family : null;
   const world = panel ? worldPanelFor(data, item, row) : undefined;
   // The feeder's own breaker, when its template has one, says the most.
   const breaker = row ? feederBreakerText(data, row) : '';
@@ -194,7 +204,7 @@ export function specFromProject(data: ProjectData, item: DeviceLibraryItem, row?
   if (hz === 50 || hz === 60) parts.push(`${hz}HZ`);
   // Which switchgear it goes into.
   if (family?.startsWith('SIMOPRIME')) parts.push('FOR SIMOPRIME');
-  if (world?.breaker) notes.push(`SIMOPRIME World design catalogue: ${world.breaker[0]} in a ${world.width} mm panel.`);
+  if (world?.breaker) notes.push(`${catalogueOf(family)?.name} design catalogue: ${world.breaker[0]} in a ${world.width} mm panel.`);
 
   return { text: parts.join(', '), assumed, notes, panel, world };
 }
@@ -223,14 +233,22 @@ export function decodeDraft(text: string, draft?: Pick<DraftSpec, 'assumed' | 'p
       s.kv = b[1]; s.ka = b[2]; s.pcd = b[3]; s.vdt = b[4]; s.ir = b[5];
       (['kv', 'ka', 'pcd', 'vdt', 'ir'] as const).forEach(f => { s.st[f] = 'found'; });
     }
+  } else if (draft?.panel === 'SIMOPRIME-A4') {
+    // The A4 catalogue names the 3AH5; its panel still fixes the 3AE5's
+    // ratings and phase centres. Everything else is the builder's as usual.
+    const b = draft.world?.breaker;
+    if (b) {
+      s.kv = b[1]; s.ka = b[2]; s.pcd = b[3]; s.vdt = b[4]; s.ir = b[5];
+      (['kv', 'ka', 'pcd', 'vdt', 'ir'] as const).forEach(f => { s.st[f] = 'found'; });
+    }
   }
   return s;
 }
 
 /**
- * A SIMOPRIME World scope's type of ventilation: the most demanding of its
- * cells (table 3.7), or — before it has cells — what its busbar asks for
- * (a 4000 A busbar is force-ventilated).
+ * A SIMOPRIME World or A4 scope's type of ventilation: the most demanding of
+ * its cells (World table 3.7, A4 table 2.2), or — before it has cells — what
+ * its busbar asks for (a 4000 A busbar is force-ventilated).
  */
 export function scopeVentilation(data: ProjectData, item: DeviceLibraryItem): { value: string; why: string } {
   const rank = { Without: 0, Natural: 1, Forced: 2 } as const;
@@ -241,17 +259,18 @@ export function scopeVentilation(data: ProjectData, item: DeviceLibraryItem): { 
     const panel = worldPanelFor(data, item, r);
     if (rank[panel.ventilation] > rank[best]) { best = panel.ventilation; because = r.feederNo || r.templateName; }
   }
+  const table = catalogueOf(familyOf(data, item))?.table ?? 'table 3.7';
   if (rows.length) {
-    return { value: best, why: best === 'Without' ? `None of its ${rows.length} cells needs ventilation (table 3.7).` : `Cell ${because} needs ${best.toLowerCase()} ventilation (table 3.7).` };
+    return { value: best, why: best === 'Without' ? `None of its ${rows.length} cells needs ventilation (${table}).` : `Cell ${because} needs ${best.toLowerCase()} ventilation (${table}).` };
   }
   const busbar = num((item.properties as any)?.mainBusbarRatedCurrent);
   if (busbar === 4000) return { value: 'Forced', why: 'A 4000 A busbar needs forced ventilation.' };
-  return { value: 'Without', why: 'No cells yet — from the incomer panel for the busbar current (table 3.7).' };
+  return { value: 'Without', why: `No cells yet — from the incomer panel for the busbar current (${table}).` };
 }
 
 /**
- * A scope's cells: how many, each one's width (SIMOPRIME World from the
- * catalogue or the engineer's choice; other switchgears from what was set
+ * A scope's cells: how many, each one's width (SIMOPRIME World and A4 from
+ * the catalogue or the engineer's choice; other switchgears from what was set
  * per cell), and the switchgear's total width.
  */
 export function scopeCells(data: ProjectData, item: DeviceLibraryItem): {
@@ -259,7 +278,7 @@ export function scopeCells(data: ProjectData, item: DeviceLibraryItem): {
 } {
   const rows = equipmentOf(data, item)?.devices ?? [];
   const tpms = (equipmentOf(data, item)?.properties?.tpms ?? {}) as Record<string, any>;
-  const world = scopeFamily(item, String(tpms.switchgearType ?? '')) === 'SIMOPRIME-WORLD';
+  const world = !!catalogueOf(scopeFamily(item, String(tpms.switchgearType ?? '')));
   const widths = rows.map(r => (world ? worldPanelFor(data, item, r).width : item.cellPanels?.[r.id]?.width ?? null) ?? null);
   const count = rows.length || num((item.properties as any)?.numberOfCells) || num(tpms.cellCount) || null;
   return {

@@ -18,7 +18,9 @@
 import { DATA, type PrimaryRow } from './data';
 
 export type Ventilation = 'Without' | 'Natural' | 'Forced';
-export type PanelKind = 'circuit-breaker' | 'contactor' | 'metering' | 'bus-riser' | 'bus-connection' | 'dummy';
+export type PanelKind =
+  | 'circuit-breaker' | 'contactor' | 'metering' | 'bus-riser' | 'bus-connection'
+  | 'load-break' | 'fused-load-break' | 'dummy';
 
 export interface WorldPanel {
   kind: PanelKind;
@@ -49,6 +51,8 @@ const KIND_LABEL: Record<PanelKind, string> = {
   metering: 'Metering panel',
   'bus-riser': 'Bus riser panel',
   'bus-connection': 'Bus connection panel',
+  'load-break': 'Load-break switch panel',
+  'fused-load-break': 'Fused load-break switch panel',
   dummy: 'Dummy panel',
 };
 export const panelKindLabel = (k: PanelKind) => KIND_LABEL[k];
@@ -133,6 +137,8 @@ export interface WorldSite {
   frequencyHz: number | null;
   /** Front cable access — withdrawable VTs are not possible then (2.1.1, fn 2). */
   frontAccess?: boolean;
+  /** The main busbar's rated current — no feeder may carry more (A4 2.1.2). */
+  busbarA?: number | null;
 }
 
 export function worldPanel(kind: PanelKind, feederA: number | null, site: WorldSite, choice: PanelChoice = {}): WorldPanel {
@@ -158,6 +164,10 @@ function worldPanelAuto(kind: PanelKind, feederA: number | null, site: WorldSite
   if (kind === 'metering') { p.width = forty ? 800 : 600; return p; }
   if (kind === 'contactor') { p.width = 600; p.typicalA = 400; return p; }
   if (kind === 'dummy') { notes.push('Dummy panel: not in the design catalogue — width as the layout needs.'); return p; }
+  if (kind === 'load-break' || kind === 'fused-load-break') {
+    notes.push(`${KIND_LABEL[kind]}: not in the SIMOPRIME World catalogue — width as the layout needs.`);
+    return p;
+  }
   if (kind === 'bus-riser') {
     // 600 mm, except beside a 2500 A sectionalizer or at 4000 A (2.2, fn 11).
     p.width = (feederA ?? 0) > 1600 ? 800 : 600;
