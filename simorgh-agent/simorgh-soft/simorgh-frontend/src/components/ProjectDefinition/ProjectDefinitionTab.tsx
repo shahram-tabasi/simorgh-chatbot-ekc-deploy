@@ -18,6 +18,9 @@ import { readSpecUpdateFromTpms, TpmsSpecUpdate } from '../../services/tpmsSync'
 import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, emptyTiers } from '../../utils/tiers';
 import { TEMPLATE_FAMILIES } from '../../utils/templateFamilies';
 import { BreakerCodeTab } from './BreakerCodeTab';
+import {
+  applyWorldRules, isAllowed, worldFieldRule, WORLD_FIELDS, type FieldRule, type WorldSiteInfo,
+} from '../../utils/sion3ae5/simoprimeWorldScope';
 import { appConfirm } from '../shared/AppDialog';
 
 // ──────────────────────────────────────────────────────────────
@@ -42,6 +45,51 @@ const PropField: React.FC<PropFieldProps> = ({ label, value, isEditable, onChang
     }
   </div>
 );
+
+/**
+ * A field held to a catalogue: a dropdown of what the catalogue allows, given
+ * the rest of the specification. A value it no longer allows stays visible,
+ * in red, until it is changed; one the form filled itself says so.
+ */
+interface CatalogueFieldProps {
+  label: string;
+  value: string;
+  isEditable: boolean;
+  rule: FieldRule;
+  allowed: boolean;
+  auto: boolean;
+  onChange: (v: string) => void;
+}
+const CatalogueField: React.FC<CatalogueFieldProps> = ({ label, value, isEditable, rule, allowed, auto, onChange }) => {
+  const known = rule.options.some(o => o.value === value);
+  return (
+    <div className="grid grid-cols-2 gap-3 items-start py-1 border-b border-gray-50">
+      <label className="text-sm text-gray-600 pt-1">{label}</label>
+      <div>
+        {isEditable ? (
+          <select
+            className={`${FIELD_CLS} bg-white ${!allowed ? 'border-red-400 text-red-700' : ''}`}
+            value={value}
+            onChange={e => onChange(e.target.value)}
+          >
+            <option value="">Choose…</option>
+            {!known && value && <option value={value}>{value} — not in the catalogue</option>}
+            {rule.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        ) : (
+          <span className={`${READ_CLS} ${!allowed ? 'text-red-700' : ''}`}>{value || '—'}</span>
+        )}
+        {(auto || !allowed || rule.note) && (
+          <p className={`text-[11px] mt-0.5 ${!allowed ? 'text-red-700' : 'text-gray-500'}`}>
+            {!allowed ? 'Not allowed with the rest of this specification. ' : ''}
+            {auto && allowed ? 'Set by the catalogue. ' : ''}
+            {rule.note ?? ''}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
 
 interface PropCheckboxProps {
   propKey: string;
@@ -91,6 +139,10 @@ interface DevicePropertiesModalProps {
   /** The device whose specification was copied, if any — see SpecClipboard. */
   clip:      DeviceLibraryItem | null;
   onCopy:    (item: DeviceLibraryItem) => void;
+  /** The AIS family the scope is filed under — SIMOPRIME-WORLD holds the
+   *  form to that catalogue. */
+  family?:   string | null;
+  site?:     WorldSiteInfo;
 }
 
 // Copying a specification is copying the whole device's; pasting it is either
@@ -115,7 +167,7 @@ function pasteSpec(
 }
 
 const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
-  item, mode: initialMode, addType, onSave, onClose, clip, onCopy
+  item, mode: initialMode, addType, onSave, onClose, clip, onCopy, family, site = { ambientC: null },
 }) => {
   const [mode,  setMode]  = useState<ModalMode>(initialMode);
   const [name,  setName]  = useState(item?.name ?? '');
@@ -126,8 +178,42 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
   // window (and two columns of fields) instead of a 760px dialog.
   const [fullScreen, setFullScreen] = useState(false);
 
-  const setProp = (key: keyof DeviceLibraryProperties, value: string | boolean) =>
-    setProps(prev => ({ ...prev, [key]: value }));
+  // SIMOPRIME World: the catalogue's dropdowns, and what one choice settles.
+  const world = family === 'SIMOPRIME-WORLD' && type === 'MV';
+  const [autos, setAutos] = useState<Set<string>>(new Set());
+
+  const setProp = (key: keyof DeviceLibraryProperties, value: string | boolean) => {
+    const next = { ...props, [key]: value };
+    if (!world) { setProps(next); return; }
+    const r = applyWorldRules(next, key as string, autos, site);
+    setProps(r.props);
+    setAutos(r.autos);
+  };
+
+  // Opening a World scope to edit fills in what the catalogue alone decides.
+  useEffect(() => {
+    if (!world || initialMode === 'view') return;
+    const r = applyWorldRules(props, null, new Set(), site);
+    setProps(r.props);
+    setAutos(r.autos);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [world]);
+
+  /** One specification field: the catalogue's dropdown where it speaks, else text. */
+  const F = (key: keyof DeviceLibraryProperties, label: string) => {
+    const rule = world && WORLD_FIELDS.includes(key as string) ? worldFieldRule(key as string, props, site) : null;
+    const value = String((props as any)[key] ?? '');
+    if (!rule) {
+      return <PropField key={key as string} label={label} value={value} isEditable={isEditable} onChange={v => setProp(key, v)} />;
+    }
+    return (
+      <CatalogueField
+        key={key as string} label={label} value={value} isEditable={isEditable} rule={rule}
+        allowed={isAllowed(key as string, props, site)} auto={autos.has(key as string)}
+        onChange={v => setProp(key, v)}
+      />
+    );
+  };
 
   // F11 toggles full screen, Esc steps back out of it before it closes the
   // dialog — so leaving full screen never loses what was typed.
@@ -186,6 +272,12 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
             </h3>
             {mode !== 'add' && (
               <span className={`text-xs px-2 py-0.5 rounded font-semibold ${typeColor}`}>{type}</span>
+            )}
+            {world && (
+              <span className="text-xs text-gray-600"
+                title="SIMOPRIME World design catalogue (issue 23, 06/2026): each field offers only what the catalogue allows with the rest, and one choice fills in what it settles (1.1 technical data, 1.2 busbars, 1.3 design, 1.5 supply voltages, 3.2 dimensions, 3.8 busbar currents)">
+                SIMOPRIME World catalogue
+              </span>
             )}
           </div>
           <div className="flex gap-2 items-center">
@@ -290,44 +382,44 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
         <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
           {activeSection === 'electrical' && (
             <div className={fullScreen ? 'grid grid-cols-2 gap-x-10' : ''}>
-              <PropField label="Rated Insulation Voltage"              value={props.ratedInsulationVoltage ?? ''}              isEditable={isEditable} onChange={v => setProp('ratedInsulationVoltage', v)} />
-              <PropField label="Service Voltage"                       value={props.serviceVoltage ?? ''}                       isEditable={isEditable} onChange={v => setProp('serviceVoltage', v)} />
-              <PropField label="Rated Power-Frequency Withstand Voltage" value={props.ratedPowerFrequencyWithstandVoltage ?? ''} isEditable={isEditable} onChange={v => setProp('ratedPowerFrequencyWithstandVoltage', v)} />
-              <PropField label="Frequency"                              value={props.frequency ?? ''}                              isEditable={isEditable} onChange={v => setProp('frequency', v)} />
-              <PropField label="Main Busbar Configuration"             value={props.mainBusbarConfiguration ?? ''}             isEditable={isEditable} onChange={v => setProp('mainBusbarConfiguration', v)} />
-              <PropField label="Main Busbar Rated Current"             value={props.mainBusbarRatedCurrent ?? ''}             isEditable={isEditable} onChange={v => setProp('mainBusbarRatedCurrent', v)} />
-              <PropField label="Rated Short Time Withstand Current"    value={props.ratedShortTimeWithstandCurrent ?? ''}    isEditable={isEditable} onChange={v => setProp('ratedShortTimeWithstandCurrent', v)} />
-              <PropField label="Isc"                                   value={props.isc ?? ''}                                   isEditable={isEditable} onChange={v => setProp('isc', v)} />
-              <PropField label="Height (mm)"                           value={props.height ?? ''}                           isEditable={isEditable} onChange={v => setProp('height', v)} />
-              <PropField label="Width (mm)"                            value={props.width ?? ''}                            isEditable={isEditable} onChange={v => setProp('width', v)} />
-              <PropField label="Depth (mm)"                            value={props.depth ?? ''}                            isEditable={isEditable} onChange={v => setProp('depth', v)} />
-              <PropField label="Rated Impulse Withstand Voltage"       value={props.ratedImpulseWithstandVoltage ?? ''}       isEditable={isEditable} onChange={v => setProp('ratedImpulseWithstandVoltage', v)} />
+              {F('ratedInsulationVoltage', 'Rated Insulation Voltage')}
+              {F('serviceVoltage', 'Service Voltage')}
+              {F('ratedPowerFrequencyWithstandVoltage', 'Rated Power-Frequency Withstand Voltage')}
+              {F('frequency', 'Frequency')}
+              {F('mainBusbarConfiguration', 'Main Busbar Configuration')}
+              {F('mainBusbarRatedCurrent', 'Main Busbar Rated Current')}
+              {F('ratedShortTimeWithstandCurrent', 'Rated Short Time Withstand Current')}
+              {F('isc', 'Isc')}
+              {F('height', 'Height (mm)')}
+              {F('width', 'Width (mm)')}
+              {F('depth', 'Depth (mm)')}
+              {F('ratedImpulseWithstandVoltage', 'Rated Impulse Withstand Voltage')}
             </div>
           )}
           {/* The three voltages that used to sit here now open the
               Electrical / Mechanical tab — they belong with the ratings. */}
           {activeSection === 'control' && (
             <div className={fullScreen ? 'grid grid-cols-2 gap-x-10' : ''}>
-              <PropField label="Control, Protection, Closing, Tripping & Signalling" value={props.controlProtectionClosingTrippingSignalling ?? ''} isEditable={isEditable} onChange={v => setProp('controlProtectionClosingTrippingSignalling', v)} />
-              <PropField label="Spring Charging Motor"                 value={props.springChargingMotor ?? ''}                 isEditable={isEditable} onChange={v => setProp('springChargingMotor', v)} />
-              <PropField label="Switchgear Lighting & Space Heater"    value={props.switchgearLightingSpaceHeater ?? ''}    isEditable={isEditable} onChange={v => setProp('switchgearLightingSpaceHeater', v)} />
-              <PropField label="Motors Space Heater"                   value={props.motorsSpaceHeater ?? ''}                   isEditable={isEditable} onChange={v => setProp('motorsSpaceHeater', v)} />
+              {F('controlProtectionClosingTrippingSignalling', 'Control, Protection, Closing, Tripping & Signalling')}
+              {F('springChargingMotor', 'Spring Charging Motor')}
+              {F('switchgearLightingSpaceHeater', 'Switchgear Lighting & Space Heater')}
+              {F('motorsSpaceHeater', 'Motors Space Heater')}
             </div>
           )}
           {activeSection === 'busbar' && (
             <div className={fullScreen ? 'grid grid-cols-2 gap-x-10' : ''}>
-              <PropField label="Main Busbar Size"       value={props.mainBusbarSize ?? ''}       isEditable={isEditable} onChange={v => setProp('mainBusbarSize', v)} />
-              <PropField label="Earth Busbar Size"      value={props.earthBusbarSize ?? ''}      isEditable={isEditable} onChange={v => setProp('earthBusbarSize', v)} />
-              <PropField label="Neutral Busbar Size"    value={props.neutralBusbarSize ?? ''}    isEditable={isEditable} onChange={v => setProp('neutralBusbarSize', v)} />
-              <PropField label="RAL"                    value={props.ral ?? ''}                    isEditable={isEditable} onChange={v => setProp('ral', v)} />
-              <PropField label="Incoming Connection"    value={props.incomingConnection ?? ''}    isEditable={isEditable} onChange={v => setProp('incomingConnection', v)} />
-              <PropField label="Outgoing Connection"    value={props.outgoingConnection ?? ''}    isEditable={isEditable} onChange={v => setProp('outgoingConnection', v)} />
-              <PropField label="IP"                     value={props.ip ?? ''}                     isEditable={isEditable} onChange={v => setProp('ip', v)} />
-              <PropField label="Switchgear Access"      value={props.switchgearAccess ?? ''}      isEditable={isEditable} onChange={v => setProp('switchgearAccess', v)} />
-              <PropField label="Switchgear Arrangement" value={props.switchgearArrangement ?? ''} isEditable={isEditable} onChange={v => setProp('switchgearArrangement', v)} />
-              <PropField label="Busbar Type"            value={props.busbarType ?? ''}            isEditable={isEditable} onChange={v => setProp('busbarType', v)} />
-              <PropField label="Thermofit Cover"        value={props.thermoFitCover ?? ''}        isEditable={isEditable} onChange={v => setProp('thermoFitCover', v)} />
-              <PropField label="Coating"                value={props.coating ?? ''}                isEditable={isEditable} onChange={v => setProp('coating', v)} />
+              {F('mainBusbarSize', 'Main Busbar Size')}
+              {F('earthBusbarSize', 'Earth Busbar Size')}
+              {F('neutralBusbarSize', 'Neutral Busbar Size')}
+              {F('ral', 'RAL')}
+              {F('incomingConnection', 'Incoming Connection')}
+              {F('outgoingConnection', 'Outgoing Connection')}
+              {F('ip', 'IP')}
+              {F('switchgearAccess', 'Switchgear Access')}
+              {F('switchgearArrangement', 'Switchgear Arrangement')}
+              {F('busbarType', 'Busbar Type')}
+              {F('thermoFitCover', 'Thermofit Cover')}
+              {F('coating', 'Coating')}
             </div>
           )}
           {activeSection === 'padlock' && (
@@ -1148,6 +1240,10 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           onClose={closeDeviceModal}
           clip={copiedDevice}
           onCopy={setCopiedDevice}
+          family={deviceModal.mode === 'add'
+            ? deviceModal.addFamily ?? null
+            : deviceModal.item ? scopeFamily(deviceModal.item) : null}
+          site={{ ambientC: parseFloat(String(projectData.techSettings?.general?.designTemperature ?? '')) || null }}
         />
       )}
 
