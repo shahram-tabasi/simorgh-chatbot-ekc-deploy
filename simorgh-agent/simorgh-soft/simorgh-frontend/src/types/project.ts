@@ -44,6 +44,9 @@ export interface DeviceLibraryProperties {
   /** Without / Natural / Forced — for SIMOPRIME World worked out from the
    *  cells (design catalogue table 3.7), the most demanding one. */
   ventilationType?: string;
+  /** Fields the catalogue filled itself (not the engineer) — they keep
+   *  following the catalogue until someone picks a value by hand. */
+  catalogueAuto?: string[];
   // Pad Lock Checkboxes
   padLockCbOnOff?: boolean;
   padLockCbTestService?: boolean;

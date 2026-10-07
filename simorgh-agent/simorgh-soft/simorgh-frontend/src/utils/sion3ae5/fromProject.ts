@@ -245,5 +245,5 @@ export function scopeVentilation(data: ProjectData, item: DeviceLibraryItem): { 
   }
   const busbar = num((item.properties as any)?.mainBusbarRatedCurrent);
   if (busbar === 4000) return { value: 'Forced', why: 'A 4000 A busbar needs forced ventilation.' };
-  return { value: 'Without', why: 'No cells yet — from the busbar alone.' };
+  return { value: 'Without', why: 'No cells yet — from the incomer panel for the busbar current (table 3.7).' };
 }

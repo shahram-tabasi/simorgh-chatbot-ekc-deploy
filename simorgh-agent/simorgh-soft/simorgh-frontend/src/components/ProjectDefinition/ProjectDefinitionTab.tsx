@@ -183,12 +183,14 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
 
   // SIMOPRIME World: the catalogue's dropdowns, and what one choice settles.
   const world = family === 'SIMOPRIME-WORLD' && type === 'MV';
-  const [autos, setAutos] = useState<Set<string>>(new Set());
+  const [autos, setAutos] = useState<Set<string>>(() => new Set((item?.properties as any)?.catalogueAuto ?? []));
+  // The site, and what the scope's cells already need.
+  const worldSite: WorldSiteInfo = { ...site, cellsVentilation: ventilation?.value ?? null };
 
   const setProp = (key: keyof DeviceLibraryProperties, value: string | boolean) => {
     const next = { ...props, [key]: value };
     if (!world) { setProps(next); return; }
-    const r = applyWorldRules(next, key as string, autos, site);
+    const r = applyWorldRules(next, key as string, autos, worldSite);
     setProps(r.props);
     setAutos(r.autos);
   };
@@ -206,12 +208,7 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
       if (hit && hit.value !== fixed[k]) fixed[k] = hit.value;
     });
     if (!world) { setProps(fixed as DeviceLibraryProperties); return; }
-    const r = applyWorldRules(fixed as DeviceLibraryProperties, null, new Set(), site);
-    // The ventilation its cells need, unless the engineer already chose one.
-    if (ventilation && !(r.props as any).ventilationType) {
-      (r.props as any).ventilationType = ventilation.value;
-      r.autos.add('ventilationType');
-    }
+    const r = applyWorldRules(fixed as DeviceLibraryProperties, null, new Set(), worldSite);
     setProps(r.props);
     setAutos(r.autos);
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -22,6 +22,7 @@
 // was filled the same way before. A value the engineer picked is never
 // overwritten; one the catalogue no longer allows is shown, and flagged.
 import type { DeviceLibraryProperties } from '../../types/project';
+import { worldPanel } from './simoprimeWorld';
 
 export interface FieldOption { value: string; label: string }
 export interface FieldRule {
@@ -32,6 +33,8 @@ export interface FieldRule {
 export interface WorldSiteInfo {
   /** Design (ambient) temperature, °C — Technical Settings. */
   ambientC: number | null;
+  /** The ventilation the scope's cells need, when it has cells. */
+  cellsVentilation?: string | null;
 }
 
 type Props = Record<string, any>;
@@ -143,7 +146,7 @@ export function worldFieldRule(key: string, p: Props, site: WorldSiteInfo): Fiel
     case 'width':
       return {
         options: (ka === 40 ? ['800'] : ['600', '800']).map(w => opt(w, `${w} mm`)),
-        note: ka === 40 ? 'At 40 kA every panel is 800 mm.' : 'By cell: 630 / 1000 A cells 600 mm, 1250 A and above 800 mm — see Breaker Code.',
+        note: ka === 40 ? 'At 40 kA every panel is 800 mm.' : 'From the incomer panel (busbar current, table 3.7); each cell’s own width is in Breaker Code.',
       };
     case 'depth':
       // 1860 is the catalogue's (3.2); 2460 is the office's second depth —
@@ -227,7 +230,8 @@ export function applyWorldRules(
   input: DeviceLibraryProperties, changed: string | null, autos: Set<string>, site: WorldSiteInfo,
 ): { props: DeviceLibraryProperties; autos: Set<string> } {
   const p: Props = { ...input };
-  const a = new Set(autos);
+  // What the catalogue filled before — saved with the scope — still follows it.
+  const a = new Set([...autos, ...((input as any).catalogueAuto ?? [])]);
   if (changed) a.delete(changed);
   const fill = (key: string, value: string) => {
     if (key === changed) return;
@@ -259,9 +263,28 @@ export function applyWorldRules(
   }
   ['mainBusbarSize', 'mainBusbarConfiguration', 'ral', 'ratedImpulseWithstandVoltage'].forEach(only);
   fill('depth', '1860');
+  // Width and ventilation: the incomer's panel, which carries the busbar
+  // current (table 3.7 at the design temperature); ventilation also takes the
+  // most demanding of the cells.
+  const busbar = num(p.mainBusbarRatedCurrent);
+  if (busbar && ur != null && ka != null) {
+    const incomer = worldPanel('circuit-breaker', busbar, {
+      kv: ur, ka, ambientC: site.ambientC, frequencyHz: num(p.frequency),
+      frontAccess: /^front/i.test(String(p.switchgearAccess ?? '')),
+    });
+    if (incomer.width) fill('width', String(incomer.width));
+    const rank = (v: unknown) => ['Without', 'Natural', 'Forced'].indexOf(String(v ?? 'Without'));
+    let vent = incomer.width ? incomer.ventilation : 'Without';
+    if (busbar >= 4000) vent = 'Forced';
+    if (site.cellsVentilation && rank(site.cellsVentilation) > rank(vent)) vent = site.cellsVentilation as any;
+    fill('ventilationType', vent);
+  } else if (site.cellsVentilation) {
+    fill('ventilationType', site.cellsVentilation);
+  }
   // A control voltage stands for the motor too until the motor is chosen.
   if (changed === 'controlProtectionClosingTrippingSignalling' && p.controlProtectionClosingTrippingSignalling) {
     fill('springChargingMotor', String(p.controlProtectionClosingTrippingSignalling));
   }
+  p.catalogueAuto = [...a];
   return { props: p as DeviceLibraryProperties, autos: a };
 }
