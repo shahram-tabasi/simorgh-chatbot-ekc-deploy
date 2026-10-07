@@ -146,7 +146,15 @@ export function worldFieldRule(key: string, p: Props, site: WorldSiteInfo): Fiel
         note: ka === 40 ? 'At 40 kA every panel is 800 mm.' : 'By cell: 630 / 1000 A cells 600 mm, 1250 A and above 800 mm — see Breaker Code.',
       };
     case 'depth':
-      return { options: [opt('1860', '1860 mm (1800 mm footprint without doors and covers)')] };
+      // 1860 is the catalogue's (3.2); 2460 is the office's second depth —
+      // likely busduct or rear VTs — kept as a choice, never filled in.
+      return {
+        options: [
+          opt('1860', '1860 mm — catalogue standard (1800 mm footprint)'),
+          opt('2460', '2460 mm — deeper panel (e.g. busduct / VT), not in the 2026 catalogue'),
+        ],
+        note: num(p.depth) === 2460 ? 'Not in the 2026 design catalogue — confirm with Siemens.' : undefined,
+      };
     case 'height': {
       const high = ka === 40 ? 2460 : 2425;
       return { options: [opt(String(high), `${high} mm — IAC A FLR 1 s (standard)`), opt('2253', '2253 mm — IAC A FLR 0.1 s')] };
@@ -249,7 +257,8 @@ export function applyWorldRules(
     if (ka === 40) fill('width', '800');
     fill('height', String(ka === 40 ? 2460 : 2425));
   }
-  ['mainBusbarSize', 'mainBusbarConfiguration', 'depth', 'ral', 'ratedImpulseWithstandVoltage'].forEach(only);
+  ['mainBusbarSize', 'mainBusbarConfiguration', 'ral', 'ratedImpulseWithstandVoltage'].forEach(only);
+  fill('depth', '1860');
   // A control voltage stands for the motor too until the motor is chosen.
   if (changed === 'controlProtectionClosingTrippingSignalling' && p.controlProtectionClosingTrippingSignalling) {
     fill('springChargingMotor', String(p.controlProtectionClosingTrippingSignalling));
