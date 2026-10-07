@@ -138,6 +138,16 @@ export const StockCompareTab: React.FC<Props> = ({ projectData }) => {
             <PartList title="Order and fit" parts={r.add} empty="Nothing — the stock breaker already has it all." tone="text-green-700" />
             <PartList title="Stays as it is" parts={r.keep} empty="—" tone="text-gray-700" />
           </div>
+          {r.steps.length > 0 && (
+            <section className="border border-gray-200 rounded-md">
+              <header className="px-3 py-2 bg-gray-50 border-b border-gray-200">
+                <h4 className="text-sm font-medium text-gray-800">Rewiring</h4>
+              </header>
+              <ol className="px-3 py-2 text-sm text-gray-800 list-decimal list-inside space-y-1">
+                {r.steps.map(s => <li key={s}>{s}</li>)}
+              </ol>
+            </section>
+          )}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 border border-gray-200 rounded-md p-3">
             <Reading title="Stock" p={r.stock} />
             <Reading title="Required" p={r.wanted} />

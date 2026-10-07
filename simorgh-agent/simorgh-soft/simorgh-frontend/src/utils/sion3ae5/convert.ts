@@ -27,7 +27,7 @@ export type Family = '3AE5' | '3AH3';
 export const GENERATIONS: Record<Family, [string, string][]> = {
   '3AE5': [
     ['board', 'Since 2022 — electronic module on the control board (3AY1420)'],
-    ['contactor', 'Before 2022 — anti-pumping by auxiliary contactor'],
+    ['contactor', 'Anti-pumping by auxiliary contactor K1 (before 2022, or with the board taken out)'],
   ],
   '3AH3': [
     ['new2', 'Serial from 3AH3/00016908 — contactor 3RH1122'],
@@ -225,8 +225,11 @@ function parseAe5(pos: string[], codes: string[], gen: string): Parsed {
   if (r2 !== 'none' && r3 !== 'none' && r2 !== 'sh30') add('mount23', 'Mounting parts for 2nd and 3rd release', '3AX1411-5B');
   if (vMotor) add('motor', `Drive motor ${label(vMotor)}`, ae5Motor(vMotor));
   if (vClose) {
-    if (gen === 'board') add('antipump', `Anti-pumping: electronic module ${label(vClose)}`, antiPumpModule(vClose));
-    else add('antipump', `Anti-pumping: auxiliary contactor ${label(vClose)} (older SION)`, null, 'Article number from Siemens Technical Support with the serial number (HG 11.02 p. 34, fn 1).');
+    if (gen === 'board') add('antipump', `Anti-pumping: electronic module -X:K1 on the control board ${label(vClose)}`, antiPumpModule(vClose));
+    else {
+      add('antipump', `Anti-pumping: auxiliary contactor K1, 2 NO + 2 NC, coil ${label(vClose)}`, contactor3RH(vClose),
+        'Siemens\' own anti-pumping contactor 3RH1122-2 (spare number SWB, HG 11.03 p. 31); any 2 NO + 2 NC contactor relay with this coil voltage does the same job.');
+    }
   }
   if (iface) {
     add('aux', `Auxiliary switch ${iface[1]} NO + ${iface[1]} NC`, iface[1] === '6' ? '3SV9473-2AA0' : '3SV9474-2AA0');
@@ -333,6 +336,8 @@ export interface Conversion {
   add: Part[];
   keep: Part[];
   notes: string[];
+  /** Rewiring, step by step, where parts alone do not say it. */
+  steps: string[];
 }
 
 const same = (a: Part, b: Part) => a.slot === b.slot && a.label === b.label && a.article === b.article;
@@ -352,10 +357,25 @@ export function compare(stockCode: string, stockGen: string, wantedCode: string,
     notes.push(`Installation (13th position) differs: stock ${stock.pos[12]}, required ${wanted.pos[12]} — contact arms, withdrawable part or mounting frame are ordered separately, not as spare parts.`);
   }
   if (stock.pos[15] !== wanted.pos[15]) notes.push('Language or AC frequency (16th position) differs: rating plate and operating instructions only — unless AC coils change frequency, which the parts below already show.');
-  if (wanted.family === '3AE5' && stockGen !== wantedGen) {
-    notes.push(stockGen === 'contactor'
-      ? 'Stock breaker is an older SION (anti-pumping by contactor): the electronic module 3AY1420 and closing lockout 3AX1405 are for devices since 2022 — a retrofit needs Siemens Technical Support with the serial number.'
-      : 'Stock breaker has the 2022 control board: anti-pumping is on the board (3AY1420) — no separate contactor is needed.');
+  const steps: string[] = [];
+  if (wanted.family === '3AE5' && stockGen === 'board' && wantedGen === 'contactor') {
+    // The office's drawing "Closing and anti-pumping device": the board's
+    // -X:K1 taken out, contactor K1 put in the closing path.
+    steps.push(
+      'Take out the anti-pumping module -X:K1 of the control board and the wires from -XS:3 / -A2, -S1 (21-22), -S3 (21-22), -Y9, -S12 and -B2 to it (terminals X:K1 3, 6, 10 and 4, 5, 8, 9; plug -X1.5.1 / -X1.5.2).',
+      'Mount auxiliary contactor K1 (2 NO + 2 NC, coil = closing voltage) in the operating mechanism.',
+      'Closing path in series: -XS:3 → A2 → -S3 13-14 → -S1 11-12 → K1 21-22 → K1 31-32 → -Y9 A1-A2 (keep the varistor across Y9) → -S12 13-14 → B2 → -XS:4.',
+      'K1 coil: from the A2 node through -S3 21-22 to K1 A1; K1 A2 to the return beside -Y9 A2.',
+      'Self-hold: K1 13-14 from the closing line (between -S1 and K1 21-22) to K1 A1 — K1 stays in, and Y9 stays off, while the CLOSE command is held.',
+      'Test: hold CLOSE — the breaker closes once, opens on a trip and does not close again until CLOSE is released and given again.',
+    );
+    notes.push('Board → contactor follows the office\'s drawing "Closing and anti-pumping device". The electrical closing lockout 3AX1405 (A47) also sits on the 2022 board: check it with Siemens if the breaker has one.');
+  } else if (wanted.family === '3AE5' && stockGen === 'contactor' && wantedGen === 'board') {
+    steps.push(
+      'Take out auxiliary contactor K1 and its wiring (K1 21-22 and 31-32 in the closing path, K1 13-14 self-hold, K1 coil via -S3 21-22).',
+      'Fit the electronic module 3AY1420 for the closing voltage and wire it as -X:K1 (terminals 3, 6, 10 and 4, 5, 8, 9) per the Siemens circuit diagram of the 2022 SION.',
+    );
+    notes.push('Contactor → board: the module 3AY1420 is listed for SION devices since 2022 (HG 11.02 p. 34, fn 1) — on an older breaker confirm with Siemens Technical Support first.');
   }
   const remove = stock.parts.filter(p => !wanted.parts.some(q => same(p, q)));
   const add = wanted.parts.filter(p => !stock.parts.some(q => same(p, q)));
@@ -365,5 +385,5 @@ export function compare(stockCode: string, stockGen: string, wantedCode: string,
   if (zOnly.length) notes.push(`Order codes only on the required breaker: ${zOnly.join(', ')} — check each is covered by a part above or is documentation only.`);
   if (zGone.length) notes.push(`Order codes only on the stock breaker: ${zGone.join(', ')}.`);
   notes.push('When releases or solenoids are retrofitted, Siemens asks for the mounting parts too, and type, serial number and year of manufacture with every spare-part order.');
-  return { stock, wanted, blockers, remove, add, keep, notes: [...stock.problems, ...wanted.problems, ...notes] };
+  return { stock, wanted, blockers, remove, add, keep, steps, notes: [...stock.problems, ...wanted.problems, ...notes] };
 }
