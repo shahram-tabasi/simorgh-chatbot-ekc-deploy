@@ -124,7 +124,8 @@ export function worldPanelFor(data: ProjectData, item: DeviceLibraryItem, row?: 
   const p = (item.properties ?? {}) as Record<string, unknown>;
   const site = {
     ...scopeRatings(data, item),
-    ambientC: num(data.techSettings?.general?.designTemperature),
+    // The scope's own design temperature, else the project's.
+    ambientC: num(p.designTemperature) ?? num(data.techSettings?.general?.designTemperature),
     frequencyHz: num(p.frequency),
     frontAccess: /^front/i.test(String(p.switchgearAccess ?? '')),
   };
@@ -246,4 +247,24 @@ export function scopeVentilation(data: ProjectData, item: DeviceLibraryItem): { 
   const busbar = num((item.properties as any)?.mainBusbarRatedCurrent);
   if (busbar === 4000) return { value: 'Forced', why: 'A 4000 A busbar needs forced ventilation.' };
   return { value: 'Without', why: 'No cells yet — from the incomer panel for the busbar current (table 3.7).' };
+}
+
+/**
+ * A scope's cells: how many, each one's width (SIMOPRIME World from the
+ * catalogue or the engineer's choice; other switchgears from what was set
+ * per cell), and the switchgear's total width.
+ */
+export function scopeCells(data: ProjectData, item: DeviceLibraryItem): {
+  count: number | null; widths: (number | null)[]; total: number; unknown: number;
+} {
+  const rows = equipmentOf(data, item)?.devices ?? [];
+  const tpms = (equipmentOf(data, item)?.properties?.tpms ?? {}) as Record<string, any>;
+  const world = scopeFamily(item, String(tpms.switchgearType ?? '')) === 'SIMOPRIME-WORLD';
+  const widths = rows.map(r => (world ? worldPanelFor(data, item, r).width : item.cellPanels?.[r.id]?.width ?? null) ?? null);
+  const count = rows.length || num((item.properties as any)?.numberOfCells) || num(tpms.cellCount) || null;
+  return {
+    count, widths,
+    total: widths.reduce<number>((s, w) => s + (w ?? 0), 0),
+    unknown: widths.filter(w => w == null).length,
+  };
 }

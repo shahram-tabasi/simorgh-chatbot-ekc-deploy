@@ -47,6 +47,11 @@ export interface DeviceLibraryProperties {
   /** Fields the catalogue filled itself (not the engineer) — they keep
    *  following the catalogue until someone picks a value by hand. */
   catalogueAuto?: string[];
+  /** The scope's own design (ambient) temperature, °C — the project's unless
+   *  set otherwise. */
+  designTemperature?: string;
+  /** How many cells the switchgear has. */
+  numberOfCells?: string;
   // Pad Lock Checkboxes
   padLockCbOnOff?: boolean;
   padLockCbTestService?: boolean;

@@ -39,6 +39,8 @@ export const DEVICE_PROP_LABELS: Record<string, string> = {
   thermoFitCover:                               'Thermo-Fit Cover',
   coating:                                      'Coating',
   ventilationType:                              'Type of Ventilation',
+  designTemperature:                            'Design Temperature (°C)',
+  numberOfCells:                                'Number of Cells',
   padLockCbOnOff:                               'Pad Lock CB On / Off',
   padLockCbTestService:                         'Pad Lock CB Test / Service',
   padLockHvDoor:                                'Pad Lock HV Door',
@@ -53,7 +55,7 @@ export const DEVICE_PROP_GROUPS: { id: string; label: string; keys: string[] }[]
       'ratedInsulationVoltage', 'serviceVoltage', 'ratedPowerFrequencyWithstandVoltage',
       'frequency', 'mainBusbarConfiguration', 'mainBusbarRatedCurrent',
       'ratedShortTimeWithstandCurrent', 'isc', 'height', 'width', 'depth',
-      'ratedImpulseWithstandVoltage',
+      'ratedImpulseWithstandVoltage', 'designTemperature', 'numberOfCells',
     ],
   },
   {

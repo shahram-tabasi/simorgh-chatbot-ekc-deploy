@@ -87,7 +87,7 @@ export function worldFieldRule(key: string, p: Props, site: WorldSiteInfo): Fiel
   const urKey = ur != null && UR.includes(ur) ? String(ur) : null;
   const ka = num(p.ratedShortTimeWithstandCurrent) ?? num(p.isc);
   const hz = num(p.frequency);
-  const t = site.ambientC;
+  const t = num(p.designTemperature) ?? site.ambientC;
 
   switch (key) {
     case 'ratedInsulationVoltage':
@@ -181,7 +181,17 @@ export function worldFieldRule(key: string, p: Props, site: WorldSiteInfo): Fiel
           : /^rear/i.test(String(p.switchgearAccess ?? '')) ? 'At least 500 mm to the rear wall.' : undefined,
       };
     case 'ral':
-      return { options: [opt('RAL 7035', 'RAL 7035 (standard)')] };
+      return {
+        options: [...RAL.map(r => opt(r, r === '7035' ? 'RAL 7035 (SIMOPRIME standard)' : `RAL ${r}`)), opt('Remark')],
+        note: p.ral && String(p.ral) !== '7035' ? 'SIMOPRIME standard colour is RAL 7035.' : undefined,
+      };
+    case 'earthBusbarSize': {
+      const e = ka != null ? EARTH_BUSBAR[String(ka)] : null;
+      return {
+        options: (e ? [e] : Object.values(EARTH_BUSBAR)).map(v => opt(v, `${v} mm`)),
+        note: 'SIMOPRIME instruction manual 14.5: 25 kA Cu 30x5, 31.5 kA Cu 40x5, 40 kA Cu 40x10.',
+      };
+    }
     case 'controlProtectionClosingTrippingSignalling':
       return { options: SUPPLY.map(v => opt(v)), note: 'Closing solenoid, 1st and 2nd shunt release; an undervoltage release takes the 2nd shunt release’s voltage.' };
     case 'springChargingMotor':
@@ -196,12 +206,33 @@ export function worldFieldRule(key: string, p: Props, site: WorldSiteInfo): Fiel
 /**
  * The office's own choices, for every scope whatever its catalogue.
  */
+// Spelled as TPMS spells them, so a scope read from TPMS lands on the same
+// choice.
+const RAL = ['1018', '6021', '7012', '7032', '7035'];
 export const OFFICE_CHOICES: Record<string, FieldRule> = {
   thermoFitCover: { options: [opt('Yes'), opt('No')] },
-  coating: { options: [opt('Tin Plated'), opt('Silver Plated (only joints)')] },
-  incomingConnection: { options: [opt('Cable / Bottom'), opt('Busduct / Top')] },
+  coating: { options: [opt('Silver (Joint)'), opt('Tin'), opt('No'), opt('Remark')] },
+  incomingConnection: {
+    options: [opt('Bottom, Cable'), opt('Top, Cable'), opt('Bottom, Busduct'), opt('Top, Busduct'), opt('Busbar'), opt('Remark')],
+  },
+  outgoingConnection: { options: [opt('Bottom, Cable'), opt('Top, Cable'), opt('Top, Busduct'), opt('Remark')] },
+  switchgearArrangement: {
+    options: [opt('Normal'), opt('Back To Back'), opt('L Design'), opt('Bridge'), opt('Face to Face'), opt('Remark')],
+  },
+  ral: { options: [...RAL.map(r => opt(r, `RAL ${r}`)), opt('Remark')] },
   ventilationType: { options: [opt('Without'), opt('Natural'), opt('Forced')] },
+  designTemperature: { options: ['25', '30', '35', '40', '45', '50', '55'].map(t => opt(t, `${t} °C`)) },
 };
+
+/** Old spellings the dropdowns now write differently. */
+export const OFFICE_ALIASES: Record<string, Record<string, string>> = {
+  coating: { 'tin plated': 'Tin', 'silver plated (only joints)': 'Silver (Joint)', 'silver plated': 'Silver (Joint)', silver: 'Silver (Joint)' },
+  incomingConnection: { 'cable / bottom': 'Bottom, Cable', 'busduct / top': 'Top, Busduct', 'cable/bottom': 'Bottom, Cable', 'busduct/top': 'Top, Busduct' },
+  ral: { 'ral 7035': '7035', 'ral7035': '7035', 'ral 7032': '7032', 'ral 7012': '7012', 'ral 6021': '6021', 'ral 1018': '1018' },
+};
+
+/** SIMOPRIME instruction manual 14.5, fig. 30: the earthing busbar by Ik. */
+const EARTH_BUSBAR: Record<string, string> = { '25': 'Cu 30x5', '31.5': 'Cu 40x5', '40': 'Cu 40x10' };
 
 /** Fields the catalogue speaks to — the form shows them as dropdowns. */
 export const WORLD_FIELDS = [
@@ -209,7 +240,7 @@ export const WORLD_FIELDS = [
   'frequency', 'ratedShortTimeWithstandCurrent', 'isc', 'mainBusbarRatedCurrent', 'mainBusbarSize',
   'mainBusbarConfiguration', 'busbarType', 'width', 'depth', 'height', 'ip', 'switchgearAccess', 'ral',
   'controlProtectionClosingTrippingSignalling', 'springChargingMotor', 'switchgearLightingSpaceHeater',
-  'ventilationType',
+  'ventilationType', 'earthBusbarSize',
 ];
 
 /** True when a value is one the catalogue allows, given the rest. */
@@ -258,10 +289,12 @@ export function applyWorldRules(
   const ka = num(p.ratedShortTimeWithstandCurrent);
   if (ka != null && IK.includes(ka)) {
     fill('isc', String(ka));
+    if (EARTH_BUSBAR[String(ka)]) fill('earthBusbarSize', EARTH_BUSBAR[String(ka)]);
     if (ka === 40) fill('width', '800');
     fill('height', String(ka === 40 ? 2460 : 2425));
   }
-  ['mainBusbarSize', 'mainBusbarConfiguration', 'ral', 'ratedImpulseWithstandVoltage'].forEach(only);
+  ['mainBusbarSize', 'mainBusbarConfiguration', 'ratedImpulseWithstandVoltage'].forEach(only);
+  fill('ral', '7035');
   fill('depth', '1860');
   // Width and ventilation: the incomer's panel, which carries the busbar
   // current (table 3.7 at the design temperature); ventilation also takes the
@@ -269,7 +302,7 @@ export function applyWorldRules(
   const busbar = num(p.mainBusbarRatedCurrent);
   if (busbar && ur != null && ka != null) {
     const incomer = worldPanel('circuit-breaker', busbar, {
-      kv: ur, ka, ambientC: site.ambientC, frequencyHz: num(p.frequency),
+      kv: ur, ka, ambientC: num(p.designTemperature) ?? site.ambientC, frequencyHz: num(p.frequency),
       frontAccess: /^front/i.test(String(p.switchgearAccess ?? '')),
     });
     if (incomer.width) fill('width', String(incomer.width));

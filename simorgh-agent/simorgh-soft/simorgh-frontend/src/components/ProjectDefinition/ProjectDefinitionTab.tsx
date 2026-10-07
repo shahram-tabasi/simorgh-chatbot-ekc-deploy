@@ -19,9 +19,9 @@ import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, emptyTiers } from 
 import { TEMPLATE_FAMILIES } from '../../utils/templateFamilies';
 import { BreakerCodeTab } from './BreakerCodeTab';
 import {
-  applyWorldRules, isAllowed, worldFieldRule, WORLD_FIELDS, OFFICE_CHOICES, type FieldRule, type WorldSiteInfo,
+  applyWorldRules, isAllowed, worldFieldRule, WORLD_FIELDS, OFFICE_CHOICES, OFFICE_ALIASES, type FieldRule, type WorldSiteInfo,
 } from '../../utils/sion3ae5/simoprimeWorldScope';
-import { scopeVentilation } from '../../utils/sion3ae5/fromProject';
+import { scopeVentilation, scopeCells } from '../../utils/sion3ae5/fromProject';
 import { appConfirm } from '../shared/AppDialog';
 
 // ──────────────────────────────────────────────────────────────
@@ -146,6 +146,10 @@ interface DevicePropertiesModalProps {
   site?:     WorldSiteInfo;
   /** SIMOPRIME World: the ventilation its cells need, and why. */
   ventilation?: { value: string; why: string } | null;
+  /** What the project gives a scope that has not said otherwise. */
+  defaults?: { designTemperature?: string; numberOfCells?: string };
+  /** The scope's cells, as Scope Selection and Breaker Code have them. */
+  cells?: { count: number | null; total: number; unknown: number } | null;
 }
 
 // Copying a specification is copying the whole device's; pasting it is either
@@ -170,7 +174,7 @@ function pasteSpec(
 }
 
 const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
-  item, mode: initialMode, addType, onSave, onClose, clip, onCopy, family, site = { ambientC: null }, ventilation,
+  item, mode: initialMode, addType, onSave, onClose, clip, onCopy, family, site = { ambientC: null }, ventilation, defaults, cells,
 }) => {
   const [mode,  setMode]  = useState<ModalMode>(initialMode);
   const [name,  setName]  = useState(item?.name ?? '');
@@ -204,9 +208,19 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
     Object.keys(fixed).forEach(k => {
       const rule = (world && WORLD_FIELDS.includes(k) ? worldFieldRule(k, fixed, site) : null) ?? OFFICE_CHOICES[k];
       const v = String(fixed[k] ?? '').trim().toLowerCase();
-      const hit = rule?.options.find(o => o.value.toLowerCase() === v);
+      const alias = OFFICE_ALIASES[k]?.[v];
+      const hit = rule?.options.find(o => o.value.toLowerCase() === (alias ?? v).toLowerCase());
       if (hit && hit.value !== fixed[k]) fixed[k] = hit.value;
     });
+    // The project's design temperature and the cells Scope Selection has, for
+    // a scope that has not said its own.
+    const auto = new Set<string>((fixed.catalogueAuto as string[] | undefined) ?? []);
+    (['designTemperature', 'numberOfCells'] as const).forEach(k => {
+      const d = defaults?.[k];
+      if (d && (!fixed[k] || auto.has(k))) { fixed[k] = d; auto.add(k); }
+    });
+    fixed.catalogueAuto = [...auto];
+    setAutos(prev => new Set([...prev, ...auto]));
     if (!world) { setProps(fixed as DeviceLibraryProperties); return; }
     const r = applyWorldRules(fixed as DeviceLibraryProperties, null, new Set(), worldSite);
     setProps(r.props);
@@ -411,6 +425,16 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
               {F('width', 'Width (mm)')}
               {F('depth', 'Depth (mm)')}
               {F('ratedImpulseWithstandVoltage', 'Rated Impulse Withstand Voltage')}
+              {F('designTemperature', 'Design Temperature (°C)')}
+              {F('numberOfCells', 'Number of Cells')}
+              {cells && cells.count != null && (
+                <p className="text-[11px] text-gray-500 py-1 text-right">
+                  {cells.count} cell(s)
+                  {cells.total > 0 && ` · total width ${cells.total} mm`}
+                  {cells.unknown > 0 && ` (${cells.unknown} cell(s) without a width yet)`}
+                  {' '}— widths per cell in Breaker Code
+                </p>
+              )}
             </div>
           )}
           {/* The three voltages that used to sit here now open the
@@ -1059,7 +1083,17 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
             </span>
           )}
           <span className="ml-auto flex items-center gap-3 shrink-0 text-xs">
-            {facts.cellCount && <span className="text-gray-500">{facts.cellCount} cell(s)</span>}
+            {(() => {
+              // Cells and the switchgear's total width, from Scope Selection
+              // and the widths per cell (Breaker Code).
+              const c = scopeCells(projectData, item);
+              const n = c.count ?? (facts.cellCount ? Number(facts.cellCount) : null);
+              return n ? (
+                <span className="text-gray-500" title={c.unknown ? `${c.unknown} cell(s) without a width yet` : 'Sum of the cell widths'}>
+                  {n} cell(s){c.total > 0 ? ` · ${c.total} mm` : ''}
+                </span>
+              ) : null;
+            })()}
             <span className="text-gray-500">{facts.rows} feeder(s)</span>
             <span className={filled === 0 ? 'text-amber-600' : 'text-gray-500'}>
               {filled}/{DEVICE_PROP_TOTAL} spec
@@ -1277,6 +1311,11 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           site={{ ambientC: parseFloat(String(projectData.techSettings?.general?.designTemperature ?? '')) || null }}
           ventilation={deviceModal.item && scopeFamily(deviceModal.item) === 'SIMOPRIME-WORLD'
             ? scopeVentilation(projectData, deviceModal.item) : null}
+          defaults={{
+            designTemperature: String(projectData.techSettings?.general?.designTemperature ?? '') || undefined,
+            numberOfCells: deviceModal.item ? (scopeCells(projectData, deviceModal.item).count ?? undefined)?.toString() : undefined,
+          }}
+          cells={deviceModal.item ? scopeCells(projectData, deviceModal.item) : null}
         />
       )}
 
