@@ -2,12 +2,13 @@
 //
 // The design catalogues a MV scope can be held to, by AIS family: what its
 // specification form allows and fills in, and what panel each cell gets.
-// SIMOPRIME World and SIMOPRIME A4 both take the SION 3AE5; EK36 has none yet.
+// SIMOPRIME World and SIMOPRIME A4 take the SION 3AE5; EK36 takes the 3AH3.
 import type { DeviceLibraryProperties } from '../../types/project';
 import { worldPanel, type PanelChoice, type PanelKind, type WorldPanel, type WorldSite } from './simoprimeWorld';
 import { a4Panel, A4_WIDTHS } from './simoprimeA4';
 import { applyWorldRules, worldFieldRule, WORLD_FIELDS, type FieldRule, type WorldSiteInfo } from './simoprimeWorldScope';
 import { applyA4Rules, a4FieldRule, A4_FIELDS } from './simoprimeA4Scope';
+import { applyEk36Rules, ek36FieldRule, ek36Panel, EK36_FIELDS, EK36_WIDTHS } from './ek36';
 
 export interface ScopeCatalogue {
   family: string;
@@ -26,6 +27,8 @@ export interface ScopeCatalogue {
   panel: (kind: PanelKind, feederA: number | null, site: WorldSite, choice?: PanelChoice) => WorldPanel;
   /** The widths a cell may be set to by hand. */
   widths: number[];
+  /** The breaker the panels take — the 3AE5 builder serves only the 3AE5. */
+  breaker: '3AE5' | '3AH3';
 }
 
 const CATALOGUES: Record<string, ScopeCatalogue> = {
@@ -40,6 +43,7 @@ const CATALOGUES: Record<string, ScopeCatalogue> = {
     apply: applyWorldRules,
     panel: worldPanel,
     widths: [600, 800],
+    breaker: '3AE5',
   },
   'SIMOPRIME-A4': {
     family: 'SIMOPRIME-A4',
@@ -52,6 +56,20 @@ const CATALOGUES: Record<string, ScopeCatalogue> = {
     apply: applyA4Rules,
     panel: a4Panel,
     widths: A4_WIDTHS,
+    breaker: '3AE5',
+  },
+  EK36: {
+    family: 'EK36',
+    name: 'EK36',
+    about: 'EK36 manual (EK-MS-04, 09.2025): each field offers only what the manual allows, and one choice fills in what it settles (10.1 technical data and dimensions, 17.3 busbars, 17.4 earthing busbar, 10.3 3AH3 supply voltages)',
+    cellsAbout: 'EK36 manual (EK-MS-04, 09.2025): every circuit-breaker, bus sectionalizer, riser and metering panel is 1100 mm (10.1); feeders 1250 or 2500 A with the 3AH3 vacuum circuit-breaker on truck (10.3).',
+    table: 'EK36 10.1',
+    fields: EK36_FIELDS,
+    fieldRule: ek36FieldRule,
+    apply: applyEk36Rules,
+    panel: ek36Panel,
+    widths: EK36_WIDTHS,
+    breaker: '3AH3',
   },
 };
 

@@ -34,6 +34,8 @@ export interface WorldPanel {
   breakerA: number | null;
   /** The 3AE5 type, when one fits. */
   breaker: PrimaryRow | null;
+  /** A breaker other than the 3AE5 (EK36's 3AH3), as its rating reads. */
+  breakerText?: string;
   /** What the chosen typical may carry here (3.7). */
   permissibleA: number | null;
   withdrawableVT: boolean | null;

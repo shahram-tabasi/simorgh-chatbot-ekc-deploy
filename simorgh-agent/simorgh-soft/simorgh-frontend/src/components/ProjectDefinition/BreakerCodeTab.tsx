@@ -46,6 +46,8 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
   // SIMOPRIME World / A4: every cell's panel, straight from the design catalogue.
   const cat = scope ? catalogueOf(familyOf(projectData, scope)) : null;
   const isWorld = !!cat;
+  // The 3AE5 builder below serves only the 3AE5; EK36's 3AH3 has none yet.
+  const builder = cat?.breaker !== '3AH3';
   // …and each breaker cell's code as the rules and defaults give it, so the
   // whole switchgear is read at a glance and saved in one go.
   const panels = useMemo(() => {
@@ -173,7 +175,7 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
           onClick={() => scope && draft && state && onSave(scope, rowId, {
             spec, state, code: result?.code ?? '', savedAt: new Date().toISOString(),
           })}
-          disabled={!state}
+          disabled={!state || !builder}
           title={saved ? `Saved ${new Date(saved.savedAt).toLocaleString()}` : 'Keep this code with the scope'}
           className="ml-auto px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm disabled:opacity-50"
         >
@@ -191,13 +193,13 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
             {cat.family === 'SIMOPRIME-WORLD' && <span className="text-xs text-gray-600" title="Option points the catalogue leaves open: 1 shunt release, no 2nd or 3rd release, fixed-mounted breaker (W66), 12 NO + 12 NC, 64-pole plug, English — change any of them on a cell's code">
               Defaults: 1 shunt release · W66 fixed · 12 NO + 12 NC · 64-pole · English
             </span>}
-            <button
+            {builder && <button
               onClick={saveAll}
               title="Keep every breaker cell's code with the scope — cells already saved keep theirs"
               className="ml-auto px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-xs hover:bg-gray-50"
             >
               Save all cells
-            </button>
+            </button>}
           </header>
           <div className="max-h-80 overflow-auto">
             <table className="w-full text-xs">
@@ -273,6 +275,7 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
                     <td className="px-2 py-1 font-mono whitespace-nowrap">
                       {code
                         ? <span className={open ? 'text-amber-800' : 'text-gray-900'} title={open ? `${open} point(s) still open` : 'Complete'}>{code}</span>
+                        : p.breakerText ? <span className="text-gray-800" title="The rating the 3AH3 must have — its order code is not built here yet">{p.breakerText}</span>
                         : HAS_BREAKER[p.role ?? 'outgoing'] ? <span className="text-red-700">?</span> : <span className="text-gray-500">—</span>}
                     </td>
                   </tr>
@@ -283,6 +286,14 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
         </section>
       )}
 
+      {!builder && (
+        <p className="text-sm text-gray-700 border border-gray-200 rounded-md bg-gray-50 px-4 py-3"
+          title="EK36 manual 10.3: 3AH3 vacuum circuit-breaker on truck">
+          {cat?.name} takes the 3AH3 vacuum circuit-breaker — each cell's rating is in the table above; its order code is not built here yet.
+        </p>
+      )}
+
+      {builder && <>
       {/* The article number */}
       {result && (
         <div className="border border-gray-200 rounded-md bg-gray-50 px-4 py-3">
@@ -486,6 +497,7 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
           </section>
         )}
       </div>
+      </>}
     </div>
   );
 };
