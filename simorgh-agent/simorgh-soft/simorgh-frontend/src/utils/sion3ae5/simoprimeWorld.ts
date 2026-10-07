@@ -36,7 +36,12 @@ export interface WorldPanel {
   permissibleA: number | null;
   withdrawableVT: boolean | null;
   notes: string[];
+  /** Width / ventilation the engineer set by hand rather than the table. */
+  manual?: { width?: boolean; ventilation?: boolean };
 }
+
+/** What the engineer chose for one cell, where it differs from the rules. */
+export interface PanelChoice { width?: number; ventilation?: Ventilation }
 
 const KIND_LABEL: Record<PanelKind, string> = {
   'circuit-breaker': 'Switching device panel with circuit-breaker',
@@ -130,7 +135,17 @@ export interface WorldSite {
   frontAccess?: boolean;
 }
 
-export function worldPanel(kind: PanelKind, feederA: number | null, site: WorldSite): WorldPanel {
+export function worldPanel(kind: PanelKind, feederA: number | null, site: WorldSite, choice: PanelChoice = {}): WorldPanel {
+  const p = worldPanelAuto(kind, feederA, site, choice);
+  // A panel without a breaker simply takes what the engineer set.
+  if (kind !== 'circuit-breaker') {
+    if (choice.width) { p.width = choice.width; p.manual = { ...p.manual, width: true }; }
+    if (choice.ventilation) { p.ventilation = choice.ventilation; p.manual = { ...p.manual, ventilation: true }; }
+  }
+  return p;
+}
+
+function worldPanelAuto(kind: PanelKind, feederA: number | null, site: WorldSite, choice: PanelChoice): WorldPanel {
   const notes: string[] = [];
   const p: WorldPanel = {
     kind, feederA, typicalA: null, width: null, ventilation: 'Without',
@@ -168,8 +183,24 @@ export function worldPanel(kind: PanelKind, feederA: number | null, site: WorldS
   if (t > 55) notes.push(`${t} °C is above the table's 55 °C.`);
   const sixty = site.frequencyHz === 60;
   const col = tempColumn(t);
-  const fit = rows.find(r => (sixty ? r[5] : r[4])[col] >= feederA);
-  if (!fit) { notes.push(`No typical carries ${feederA} A at ${t} °C.`); return p; }
+  // The engineer's width or ventilation narrows the typicals the table may
+  // pick from; the breaker then follows the typical, as the catalogue pairs them.
+  const allowed = rows.filter(r => (!choice.width || r[1] === choice.width) && (!choice.ventilation || r[2] === choice.ventilation));
+  if (choice.width || choice.ventilation) p.manual = { width: !!choice.width, ventilation: !!choice.ventilation };
+  const amps = (r: Row37) => (sixty ? r[5] : r[4])[col];
+  let fit = allowed.find(r => amps(r) >= feederA);
+  if (!fit && allowed.length) {
+    fit = allowed[allowed.length - 1];
+    notes.push(`Set by hand: no ${[choice.width && `${choice.width} mm`, choice.ventilation?.toLowerCase()].filter(Boolean).join(' ')} typical carries ${feederA} A at ${t} °C — the largest one takes ${amps(fit)} A.`);
+  }
+  if (!fit) {
+    notes.push(choice.width || choice.ventilation
+      ? `Set by hand: the catalogue has no ${[choice.width && `${choice.width} mm`, choice.ventilation?.toLowerCase()].filter(Boolean).join(' ')} typical at ${group} kV / ${ka} kA.`
+      : `No typical carries ${feederA} A at ${t} °C.`);
+    if (choice.width) p.width = choice.width;
+    if (choice.ventilation) p.ventilation = choice.ventilation;
+    return p;
+  }
   const [typ, width, vent, mlfb, a50, a60] = fit;
   Object.assign(p, { typicalA: typ, width, ventilation: vent, permissibleA: (sixty ? a60 : a50)[col] });
   p.breaker = DATA.find(r => r[0] === mlfb) ?? null;

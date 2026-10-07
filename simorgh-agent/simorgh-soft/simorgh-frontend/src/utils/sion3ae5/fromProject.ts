@@ -130,7 +130,7 @@ export function worldPanelFor(data: ProjectData, item: DeviceLibraryItem, row?: 
   };
   if (!row) return worldPanel('circuit-breaker', num(p.mainBusbarRatedCurrent), site);
   const { role, current } = cellOf(data, item, row);
-  const panel = worldPanel(KIND_OF[role], current.value, site);
+  const panel = worldPanel(KIND_OF[role], current.value, site, item.cellPanels?.[row.id]);
   if (current.note) panel.notes.unshift(current.note);
   return { ...panel, role, current };
 }

@@ -67,6 +67,9 @@ export interface DeviceLibraryItem {
   /** A cell's current as the engineer set it, by feeder row id — it beats
    *  what the row's power, name or FLC would say. */
   cellCurrents?: Record<string, number>;
+  /** A cell's panel width / ventilation as the engineer set it, by feeder row
+   *  id — the table's choice otherwise. */
+  cellPanels?: Record<string, { width?: number; ventilation?: 'Without' | 'Natural' | 'Forced' }>;
 }
 
 /** A breaker code as it was saved: the text, every answer, the result. */

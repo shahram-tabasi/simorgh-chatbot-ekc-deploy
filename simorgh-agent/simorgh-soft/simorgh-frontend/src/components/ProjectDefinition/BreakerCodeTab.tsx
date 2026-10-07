@@ -72,6 +72,14 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
     if (Number.isFinite(v) && v > 0) next[id] = v; else delete next[id];
     onUpdate({ ...scope, cellCurrents: next });
   };
+  const setCellPanel = (id: string, key: 'width' | 'ventilation', raw: string) => {
+    if (!scope) return;
+    const all = { ...(scope.cellPanels ?? {}) };
+    const cell: any = { ...(all[id] ?? {}) };
+    if (raw) cell[key] = key === 'width' ? Number(raw) : raw; else delete cell[key];
+    if (Object.keys(cell).length) all[id] = cell; else delete all[id];
+    onUpdate({ ...scope, cellPanels: all });
+  };
   const saveAll = () => {
     if (!scope) return;
     const now = new Date().toISOString();
@@ -231,11 +239,35 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
                       ) : '—'}
                     </td>
                     <td className="px-2 py-1 text-gray-700 whitespace-nowrap">{p.typicalA ? `${p.typicalA} A` : panelKindLabel(p.kind).replace(' panel', '')}</td>
-                    <td className="px-2 py-1 text-gray-700">{p.width ?? '—'}</td>
-                    <td className="px-2 py-1 whitespace-nowrap">
-                      {p.ventilation === 'Without'
-                        ? <span className="text-gray-500">Without</span>
-                        : <span className="inline-flex items-center gap-1 font-semibold text-gray-900"><FanIcon className="w-3.5 h-3.5" />{p.ventilation}</span>}
+                    <td className="px-2 py-1" onClick={e => e.stopPropagation()}>
+                      <select
+                        value={scope?.cellPanels?.[r.id]?.width ?? ''}
+                        onChange={e => setCellPanel(r.id, 'width', e.target.value)}
+                        title={p.manual?.width ? 'Set by hand — choose Auto to go back to the catalogue' : 'From the catalogue — choose a width to set it by hand'}
+                        className={`border rounded px-1 py-0.5 text-xs bg-white focus:outline-none focus:border-blue-500 ${p.manual?.width ? 'border-gray-500 font-semibold text-gray-900' : 'border-gray-300 text-gray-700'}`}
+                      >
+                        <option value="">{p.manual?.width ? 'Auto' : `${p.width ?? '—'} (auto)`}</option>
+                        <option value="600">600</option>
+                        <option value="800">800</option>
+                      </select>
+                    </td>
+                    <td className="px-2 py-1 whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                      <span className="inline-flex items-center gap-1">
+                        {p.ventilation !== 'Without' && <FanIcon className="w-3.5 h-3.5 text-gray-900" />}
+                        <select
+                          value={scope?.cellPanels?.[r.id]?.ventilation ?? ''}
+                          onChange={e => setCellPanel(r.id, 'ventilation', e.target.value)}
+                          title={p.manual?.ventilation ? 'Set by hand — choose Auto to go back to the catalogue' : 'From the catalogue (table 3.7) — choose one to set it by hand'}
+                          className={`border rounded px-1 py-0.5 text-xs bg-white focus:outline-none focus:border-blue-500 ${
+                            p.manual?.ventilation ? 'border-gray-500 font-semibold text-gray-900'
+                              : p.ventilation !== 'Without' ? 'border-gray-300 font-semibold text-gray-900' : 'border-gray-300 text-gray-600'}`}
+                        >
+                          <option value="">{p.manual?.ventilation ? 'Auto' : `${p.ventilation} (auto)`}</option>
+                          <option value="Without">Without</option>
+                          <option value="Natural">Natural</option>
+                          <option value="Forced">Forced</option>
+                        </select>
+                      </span>
                     </td>
                     <td className="px-2 py-1 text-gray-700">{p.withdrawableVT == null ? '—' : p.withdrawableVT ? 'Possible' : 'No'}</td>
                     <td className="px-2 py-1 font-mono whitespace-nowrap">
