@@ -61,6 +61,9 @@ export interface DeviceLibraryItem {
   /** SION 3AE5 breaker codes worked out for this scope, by feeder row id
    *  ('' for the switchgear as a whole) — see utils/sion3ae5. */
   breakerCodes?: Record<string, BreakerCodeRecord>;
+  /** A cell's current as the engineer set it, by feeder row id — it beats
+   *  what the row's power, name or FLC would say. */
+  cellCurrents?: Record<string, number>;
 }
 
 /** A breaker code as it was saved: the text, every answer, the result. */

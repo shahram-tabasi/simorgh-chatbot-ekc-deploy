@@ -16,7 +16,8 @@ import type { DeviceLibraryItem, ProjectData, DeviceTableRow } from '../../types
 import { stripLocaleTags } from '../tierEquipmentMatrix';
 import { TIERS } from '../tiers';
 import { decode, type SionState } from './engine';
-import { worldPanel, panelKindOf, type WorldPanel } from './simoprimeWorld';
+import { worldPanel, type WorldPanel, type PanelKind } from './simoprimeWorld';
+import { cellRole, cellCurrent, HAS_BREAKER, type CellRole, type CellCurrent } from './cells';
 
 const KV_STEPS = [7.2, 12, 17.5, 24];
 const KA_STEPS = [16, 20, 25, 31.5, 40];
@@ -99,14 +100,41 @@ export function scopeRatings(data: ProjectData, item: DeviceLibraryItem): { kv: 
   return { kv: kv != null ? stepUp(kv, KV_STEPS) : null, ka: ka != null ? stepUp(ka, KA_STEPS) : null };
 }
 
+const KIND_OF: Record<CellRole, PanelKind> = {
+  incomer: 'circuit-breaker', coupler: 'circuit-breaker', motor: 'circuit-breaker', transformer: 'circuit-breaker',
+  capacitor: 'circuit-breaker', outgoing: 'circuit-breaker', metering: 'metering', 'bus-riser': 'bus-riser',
+  'bus-connection': 'bus-connection', contactor: 'contactor', dummy: 'dummy',
+};
+
+/** A cell's role and current, as the project says them. */
+export function cellOf(data: ProjectData, item: DeviceLibraryItem, row: DeviceTableRow): { role: CellRole; current: CellCurrent } {
+  const role = cellRole(row.templateName);
+  const p = (item.properties ?? {}) as Record<string, unknown>;
+  if (role === 'bus-riser' || role === 'bus-connection') {
+    // These carry the busbar.
+    const busbar = num(p.mainBusbarRatedCurrent);
+    return { role, current: { value: item.cellCurrents?.[row.id] ?? busbar, source: item.cellCurrents?.[row.id] ? 'engineer' : busbar ? 'busbar' : null, uncertain: !busbar } };
+  }
+  return { role, current: cellCurrent(item, row, role, feederBreakerText(data, row), item.cellCurrents?.[row.id]) };
+}
+
 /** SIMOPRIME World: the panel of one cell (or, for the switchgear as a
  *  whole, of a breaker carrying the busbar current). */
-export function worldPanelFor(data: ProjectData, item: DeviceLibraryItem, row?: DeviceTableRow): WorldPanel {
-  const { kv, ka } = scopeRatings(data, item);
+export function worldPanelFor(data: ProjectData, item: DeviceLibraryItem, row?: DeviceTableRow): WorldPanel & { role?: CellRole; current?: CellCurrent } {
   const p = (item.properties ?? {}) as Record<string, unknown>;
-  const current = row ? feederCurrent(data, row) : num(p.mainBusbarRatedCurrent);
-  return worldPanel(row ? panelKindOf(row.templateName) : 'circuit-breaker', current, kv, ka);
+  const site = {
+    ...scopeRatings(data, item),
+    ambientC: num(data.techSettings?.general?.designTemperature),
+    frequencyHz: num(p.frequency),
+  };
+  if (!row) return worldPanel('circuit-breaker', num(p.mainBusbarRatedCurrent), site);
+  const { role, current } = cellOf(data, item, row);
+  const panel = worldPanel(KIND_OF[role], current.value, site);
+  if (current.note) panel.notes.unshift(current.note);
+  return { ...panel, role, current };
 }
+
+export { HAS_BREAKER };
 
 export function specFromProject(data: ProjectData, item: DeviceLibraryItem, row?: DeviceTableRow): DraftSpec {
   const p = (item.properties ?? {}) as Record<string, unknown>;
@@ -181,7 +209,12 @@ export function decodeDraft(text: string, draft?: Pick<DraftSpec, 'assumed' | 'p
     // The panel's catalogue: motor operation and 12 NO + 12 NC on every
     // breaker; the breaker itself is the fixed-mounted one (W66).
     if (s.aux == null) { s.aux = '12'; s.st.aux = 'found'; }
-    if (s.inst == null) { s.inst = '0'; s.st.inst = 'assumed'; }
+    // W66 is the fixed-mounted breaker on SIMOPRIME's own truck.
+    if (s.inst == null || s.st.inst !== 'user') { s.inst = '0'; s.st.inst = 'found'; }
+    // Option points the catalogue leaves open take the office's defaults —
+    // listed on the screen, changed in the form like anything else.
+    if (s.rel2 == null || s.st.rel2 === 'assumed') { s.rel2 = 'none'; s.st.rel2 = 'default'; }
+    if (s.rel3 == null) { s.rel3 = 'none'; s.st.rel3 = 'default'; }
     // The cell's panel fixes the breaker type: its ratings are the catalogue's.
     const b = draft.world?.breaker;
     if (b) {

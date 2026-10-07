@@ -1248,6 +1248,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           onSave={(item, key, record) => updateLib({
             ...item, breakerCodes: { ...(item.breakerCodes ?? {}), [key]: record },
           })}
+          onUpdate={updateLib}
         />
       )}
 

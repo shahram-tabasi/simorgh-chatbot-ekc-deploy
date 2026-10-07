@@ -17,10 +17,13 @@ import {
 } from '../../utils/sion3ae5/engine';
 import { specFromProject, equipmentOf, decodeDraft, scopeFamily, worldPanelFor } from '../../utils/sion3ae5/fromProject';
 import { panelKindLabel } from '../../utils/sion3ae5/simoprimeWorld';
+import { ROLE_LABEL, SOURCE_LABEL, HAS_BREAKER } from '../../utils/sion3ae5/cells';
 
 interface Props {
   projectData: ProjectData;
   onSave: (item: DeviceLibraryItem, key: string, record: BreakerCodeRecord) => void;
+  /** The scope with something of it changed (cell currents, many codes at once). */
+  onUpdate: (item: DeviceLibraryItem) => void;
 }
 
 const TONE: Record<string, string> = {
@@ -30,7 +33,7 @@ const DOT: Record<string, string> = {
   ok: 'bg-green-600', amb: 'bg-amber-500', miss: 'bg-red-600', conflict: 'bg-red-600',
 };
 
-export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave }) => {
+export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate }) => {
   const scopes = useMemo(() => projectData.deviceLibrary?.MV ?? [], [projectData.deviceLibrary]);
   const [scopeId, setScopeId] = useState<string>(scopes[0]?.id ?? '');
   const [rowId, setRowId] = useState<string>('');
@@ -41,9 +44,42 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave }) => {
   const draft = useMemo(() => (scope ? specFromProject(projectData, scope, row) : null), [scope, row, projectData]);
   // SIMOPRIME World: every cell's panel, straight from the design catalogue.
   const isWorld = !!scope && scopeFamily(scope, String((equipmentOf(projectData, scope)?.properties?.tpms as any)?.switchgearType ?? '')) === 'SIMOPRIME-WORLD';
-  const panels = useMemo(
-    () => (isWorld && scope ? rows.map(r => ({ row: r, panel: worldPanelFor(projectData, scope, r) })) : []),
-    [isWorld, scope, rows, projectData]);
+  // …and each breaker cell's code as the rules and defaults give it, so the
+  // whole switchgear is read at a glance and saved in one go.
+  const panels = useMemo(() => {
+    if (!isWorld || !scope) return [];
+    return rows.map(r => {
+      const panel = worldPanelFor(projectData, scope, r);
+      let code: string | null = null;
+      let open = 0;
+      let rec: BreakerCodeRecord | null = null;
+      if (panel.breaker) {
+        const d = specFromProject(projectData, scope, r);
+        const st = decodeDraft(d.text, d);
+        const ev = evaluate(st);
+        code = ev.code;
+        open = ev.questions.length;
+        rec = { spec: d.text, state: st, code, savedAt: '' };
+      }
+      return { row: r, panel, code, open, rec };
+    });
+  }, [isWorld, scope, rows, projectData]);
+
+  const setCellCurrent = (id: string, raw: string) => {
+    if (!scope) return;
+    const v = parseFloat(raw);
+    const next = { ...(scope.cellCurrents ?? {}) };
+    if (Number.isFinite(v) && v > 0) next[id] = v; else delete next[id];
+    onUpdate({ ...scope, cellCurrents: next });
+  };
+  const saveAll = () => {
+    if (!scope) return;
+    const now = new Date().toISOString();
+    const codes = { ...(scope.breakerCodes ?? {}) };
+    // A cell already saved keeps what the engineer saved for it.
+    panels.forEach(c => { if (c.rec && !codes[c.row.id]) codes[c.row.id] = { ...c.rec, savedAt: now }; });
+    onUpdate({ ...scope, breakerCodes: codes });
+  };
   const saved = scope?.breakerCodes?.[rowId];
 
   const [spec, setSpec] = useState('');
@@ -138,23 +174,33 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave }) => {
       {/* SIMOPRIME World: the panel of every cell */}
       {isWorld && panels.length > 0 && (
         <section className="border border-gray-200 rounded-md overflow-hidden">
-          <header className="px-3 py-2 bg-gray-50 border-b border-gray-200">
+          <header className="flex items-center gap-3 px-3 py-2 bg-gray-50 border-b border-gray-200">
             <h4 className="text-sm font-medium text-gray-800"
-              title="SIMOPRIME World design catalogue (issue 23, 06/2026): 2.2 configuration of panels, 2.2.3.3 width / ventilation / withdrawable VTs, 2.2.2.9 breakers. Click a cell to work out its breaker code.">
+              title="SIMOPRIME World design catalogue (issue 23, 06/2026): table 3.7 picks the typical, width, ventilation and breaker from the cell's current at the design temperature and frequency; 2.2.3.3 withdrawable VTs; 2.2.2.9 mandatory order codes. Click a cell to open its code below.">
               Cells — SIMOPRIME World
             </h4>
+            <span className="text-xs text-gray-600" title="Option points the catalogue leaves open: 1 shunt release, no 2nd or 3rd release, fixed-mounted breaker (W66), 12 NO + 12 NC, 64-pole plug, English — change any of them on a cell's code">
+              Defaults: 1 shunt release · W66 fixed · 12 NO + 12 NC · 64-pole · English
+            </span>
+            <button
+              onClick={saveAll}
+              title="Keep every breaker cell's code with the scope — cells already saved keep theirs"
+              className="ml-auto px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-xs hover:bg-gray-50"
+            >
+              Save all cells
+            </button>
           </header>
-          <div className="max-h-72 overflow-auto">
+          <div className="max-h-80 overflow-auto">
             <table className="w-full text-xs">
-              <thead className="bg-gray-100 text-gray-700 sticky top-0">
+              <thead className="bg-gray-100 text-gray-700 sticky top-0 z-10">
                 <tr>
-                  {['Feeder', 'Template', 'Current (A)', 'Panel', 'Width (mm)', 'Ventilation', 'Withdrawable VT', 'Breaker'].map(h => (
+                  {['Feeder', 'Template', 'Role', 'Current (A)', 'Typical', 'Width', 'Ventilation', 'W/d VT', 'Breaker code'].map(h => (
                     <th key={h} className="px-2 py-1.5 text-left font-medium whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {panels.map(({ row: r, panel: p }) => (
+                {panels.map(({ row: r, panel: p, code, open }) => (
                   <tr
                     key={r.id}
                     onClick={() => setRowId(r.id)}
@@ -162,20 +208,40 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave }) => {
                     className={`border-t border-gray-100 cursor-pointer ${r.id === rowId ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
                   >
                     <td className="px-2 py-1 whitespace-nowrap text-gray-800">{r.feederNo || `Row ${r.rowNumber}`}{scope?.breakerCodes?.[r.id] ? ' ✓' : ''}</td>
-                    <td className="px-2 py-1 text-gray-700 truncate max-w-[12rem]">{r.templateName}</td>
-                    <td className="px-2 py-1 text-gray-700">{p.feederA ?? (p.kind === 'circuit-breaker' ? <span className="text-red-700">?</span> : '—')}</td>
-                    <td className="px-2 py-1 text-gray-700 whitespace-nowrap">
-                      {panelKindLabel(p.kind).replace('Switching device panel with ', '')}{p.typicalA ? ` · ${p.typicalA} A` : ''}
+                    <td className="px-2 py-1 text-gray-700 truncate max-w-[14rem]">{r.templateName}</td>
+                    <td className="px-2 py-1 text-gray-700 whitespace-nowrap">{p.role ? ROLE_LABEL[p.role] : '—'}</td>
+                    <td className="px-2 py-1 whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                      {p.current?.value != null || HAS_BREAKER[p.role ?? 'outgoing'] ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <input
+                            key={`${r.id}-${p.current?.value ?? ''}`}
+                            defaultValue={p.current?.value ?? ''}
+                            onBlur={e => { if (e.target.value !== String(p.current?.value ?? '')) setCellCurrent(r.id, e.target.value); }}
+                            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                            title="The current this cell has to carry — type to set it yourself, clear to go back to the rules"
+                            className={`w-16 border rounded px-1.5 py-0.5 text-xs bg-white focus:outline-none focus:border-blue-500 ${
+                              p.current?.uncertain ? 'border-amber-400' : 'border-gray-300'}`}
+                          />
+                          {p.current?.source && (
+                            <span className={p.current.uncertain ? 'text-amber-800' : 'text-gray-500'} title={p.current.note}>
+                              {SOURCE_LABEL[p.current.source]}
+                            </span>
+                          )}
+                        </span>
+                      ) : '—'}
                     </td>
+                    <td className="px-2 py-1 text-gray-700 whitespace-nowrap">{p.typicalA ? `${p.typicalA} A` : panelKindLabel(p.kind).replace(' panel', '')}</td>
                     <td className="px-2 py-1 text-gray-700">{p.width ?? '—'}</td>
                     <td className="px-2 py-1 whitespace-nowrap">
                       {p.ventilation === 'Without'
                         ? <span className="text-gray-500">Without</span>
                         : <span className="inline-flex items-center gap-1 font-semibold text-gray-900"><FanIcon className="w-3.5 h-3.5" />{p.ventilation}</span>}
                     </td>
-                    <td className="px-2 py-1 text-gray-700">{p.withdrawableVT == null ? '—' : p.withdrawableVT ? 'Possible' : 'Not possible'}</td>
-                    <td className="px-2 py-1 font-mono text-gray-800 whitespace-nowrap">
-                      {p.breaker ? p.breaker[0] : p.kind === 'circuit-breaker' ? <span className="text-red-700">?</span> : '—'}
+                    <td className="px-2 py-1 text-gray-700">{p.withdrawableVT == null ? '—' : p.withdrawableVT ? 'Possible' : 'No'}</td>
+                    <td className="px-2 py-1 font-mono whitespace-nowrap">
+                      {code
+                        ? <span className={open ? 'text-amber-800' : 'text-gray-900'} title={open ? `${open} point(s) still open` : 'Complete'}>{code}</span>
+                        : HAS_BREAKER[p.role ?? 'outgoing'] ? <span className="text-red-700">?</span> : <span className="text-gray-500">—</span>}
                     </td>
                   </tr>
                 ))}
