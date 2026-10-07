@@ -17,6 +17,8 @@ import {
 } from '../../utils/sion3ae5/engine';
 import { specFromProject, decodeDraft, familyOf, worldPanelFor, equipmentOf } from '../../utils/sion3ae5/fromProject';
 import { catalogueOf } from '../../utils/sion3ae5/catalogue';
+import { ah3FromProject, evaluateAh3, type Ah3State } from '../../utils/sion3ae5/ah3';
+import { Ah3Builder } from './Ah3Builder';
 import { panelKindLabel } from '../../utils/sion3ae5/simoprimeWorld';
 import { ROLE_LABEL, SOURCE_LABEL, HAS_BREAKER } from '../../utils/sion3ae5/cells';
 
@@ -46,8 +48,19 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
   // SIMOPRIME World / A4: every cell's panel, straight from the design catalogue.
   const cat = scope ? catalogueOf(familyOf(projectData, scope)) : null;
   const isWorld = !!cat;
-  // The 3AE5 builder below serves only the 3AE5; EK36's 3AH3 has none yet.
+  // The 3AE5 builder below serves the 3AE5; EK36's 3AH3 has its own.
   const builder = cat?.breaker !== '3AH3';
+  /** A 3AH3 as the project gives it — a cell's rating, else the busbar's. */
+  const ah3Draft = (r?: typeof rows[number]): Ah3State | null => {
+    if (!scope) return null;
+    const typ = r ? worldPanelFor(projectData, scope, r).typicalA : null;
+    return ah3FromProject(scope.properties as Record<string, unknown>, { ir: typ });
+  };
+  /** What was saved for a 3AH3 cell, if it was saved by the 3AH3 builder. */
+  const ah3Saved = (id: string): Ah3State | null => {
+    const rec = scope?.breakerCodes?.[id];
+    return rec?.spec === '3AH3' ? (rec.state as Ah3State) : null;
+  };
   // …and each breaker cell's code as the rules and defaults give it, so the
   // whole switchgear is read at a glance and saved in one go.
   const panels = useMemo(() => {
@@ -57,7 +70,13 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
       let code: string | null = null;
       let open = 0;
       let rec: BreakerCodeRecord | null = null;
-      if (panel.breaker) {
+      if (!builder && panel.breakerText) {
+        const st = ah3Saved(r.id) ?? ah3Draft(r)!;
+        const ev = evaluateAh3(st);
+        code = ev.code;
+        open = ev.missing.length;
+        rec = { spec: '3AH3', state: st, code, savedAt: '' };
+      } else if (panel.breaker) {
         const d = specFromProject(projectData, scope, r);
         const st = decodeDraft(d.text, d);
         const ev = evaluate(st);
@@ -67,7 +86,8 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
       }
       return { row: r, panel, code, open, rec };
     });
-  }, [isWorld, scope, rows, projectData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isWorld, builder, scope, rows, projectData]);
 
   const setCellCurrent = (id: string, raw: string) => {
     if (!scope) return;
@@ -171,16 +191,16 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
             ))}
           </select>
         </label>
-        <button
+        {builder && <button
           onClick={() => scope && draft && state && onSave(scope, rowId, {
             spec, state, code: result?.code ?? '', savedAt: new Date().toISOString(),
           })}
-          disabled={!state || !builder}
+          disabled={!state}
           title={saved ? `Saved ${new Date(saved.savedAt).toLocaleString()}` : 'Keep this code with the scope'}
           className="ml-auto px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm disabled:opacity-50"
         >
           Save
-        </button>
+        </button>}
       </div>
 
       {/* SIMOPRIME World / A4: the panel of every cell */}
@@ -193,13 +213,13 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
             {cat.family === 'SIMOPRIME-WORLD' && <span className="text-xs text-gray-600" title="Option points the catalogue leaves open: 1 shunt release, no 2nd or 3rd release, fixed-mounted breaker (W66), 12 NO + 12 NC, 64-pole plug, English — change any of them on a cell's code">
               Defaults: 1 shunt release · W66 fixed · 12 NO + 12 NC · 64-pole · English
             </span>}
-            {builder && <button
+            <button
               onClick={saveAll}
               title="Keep every breaker cell's code with the scope — cells already saved keep theirs"
               className="ml-auto px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-xs hover:bg-gray-50"
             >
               Save all cells
-            </button>}
+            </button>
           </header>
           <div className="max-h-80 overflow-auto">
             <table className="w-full text-xs">
@@ -275,7 +295,7 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
                     <td className="px-2 py-1 font-mono whitespace-nowrap">
                       {code
                         ? <span className={open ? 'text-amber-800' : 'text-gray-900'} title={open ? `${open} point(s) still open` : 'Complete'}>{code}</span>
-                        : p.breakerText ? <span className="text-gray-800" title="The rating the 3AH3 must have — its order code is not built here yet">{p.breakerText}</span>
+                        : p.breakerText ? <span className="text-gray-800" title="The rating the 3AH3 must have">{p.breakerText}</span>
                         : HAS_BREAKER[p.role ?? 'outgoing'] ? <span className="text-red-700">?</span> : <span className="text-gray-500">—</span>}
                     </td>
                   </tr>
@@ -286,11 +306,15 @@ export const BreakerCodeTab: React.FC<Props> = ({ projectData, onSave, onUpdate 
         </section>
       )}
 
-      {!builder && (
-        <p className="text-sm text-gray-700 border border-gray-200 rounded-md bg-gray-50 px-4 py-3"
-          title="EK36 manual 10.3: 3AH3 vacuum circuit-breaker on truck">
-          {cat?.name} takes the 3AH3 vacuum circuit-breaker — each cell's rating is in the table above; its order code is not built here yet.
-        </p>
+      {/* EK36: the 3AH3 order number (HG 11.03) */}
+      {!builder && scope && (
+        <Ah3Builder
+          key={`${scopeId}/${rowId}`}
+          initial={ah3Saved(rowId) ?? ah3Draft(row)!}
+          fromProject={ah3Draft(row)!}
+          saved={scope.breakerCodes?.[rowId]}
+          onSave={rec => onSave(scope, rowId, rec)}
+        />
       )}
 
       {builder && <>

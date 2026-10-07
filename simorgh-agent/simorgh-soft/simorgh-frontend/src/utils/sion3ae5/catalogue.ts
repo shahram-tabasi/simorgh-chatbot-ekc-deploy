@@ -62,7 +62,7 @@ const CATALOGUES: Record<string, ScopeCatalogue> = {
     family: 'EK36',
     name: 'EK36',
     about: 'EK36 manual (EK-MS-04, 09.2025): each field offers only what the manual allows, and one choice fills in what it settles (10.1 technical data and dimensions, 17.3 busbars, 17.4 earthing busbar, 10.3 3AH3 supply voltages)',
-    cellsAbout: 'EK36 manual (EK-MS-04, 09.2025): every circuit-breaker, bus sectionalizer, riser and metering panel is 1100 mm (10.1); feeders 1250 or 2500 A with the 3AH3 vacuum circuit-breaker on truck (10.3).',
+    cellsAbout: 'EK36 manual (EK-MS-04, 09.2025): every circuit-breaker, bus sectionalizer, riser and metering panel is 1100 mm (10.1); feeders 1250 or 2500 A with the 3AH3 vacuum circuit-breaker on truck (10.3), its order number from Siemens HG 11.03 · 2018. Click a cell to open its code below.',
     table: 'EK36 10.1',
     fields: EK36_FIELDS,
     fieldRule: ek36FieldRule,

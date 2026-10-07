@@ -17,8 +17,8 @@
 //   10.3   Breaker            3AH3; motor DC 24 / 48 / 60 / 110 / 220 V,
 //                             AC 110 / 230 V
 //
-// The breaker is the 3AH3, not the SION 3AE5: its order code is not built
-// here (yet) — the cell says the rating the 3AH3 must have.
+// The breaker is the 3AH3, not the SION 3AE5: its order number is built by
+// ah3.ts (Siemens HG 11.03) from the rating each cell gives here.
 import type { DeviceLibraryProperties } from '../../types/project';
 import type { PanelChoice, PanelKind, WorldPanel, WorldSite } from './simoprimeWorld';
 import type { FieldOption, FieldRule, WorldSiteInfo } from './simoprimeWorldScope';
