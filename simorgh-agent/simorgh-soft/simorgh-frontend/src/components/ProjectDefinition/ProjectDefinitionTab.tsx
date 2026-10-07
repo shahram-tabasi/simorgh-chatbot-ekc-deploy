@@ -153,6 +153,16 @@ interface DevicePropertiesModalProps {
   cells?: { count: number | null; total: number; unknown: number } | null;
 }
 
+/** The places a new scope can be filed, as the Scope Library tree shows them. */
+const SCOPE_GROUPS: [Tier, string, string][] = [
+  ['LV', '', 'LV – Low Voltage'],
+  ['MV', '', 'MV – AIS'],
+  ...TEMPLATE_FAMILIES.MV.map(f => ['MV', f.id, `MV – AIS – ${f.label}`] as [Tier, string, string]),
+  ['GIS', '', 'MV – GIS – Gas Insulated Switchgear'],
+  ['HV', '', 'HV – High Voltage'],
+  ['OTHER', '', 'Other scopes'],
+];
+
 // Copying a specification is copying the whole device's; pasting it is either
 // the whole of it or one tab — the tabs are the groups in DEVICE_PROP_GROUPS,
 // so "paste Busbar & Construction" writes exactly the fields that tab shows
@@ -186,8 +196,11 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
   // window (and two columns of fields) instead of a 760px dialog.
   const [fullScreen, setFullScreen] = useState(false);
 
-  // SIMOPRIME World / A4: the catalogue's dropdowns, and what one choice settles.
-  const cat = type === 'MV' ? catalogueOf(family) : null;
+  // Where the scope is filed: MV scopes by their AIS family, as the Scope
+  // Library tree has them.
+  const [fam, setFam] = useState<string | null>(family ?? null);
+  // SIMOPRIME World / A4 / EK36: the catalogue's dropdowns, and what one choice settles.
+  const cat = type === 'MV' ? catalogueOf(fam) : null;
   const world = !!cat;
   const [autos, setAutos] = useState<Set<string>>(() => new Set((item?.properties as any)?.catalogueAuto ?? []));
   // The site, and what the scope's cells already need.
@@ -263,7 +276,10 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
 
   const handleSave = () => {
     if (!name.trim()) return;
-    onSave({ id: item?.id ?? `dev-${Date.now()}`, name: name.trim(), type, properties: props });
+    onSave({
+      id: item?.id ?? `dev-${Date.now()}`, name: name.trim(), type, properties: props,
+      ...(type === 'MV' && fam ? { family: fam } : {}),
+    });
   };
 
   // PropField and PropCheckbox are defined at module level to prevent focus loss
@@ -368,14 +384,18 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
             </div>
             {mode === 'add' && (
               <div className="flex items-center gap-2">
-                <label className="text-sm font-medium">Type:</label>
+                <label className="text-sm font-medium" title="Where the scope is filed in the Scope Library">Group:</label>
                 <select
                   className="border border-gray-300 rounded px-2 py-1 text-sm"
-                  value={type}
-                  onChange={e => setType(e.target.value as Tier)}
+                  value={`${type}|${type === 'MV' ? fam ?? '' : ''}`}
+                  onChange={e => {
+                    const [t, f] = e.target.value.split('|');
+                    setType(t as Tier);
+                    setFam(f || null);
+                  }}
                 >
-                  {TIERS.map(t => (
-                    <option key={t} value={t}>{t} – {TIER_LABEL[t]}</option>
+                  {SCOPE_GROUPS.map(([t, f, label]) => (
+                    <option key={`${t}|${f}`} value={`${t}|${f}`}>{label}</option>
                   ))}
                 </select>
               </div>
@@ -699,7 +719,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
   const handleDeviceSave = (item: DeviceLibraryItem) => {
     // The AIS family the scope was added under (or already had) stays with
     // it while it is MV.
-    const family = deviceModal.mode === 'add' ? deviceModal.addFamily : deviceModal.item?.family;
+    const family = item.family ?? (deviceModal.mode === 'add' ? deviceModal.addFamily : deviceModal.item?.family);
     const kept = item.type === 'MV' && family ? { ...item, family } : item;
     return deviceModal.mode === 'add' ? addLib(kept) : updateLib(kept);
   };

@@ -85,6 +85,8 @@ export function ek36FieldRule(key: string, p: Props, _site: WorldSiteInfo): Fiel
   switch (key) {
     case 'ratedInsulationVoltage':
       return { options: [opt('36 kV')] };
+    case 'serviceVoltage':
+      return { options: ['30 kV', '33 kV', '34.5 kV', '35 kV', '36 kV'].map(v => opt(v)), note: 'Operating voltages up to the 36 kV rating.' };
     case 'ratedImpulseWithstandVoltage':
       return { options: [opt('170 kV')] };
     case 'ratedPowerFrequencyWithstandVoltage':
@@ -136,6 +138,11 @@ export function ek36FieldRule(key: string, p: Props, _site: WorldSiteInfo): Fiel
       return { options: SUPPLY.map(v => opt(v)), note: '3AH3 closing solenoid 3AY1510, 1st shunt release 3AY1510, 2nd 3AX1101 (10.3).' };
     case 'springChargingMotor':
       return { options: SUPPLY.map(v => opt(v)), note: '3AH3 motor: 500 W DC / 650 VA AC (10.3).' };
+    case 'switchgearLightingSpaceHeater':
+    case 'motorsSpaceHeater':
+      return { options: [opt('AC 230 V'), opt('AC 110 V')], note: key === 'switchgearLightingSpaceHeater' ? 'Heaters in the switching-device and cable compartments, thermostat ≥ +5 °C, hygrostat ≤ 85 % (10.1).' : undefined };
+    case 'ventilationType':
+      return { options: [opt('Without')], note: 'EK36 panels are not ventilated (10.1).' };
     default:
       return null;
   }
@@ -145,7 +152,8 @@ export const EK36_FIELDS = [
   'ratedInsulationVoltage', 'ratedImpulseWithstandVoltage', 'ratedPowerFrequencyWithstandVoltage', 'frequency',
   'ratedShortTimeWithstandCurrent', 'isc', 'mainBusbarRatedCurrent', 'mainBusbarSize', 'earthBusbarSize',
   'mainBusbarConfiguration', 'busbarType', 'width', 'height', 'depth', 'ip', 'switchgearAccess',
-  'controlProtectionClosingTrippingSignalling', 'springChargingMotor',
+  'controlProtectionClosingTrippingSignalling', 'springChargingMotor', 'serviceVoltage',
+  'switchgearLightingSpaceHeater', 'motorsSpaceHeater', 'ventilationType',
 ];
 
 /** One field changed: fill in what it settles (see applyWorldRules). */
@@ -168,6 +176,7 @@ export function applyEk36Rules(
   fill('height', '2650');
   fill('depth', '2850');
   fill('switchgearAccess', REAR);
+  fill('ventilationType', 'Without');
   const ka = num(p.ratedShortTimeWithstandCurrent);
   if (ka != null && IK.includes(ka)) {
     fill('isc', String(ka));
