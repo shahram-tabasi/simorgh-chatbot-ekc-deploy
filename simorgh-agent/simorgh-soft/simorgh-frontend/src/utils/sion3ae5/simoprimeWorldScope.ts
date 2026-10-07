@@ -151,6 +151,12 @@ export function worldFieldRule(key: string, p: Props, site: WorldSiteInfo): Fiel
       const high = ka === 40 ? 2460 : 2425;
       return { options: [opt(String(high), `${high} mm — IAC A FLR 1 s (standard)`), opt('2253', '2253 mm — IAC A FLR 0.1 s')] };
     }
+    case 'ventilationType':
+      return {
+        options: [opt('Without'), opt('Natural'), opt('Forced')],
+        note: /natural|forced/i.test(String(p.ventilationType ?? '')) && String(p.ip ?? '').includes('51')
+          ? 'IP51 is possible only without ventilation.' : undefined,
+      };
     case 'ip':
       return {
         options: [opt('IP4X', 'IP4X'), opt('IP51', 'IP51 — non-ventilated panels only')],
@@ -176,12 +182,23 @@ export function worldFieldRule(key: string, p: Props, site: WorldSiteInfo): Fiel
   }
 }
 
+/**
+ * The office's own choices, for every scope whatever its catalogue.
+ */
+export const OFFICE_CHOICES: Record<string, FieldRule> = {
+  thermoFitCover: { options: [opt('Yes'), opt('No')] },
+  coating: { options: [opt('Tin Plated'), opt('Silver Plated (only joints)')] },
+  incomingConnection: { options: [opt('Cable / Bottom'), opt('Busduct / Top')] },
+  ventilationType: { options: [opt('Without'), opt('Natural'), opt('Forced')] },
+};
+
 /** Fields the catalogue speaks to — the form shows them as dropdowns. */
 export const WORLD_FIELDS = [
   'ratedInsulationVoltage', 'serviceVoltage', 'ratedImpulseWithstandVoltage', 'ratedPowerFrequencyWithstandVoltage',
   'frequency', 'ratedShortTimeWithstandCurrent', 'isc', 'mainBusbarRatedCurrent', 'mainBusbarSize',
   'mainBusbarConfiguration', 'busbarType', 'width', 'depth', 'height', 'ip', 'switchgearAccess', 'ral',
   'controlProtectionClosingTrippingSignalling', 'springChargingMotor', 'switchgearLightingSpaceHeater',
+  'ventilationType',
 ];
 
 /** True when a value is one the catalogue allows, given the rest. */

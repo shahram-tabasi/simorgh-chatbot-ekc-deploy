@@ -19,8 +19,9 @@ import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, emptyTiers } from 
 import { TEMPLATE_FAMILIES } from '../../utils/templateFamilies';
 import { BreakerCodeTab } from './BreakerCodeTab';
 import {
-  applyWorldRules, isAllowed, worldFieldRule, WORLD_FIELDS, type FieldRule, type WorldSiteInfo,
+  applyWorldRules, isAllowed, worldFieldRule, WORLD_FIELDS, OFFICE_CHOICES, type FieldRule, type WorldSiteInfo,
 } from '../../utils/sion3ae5/simoprimeWorldScope';
+import { scopeVentilation } from '../../utils/sion3ae5/fromProject';
 import { appConfirm } from '../shared/AppDialog';
 
 // ──────────────────────────────────────────────────────────────
@@ -143,6 +144,8 @@ interface DevicePropertiesModalProps {
    *  form to that catalogue. */
   family?:   string | null;
   site?:     WorldSiteInfo;
+  /** SIMOPRIME World: the ventilation its cells need, and why. */
+  ventilation?: { value: string; why: string } | null;
 }
 
 // Copying a specification is copying the whole device's; pasting it is either
@@ -167,7 +170,7 @@ function pasteSpec(
 }
 
 const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
-  item, mode: initialMode, addType, onSave, onClose, clip, onCopy, family, site = { ambientC: null },
+  item, mode: initialMode, addType, onSave, onClose, clip, onCopy, family, site = { ambientC: null }, ventilation,
 }) => {
   const [mode,  setMode]  = useState<ModalMode>(initialMode);
   const [name,  setName]  = useState(item?.name ?? '');
@@ -190,18 +193,34 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
     setAutos(r.autos);
   };
 
-  // Opening a World scope to edit fills in what the catalogue alone decides.
+  // Opening a scope to edit: a value written another way ("yes", "tin
+  // plated") takes the dropdown's spelling, and for a World scope the
+  // catalogue fills in what it alone decides.
   useEffect(() => {
-    if (!world || initialMode === 'view') return;
-    const r = applyWorldRules(props, null, new Set(), site);
+    if (mode === 'view') return;
+    const fixed: Record<string, any> = { ...props };
+    Object.keys(fixed).forEach(k => {
+      const rule = (world && WORLD_FIELDS.includes(k) ? worldFieldRule(k, fixed, site) : null) ?? OFFICE_CHOICES[k];
+      const v = String(fixed[k] ?? '').trim().toLowerCase();
+      const hit = rule?.options.find(o => o.value.toLowerCase() === v);
+      if (hit && hit.value !== fixed[k]) fixed[k] = hit.value;
+    });
+    if (!world) { setProps(fixed as DeviceLibraryProperties); return; }
+    const r = applyWorldRules(fixed as DeviceLibraryProperties, null, new Set(), site);
+    // The ventilation its cells need, unless the engineer already chose one.
+    if (ventilation && !(r.props as any).ventilationType) {
+      (r.props as any).ventilationType = ventilation.value;
+      r.autos.add('ventilationType');
+    }
     setProps(r.props);
     setAutos(r.autos);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [world]);
+  }, [world, mode === 'view']);
 
   /** One specification field: the catalogue's dropdown where it speaks, else text. */
   const F = (key: keyof DeviceLibraryProperties, label: string) => {
-    const rule = world && WORLD_FIELDS.includes(key as string) ? worldFieldRule(key as string, props, site) : null;
+    const rule = (world && WORLD_FIELDS.includes(key as string) ? worldFieldRule(key as string, props, site) : null)
+      ?? OFFICE_CHOICES[key as string] ?? null;
     const value = String((props as any)[key] ?? '');
     if (!rule) {
       return <PropField key={key as string} label={label} value={value} isEditable={isEditable} onChange={v => setProp(key, v)} />;
@@ -209,7 +228,8 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
     return (
       <CatalogueField
         key={key as string} label={label} value={value} isEditable={isEditable} rule={rule}
-        allowed={isAllowed(key as string, props, site)} auto={autos.has(key as string)}
+        allowed={world ? isAllowed(key as string, props, site) : !value || rule.options.some(o => o.value === value)}
+        auto={autos.has(key as string)}
         onChange={v => setProp(key, v)}
       />
     );
@@ -420,6 +440,10 @@ const DevicePropertiesModal: React.FC<DevicePropertiesModalProps> = ({
               {F('busbarType', 'Busbar Type')}
               {F('thermoFitCover', 'Thermofit Cover')}
               {F('coating', 'Coating')}
+              {F('ventilationType', 'Type of Ventilation')}
+              {world && ventilation && (
+                <p className="text-[11px] text-gray-500 -mt-0.5 mb-1 text-right">{ventilation.why}</p>
+              )}
             </div>
           )}
           {activeSection === 'padlock' && (
@@ -696,12 +720,22 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
 
       <p className={secHd}>General</p>
       <div className="space-y-3">
-        {[['Altitude Above Sea Level (m)', 'altitudeAboveSeaLevel'], ['Design Temperature (°C)', 'designTemperature']].map(([label, key]) => (
-          <div key={key} className="grid grid-cols-3 gap-4 items-center">
-            <label className="text-sm">{label}:</label>
-            <input className={inp} value={(techSettings.general as Record<string,string>)[key] ?? ''} onChange={e => setTech('general', key, e.target.value)} />
-          </div>
-        ))}
+        <div className="grid grid-cols-3 gap-4 items-center">
+          <label className="text-sm">Altitude Above Sea Level (m):</label>
+          <input className={inp} value={techSettings.general.altitudeAboveSeaLevel ?? ''} onChange={e => setTech('general', 'altitudeAboveSeaLevel', e.target.value)} />
+        </div>
+        {/* The ambient temperatures the catalogues are written for (SIMOPRIME
+            World 1.1, 3.7, 3.8) — the ventilation and breaker choices read it. */}
+        <div className="grid grid-cols-3 gap-4 items-center">
+          <label className="text-sm">Design Temperature (°C):</label>
+          <select className={inp} value={techSettings.general.designTemperature ?? ''} onChange={e => setTech('general', 'designTemperature', e.target.value)}>
+            <option value="">Choose…</option>
+            {!['25', '30', '35', '40', '45', '50', '55'].includes(String(techSettings.general.designTemperature ?? '')) && techSettings.general.designTemperature && (
+              <option value={techSettings.general.designTemperature}>{techSettings.general.designTemperature} — not a catalogue step</option>
+            )}
+            {['25', '30', '35', '40', '45', '50', '55'].map(t => <option key={t} value={t}>{t} °C</option>)}
+          </select>
+        </div>
       </div>
 
       <p className={secHd}>Wire Size *</p>
@@ -1244,6 +1278,8 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
             ? deviceModal.addFamily ?? null
             : deviceModal.item ? scopeFamily(deviceModal.item) : null}
           site={{ ambientC: parseFloat(String(projectData.techSettings?.general?.designTemperature ?? '')) || null }}
+          ventilation={deviceModal.item && scopeFamily(deviceModal.item) === 'SIMOPRIME-WORLD'
+            ? scopeVentilation(projectData, deviceModal.item) : null}
         />
       )}
 

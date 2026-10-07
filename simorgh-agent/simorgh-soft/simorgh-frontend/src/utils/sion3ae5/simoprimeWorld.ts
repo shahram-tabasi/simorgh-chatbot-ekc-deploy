@@ -126,6 +126,8 @@ export interface WorldSite {
   /** Ambient (design) temperature, °C. */
   ambientC: number | null;
   frequencyHz: number | null;
+  /** Front cable access — withdrawable VTs are not possible then (2.1.1, fn 2). */
+  frontAccess?: boolean;
 }
 
 export function worldPanel(kind: PanelKind, feederA: number | null, site: WorldSite): WorldPanel {
@@ -173,6 +175,8 @@ export function worldPanel(kind: PanelKind, feederA: number | null, site: WorldS
   p.breaker = DATA.find(r => r[0] === mlfb) ?? null;
   p.breakerA = p.breaker?.[5] ?? null;
   p.withdrawableVT = VT_POSSIBLE[`${forty ? '40' : 'le31.5'}/${typ}/${vent}`] ?? null;
+  // 2.1.1 fn 2: only in a withdrawable-type switchgear, 800 mm, cable access from the back.
+  if (p.withdrawableVT && site.frontAccess) { p.withdrawableVT = false; notes.push('Withdrawable VT: not with front cable access.'); }
   if (p.breakerA === 3150) notes.push('3150 A breaker in the naturally ventilated 2500 A typical: the CTs must carry 1.2 × In.');
   if (vent === 'Forced') notes.push('Forced ventilation: supply AC 220–240 V.');
   if (width === 800) notes.push('800 mm panel with breaker on truck: a separate ramp is needed.');

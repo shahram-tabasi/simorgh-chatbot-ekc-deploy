@@ -41,6 +41,9 @@ export interface DeviceLibraryProperties {
   busbarType?: string;
   thermoFitCover?: string;
   coating?: string;
+  /** Without / Natural / Forced — for SIMOPRIME World worked out from the
+   *  cells (design catalogue table 3.7), the most demanding one. */
+  ventilationType?: string;
   // Pad Lock Checkboxes
   padLockCbOnOff?: boolean;
   padLockCbTestService?: boolean;

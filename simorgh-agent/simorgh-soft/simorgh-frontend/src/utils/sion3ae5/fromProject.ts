@@ -126,6 +126,7 @@ export function worldPanelFor(data: ProjectData, item: DeviceLibraryItem, row?: 
     ...scopeRatings(data, item),
     ambientC: num(data.techSettings?.general?.designTemperature),
     frequencyHz: num(p.frequency),
+    frontAccess: /^front/i.test(String(p.switchgearAccess ?? '')),
   };
   if (!row) return worldPanel('circuit-breaker', num(p.mainBusbarRatedCurrent), site);
   const { role, current } = cellOf(data, item, row);
@@ -223,4 +224,26 @@ export function decodeDraft(text: string, draft?: Pick<DraftSpec, 'assumed' | 'p
     }
   }
   return s;
+}
+
+/**
+ * A SIMOPRIME World scope's type of ventilation: the most demanding of its
+ * cells (table 3.7), or — before it has cells — what its busbar asks for
+ * (a 4000 A busbar is force-ventilated).
+ */
+export function scopeVentilation(data: ProjectData, item: DeviceLibraryItem): { value: string; why: string } {
+  const rank = { Without: 0, Natural: 1, Forced: 2 } as const;
+  const rows = equipmentOf(data, item)?.devices ?? [];
+  let best: 'Without' | 'Natural' | 'Forced' = 'Without';
+  let because = '';
+  for (const r of rows) {
+    const panel = worldPanelFor(data, item, r);
+    if (rank[panel.ventilation] > rank[best]) { best = panel.ventilation; because = r.feederNo || r.templateName; }
+  }
+  if (rows.length) {
+    return { value: best, why: best === 'Without' ? `None of its ${rows.length} cells needs ventilation (table 3.7).` : `Cell ${because} needs ${best.toLowerCase()} ventilation (table 3.7).` };
+  }
+  const busbar = num((item.properties as any)?.mainBusbarRatedCurrent);
+  if (busbar === 4000) return { value: 'Forced', why: 'A 4000 A busbar needs forced ventilation.' };
+  return { value: 'Without', why: 'No cells yet — from the busbar alone.' };
 }

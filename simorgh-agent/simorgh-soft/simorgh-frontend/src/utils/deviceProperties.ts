@@ -38,6 +38,7 @@ export const DEVICE_PROP_LABELS: Record<string, string> = {
   busbarType:                                   'Busbar Type',
   thermoFitCover:                               'Thermo-Fit Cover',
   coating:                                      'Coating',
+  ventilationType:                              'Type of Ventilation',
   padLockCbOnOff:                               'Pad Lock CB On / Off',
   padLockCbTestService:                         'Pad Lock CB Test / Service',
   padLockHvDoor:                                'Pad Lock HV Door',
@@ -69,7 +70,7 @@ export const DEVICE_PROP_GROUPS: { id: string; label: string; keys: string[] }[]
     keys: [
       'mainBusbarSize', 'earthBusbarSize', 'neutralBusbarSize', 'ral',
       'incomingConnection', 'outgoingConnection', 'ip', 'switchgearAccess',
-      'switchgearArrangement', 'busbarType', 'thermoFitCover', 'coating',
+      'switchgearArrangement', 'busbarType', 'thermoFitCover', 'coating', 'ventilationType',
     ],
   },
   { id: 'padlock', label: 'Pad Locks', keys: ['padLockCbOnOff', 'padLockCbTestService', 'padLockHvDoor'] },

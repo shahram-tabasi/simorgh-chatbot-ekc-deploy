@@ -85,7 +85,7 @@ export function buildMechanicalItems(data: ProjectData, equipment: Equipment): M
     add('Busbar', 'Neutral busbar', text(spec.neutralBusbarSize), 'mm', runLength || '—', runBasis || '—');
   }
   if (text(spec.busbarType)) add('Busbar', 'Busbar type', text(spec.busbarType), '', '', 'panel specification');
-  if (text(spec.thermoFitCover)) add('Busbar', 'Thermo-fit cover / insulation', text(spec.thermoFitCover), '', '', 'panel specification');
+  if (/^(yes|with)/i.test(text(spec.thermoFitCover))) add('Busbar', 'Thermo-fit cover / insulation', text(spec.thermoFitCover), '', '', 'panel specification');
 
   // ── Compartments, from the feeders themselves ─────────────────────────
   const lines = equipment.devices ?? [];
