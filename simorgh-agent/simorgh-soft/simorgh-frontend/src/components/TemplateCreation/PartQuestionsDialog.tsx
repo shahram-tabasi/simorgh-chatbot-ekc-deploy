@@ -213,6 +213,28 @@ export const PartQuestionsDialog: React.FC<Props> = ({
     [part, slot, tier, slotTitle]);
   const effective = (symbolId || auto) as SymbolId;
 
+  /** The library symbol drawn for an LV breaker's protection and poles: one
+   *  whose name carries them both ("CB LSIG 4P"), else the protection alone. */
+  const symbolFor = (protection?: string, poles?: string) => {
+    if (!protection && !poles) return undefined;
+    const words = (name: string) => name.toUpperCase().split(/[^A-Z0-9+]+/);
+    const has = (o: { name: string }, w?: string) => !w || words(o.name).includes(w);
+    return newSymbols.find(o => has(o, protection) && has(o, poles))
+      ?? (protection ? newSymbols.find(o => has(o, protection) && !POLES.some(p => p !== poles && words(o.name).includes(p))) : undefined);
+  };
+  /** Protection or poles answered: the breaker takes the symbol named for
+   *  them, unless a drawing was picked by hand for something else. */
+  const setTrip = (key: 'protection' | 'poles', value: string | undefined) =>
+    setAnswers(prev => {
+      const next: PartSingleLine = { ...prev, [key]: value };
+      if (value === undefined) delete next[key];
+      const before = symbolFor(prev.protection, prev.poles)?.id;
+      const now = symbolFor(next.protection, next.poles)?.id;
+      if (!prev.drawing || prev.drawing === before) {
+        if (now) next.drawing = now; else delete next.drawing;
+      }
+      return next;
+    });
   const set = <K extends keyof PartSingleLine>(key: K, value: PartSingleLine[K] | undefined) =>
     setAnswers(prev => {
       const next = { ...prev };
@@ -407,22 +429,33 @@ export const PartQuestionsDialog: React.FC<Props> = ({
 
               {isLvBreaker && (
                 <Question n={++n} title="Protection (trip unit)">
-                  <Choice on={!answers.protection} title="Not stated" onClick={() => set('protection', undefined)} />
+                  <Choice on={!answers.protection} title="Not stated" onClick={() => setTrip('protection', undefined)} />
                   {PROTECTIONS.map(([v, note]) => (
-                    <Choice key={v} on={answers.protection === v} title={v} note={note} onClick={() => set('protection', v)} />
+                    <Choice key={v} on={answers.protection === v} title={v} note={note} onClick={() => setTrip('protection', v)} />
                   ))}
                   <p className="w-full text-[11px] text-gray-500">
-                    L overload · S short-time · I instantaneous · N neutral · G earth fault. Written beside the breaker.
+                    L overload · S short-time · I instantaneous · N neutral · G earth fault.
                   </p>
                 </Question>
               )}
 
               {isLvBreaker && (
                 <Question n={++n} title="Poles">
-                  <Choice on={!answers.poles} title="Not stated" onClick={() => set('poles', undefined)} />
+                  <Choice on={!answers.poles} title="Not stated" onClick={() => setTrip('poles', undefined)} />
                   {POLES.map(v => (
-                    <Choice key={v} on={answers.poles === v} title={v} onClick={() => set('poles', v)} />
+                    <Choice key={v} on={answers.poles === v} title={v} onClick={() => setTrip('poles', v)} />
                   ))}
+                  {(answers.protection || answers.poles) && (() => {
+                    const sym = symbolFor(answers.protection, answers.poles);
+                    const want = ['CB', answers.protection, answers.poles].filter(Boolean).join(' ');
+                    return (
+                      <p className={`w-full text-[11px] ${sym ? 'text-gray-600' : 'text-amber-800'}`}>
+                        {sym
+                          ? `Drawn with “${sym.name}” from the symbol library.`
+                          : `No symbol in the library for this yet — make one in the Symbol Library and name it “${want}”; it is picked up here.`}
+                      </p>
+                    );
+                  })()}
                 </Question>
               )}
 

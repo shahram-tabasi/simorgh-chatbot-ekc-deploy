@@ -51,7 +51,7 @@ export type SymbolId =
   // connections
   | 'terminal' | 'test-block' | 'key-interlock' | 'mechanical-interlock'
   | 'bus-duct' | 'link' | 'outgoing' | 'incoming' | 'accessory'
-  | 'cable-sealing-end' | 'resistor';
+  | 'cable-sealing-end' | 'resistor' | 'plug-in';
 
 export interface IecSymbol {
   id: SymbolId;
@@ -457,6 +457,14 @@ export const IEC_SYMBOLS: Record<SymbolId, IecSymbol> = {
       ln(x, y, x, y + 11), circ(x, y + 22, 10),
       ln(x - 7, y + 15, x + 7, y + 29, 1.1), ln(x + 7, y + 15, x - 7, y + 29, 1.1),
     ].join(''),
+  },
+  'plug-in': {
+    id: 'plug-in', title: 'Plug-in contact (drawer)', titleFa: 'سوکت کشو', group: 'Connections',
+    // The drawer's disconnecting contact: two chevrons on the line.
+    draw: (x, y) => ln(x, y, x, y + 13) +
+      path(`M ${x - 7} ${y + 13} L ${x} ${y + 20} L ${x + 7} ${y + 13}`, 1.3) +
+      path(`M ${x - 7} ${y + 20} L ${x} ${y + 27} L ${x + 7} ${y + 20}`, 1.3) +
+      ln(x, y + 27, x, y + CELL),
   },
   socket: {
     id: 'socket', title: 'Socket outlet', titleFa: 'پریز', group: 'Loads',

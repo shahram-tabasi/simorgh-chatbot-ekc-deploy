@@ -27,6 +27,7 @@ import {
   overrideBox, buildSymbolCatalogueSvg, IEC_SYMBOLS, symbolOverride, symbolTerminals, OFFICE_PREFIX,
 } from './iecSymbols';
 import { type Tier, LAYOUT_OF } from './tiers';
+import { familyOf } from './templateFamilies';
 import { partCode } from './eplanDataExport';
 
 export const EPLAN_HEADERS = [
@@ -479,9 +480,6 @@ export interface ChainItem {
   drawAs?: string;
   /** Everything its window answered, for what the drawing reads directly. */
   sld?: PartSingleLine;
-  /** Lines written under it that are not SIM-TABLE — an LV breaker's poles
-   *  and trip unit. */
-  info?: string[];
   /** The part, as the template knows it: `slot#index`. */
   key?: string;
   /** The device the part above it became — what "series" and "parallel"
@@ -604,8 +602,6 @@ function chainOfTemplate(
         key: `${slot}#${k}`,
         anchor: out[out.length - 1],
       };
-      // An LV main switch's poles and trip unit, written under it.
-      if (sld.poles || sld.protection) item.info = [[sld.poles, sld.protection].filter(Boolean).join(' · ')];
       out.push(item);
       host = item;
     });
@@ -1191,7 +1187,6 @@ function allLines(item: ChainItem, wrap: number): { text: string; accessory: boo
   return [
     ...labelLines(labelText(item), wrap).map((text, n) => ({ text, accessory: false, sim: n > 0 })),
     ...item.accessoryCodes.flatMap(c => labelLines(c, wrap).map(text => ({ text, accessory: true, sim: true }))),
-    ...(item.info ?? []).map(text => ({ text, accessory: true, sim: false })),
   ];
 }
 
@@ -1427,6 +1422,9 @@ export interface MvCellOptions {
   /** An LV feeder drawn by the cell's rules: its breaker stays the breaker
    *  it is, not the MV catalogue's vacuum breaker. */
   lv?: boolean;
+  /** LV: OFW (in a drawer — the breaker is fixed in it) or FIX (the
+   *  breaker withdrawable). */
+  lvFamily?: string;
 }
 
 export const mvOptionsOf = (template?: TemplateLike): MvCellOptions => ({
@@ -1821,6 +1819,13 @@ function drawMvCellLines(
   if (sw && !sw.chosen && !answers.switchType && !opts.lv) {
     if (['vcb-racking', 'withdrawable-cb', 'circuit-breaker', 'mcb'].includes(sw.id)) sw = { ...sw, id: 'vcb' };
     else if (['contactor', 'motor-starter'].includes(sw.id)) sw = { ...sw, id: 'vacuum-contactor-fuse' };
+  }
+  // LV: in a FIX panel the breaker is withdrawable; in an OFW drawer the
+  // drawer is what comes out, and the breaker in it is fixed. A symbol picked
+  // by hand stays as picked.
+  if (sw && !sw.chosen && opts.lv) {
+    if (opts.lvFamily === 'FIX' && ['circuit-breaker', 'mcb'].includes(sw.id)) sw = { ...sw, id: 'withdrawable-cb' };
+    if (opts.lvFamily === 'OFW' && sw.id === 'withdrawable-cb') sw = { ...sw, id: 'circuit-breaker' };
   }
   // A panel that is a switch by what it is — a feeder, a coupling, a link —
   // draws one even before its parts are in.
@@ -3157,10 +3162,13 @@ export function buildTemplateSvg(
   // main and auxiliary, serial links, statuses, interlocks — with its own
   // breaker kept, and is drawn as one line or as every conductor.
   const lvCell = tier === 'LV' && template?.useSimorghDraw !== false && !!template?.singleLine?.lvLines;
-  if (lvCell && template?.singleLine?.lvLines === 'multi') return buildLvMultiLineSvg(template, chain);
+  const lvFamily = lvCell ? familyOf('LV', template?.hierarchy)?.id : undefined;
+  if (lvCell && template?.singleLine?.lvLines === 'multi') return buildLvMultiLineSvg(template, chain, lvFamily);
   const mvOpts: MvCellOptions = lvCell
-    ? { answers: template?.singleLine, mechanical: template?.mechanical, family: '', cellType: '', sub: '', lv: true }
+    ? { answers: template?.singleLine, mechanical: template?.mechanical, family: '', cellType: '', sub: '', lv: true, lvFamily }
     : mvOptionsOf(template);
+  // An OFW feeder is a drawer: its plug-in contacts at the top and the foot.
+  const plug = lvFamily === 'OFW' ? CELL : 0;
   const mvSize = isMv || lvCell ? measureMvCell(chain, mvOpts) : null;
 
   // Room for whatever reaches out sideways, the same way a sheet works out how
@@ -3171,14 +3179,14 @@ export function buildTemplateSvg(
     : Math.max(branch.shunts.length > 0 ? 130 : 34, reach + 10);
   const x = margin + branchDx;
   const stub = 26;
-  const top = 34 + stub;
+  const top = 34 + stub + plug;
 
   const drawn = mvSize ? drawMvCell(chain, mvOpts, x, top) : drawBranch(branch, x, top);
   const width = mvSize
     ? Math.max(x + INSTR_DX + 104, x + mvSize.right + 20) + margin
     : x + INSTR_DX + 104 + margin;
   const bottom = Math.max(drawn.bottom, top);
-  const height = Math.max(bottom + stub + 34 + (mvSize ? CELL + 20 : 0), mvSize ? top + mvSize.height + 20 : 0);
+  const height = Math.max(bottom + plug + stub + 34 + (mvSize ? CELL + 20 : 0), mvSize ? top + mvSize.height + 20 : 0);
 
   const out: string[] = [];
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" ` +
@@ -3203,14 +3211,16 @@ export function buildTemplateSvg(
   // Where it hangs from, and what it feeds. A dummy and the neutral panel
   // hang from nothing on the busbar.
   if (!(mvSize && mvOffBus(mvOpts))) {
-    out.push(line(x, top - stub, x, top, 1.3));
-    out.push(`<path d="M ${x - 6} ${top - stub + 11} L ${x} ${top - stub} L ${x + 6} ${top - stub + 11} Z" fill="#111"/>`);
-    out.push(`<text x="${x + 10}" y="${top - stub + 9}" font-size="8.5" fill="#666">from the busbar</text>`);
+    const t0 = top - plug;
+    out.push(line(x, t0 - stub, x, t0, 1.3));
+    out.push(`<path d="M ${x - 6} ${t0 - stub + 11} L ${x} ${t0 - stub} L ${x + 6} ${t0 - stub + 11} Z" fill="#111"/>`);
+    out.push(`<text x="${x + 10}" y="${t0 - stub + 9}" font-size="8.5" fill="#666">from the busbar</text>`);
+    if (plug) out.push(drawBlock('plug-in', x, t0));
   }
   // An LV single line says what it carries: a slash across the line at the
   // top, and beside it 1PH+N, 3 or 4.
   const phases = lvCell ? template?.singleLine?.phases : undefined;
-  if (phases) out.push(phaseTick(x, top - 7, phases));
+  if (phases) out.push(phaseTick(x, top - plug - 7, phases));
 
   out.push(drawn.svg);
 
@@ -3226,9 +3236,11 @@ export function buildTemplateSvg(
       out.push(drawMvEnd(mvEnd, x, bottom, mvOpts, false));
     }
   } else {
-    out.push(line(x, bottom, x, bottom + stub, 1.3));
-    out.push(`<path d="M ${x - 6} ${bottom + stub - 11} L ${x} ${bottom + stub} L ${x + 6} ${bottom + stub - 11} Z" fill="#111"/>`);
-    out.push(`<text x="${x + 10}" y="${bottom + stub - 2}" font-size="8.5" fill="#666">to the load</text>`);
+    if (plug) out.push(drawBlock('plug-in', x, bottom));
+    const b0 = bottom + plug;
+    out.push(line(x, b0, x, b0 + stub, 1.3));
+    out.push(`<path d="M ${x - 6} ${b0 + stub - 11} L ${x} ${b0 + stub} L ${x + 6} ${b0 + stub - 11} Z" fill="#111"/>`);
+    out.push(`<text x="${x + 10}" y="${b0 + stub - 2}" font-size="8.5" fill="#666">to the load</text>`);
   }
 
   out.push('</svg>');
@@ -3280,7 +3292,7 @@ function polesOf(item: ChainItem, conductors: string[]): string[] {
 }
 
 function buildLvMultiLineSvg(
-  template: TemplateLike, chain: ChainItem[],
+  template: TemplateLike, chain: ChainItem[], lvFamily?: string,
 ): { svg: string; width: number; height: number; devices: number } {
   const ln = (x1: number, y1: number, x2: number, y2: number, w = 1.3, dash = '') => rawLine(x1, y1, x2, y2, w, dash);
   const sl = template.singleLine ?? {};
@@ -3293,7 +3305,10 @@ function buildLvMultiLineSvg(
   const lastX = xs[xs.length - 1];
   const textX = lastX + 34;
   const colX = textX + 210;
-  const top = 70;
+  // An OFW drawer plugs in on every conductor but the protective one.
+  const plug = lvFamily === 'OFW' ? CELL : 0;
+  const plugged = (c: string) => plug > 0 && c !== 'PE';
+  const top = 70 + plug;
   const out: string[] = [];
   const body: string[] = [];
 
@@ -3310,8 +3325,12 @@ function buildLvMultiLineSvg(
     conductors.forEach(c => {
       if (!on.includes(c)) body.push(ln(xOf(c), y, xOf(c), y + h, c === 'PE' ? 1 : 1.3));
     });
+    // FIX: the breaker is withdrawable; OFW: fixed in the drawer.
+    const drawnAs: ChainItem = !item.chosen && lvFamily === 'FIX' && ['circuit-breaker', 'mcb'].includes(item.id)
+      ? { ...item, id: 'withdrawable-cb' }
+      : !item.chosen && lvFamily === 'OFW' && item.id === 'withdrawable-cb' ? { ...item, id: 'circuit-breaker' } : item;
     on.forEach(c => {
-      body.push(drawDevice(item, xOf(c), y));
+      body.push(drawDevice(drawnAs, xOf(c), y));
       if (h > CELL) body.push(ln(xOf(c), y + CELL, xOf(c), y + h, 1.3));
     });
     // A core-balance CT: one ring round every live conductor.
@@ -3345,7 +3364,7 @@ function buildLvMultiLineSvg(
   });
   const sideBottom = top + side.length * (CELL + 10);
 
-  const end = Math.max(bottom, sideBottom) + 30;
+  const end = Math.max(bottom, sideBottom) + 30 + plug;
   const width = Math.max(colX + 200, textX + 260) + margin;
   const height = end + 40;
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" ` +
@@ -3359,10 +3378,13 @@ function buildLvMultiLineSvg(
   // From the busbar and to the load, every conductor, named at both ends.
   conductors.forEach((c, k) => {
     const cx = xs[k];
-    out.push(ln(cx, top - 26, cx, top, 1.3));
-    out.push(`<text x="${cx}" y="${top - 30}" font-size="9" font-weight="600" text-anchor="middle" fill="#111">${c}</text>`);
+    const t0 = top - plug;
+    out.push(ln(cx, t0 - 26, cx, t0, 1.3));
+    out.push(`<text x="${cx}" y="${t0 - 30}" font-size="9" font-weight="600" text-anchor="middle" fill="#111">${c}</text>`);
+    out.push(plugged(c) ? drawBlock('plug-in', cx, t0) : ln(cx, t0, cx, top, 1.3));
     if (!branch.series.length) out.push(ln(cx, top, cx, bottom, 1.3));
-    out.push(ln(cx, bottom, cx, end, 1.3));
+    if (plugged(c)) out.push(drawBlock('plug-in', cx, bottom));
+    out.push(ln(cx, plugged(c) ? bottom + plug : bottom, cx, end, 1.3));
     if (c !== 'PE' && c !== 'PEN') {
       out.push(`<path d="M ${cx - 5} ${end - 9} L ${cx} ${end} L ${cx + 5} ${end - 9} Z" fill="#111"/>`);
     } else {
@@ -3370,7 +3392,7 @@ function buildLvMultiLineSvg(
       out.push(ln(cx - 8, end, cx + 8, end, 1.3) + ln(cx - 5, end + 3, cx + 5, end + 3, 1.1) + ln(cx - 2, end + 6, cx + 2, end + 6, 1));
     }
   });
-  out.push(`<text x="${lastX + 12}" y="${top - 16}" font-size="8.5" fill="#666">from the busbar</text>`);
+  out.push(`<text x="${lastX + 12}" y="${top - plug - 16}" font-size="8.5" fill="#666">from the busbar</text>`);
   out.push(`<text x="${lastX + 12}" y="${end - 2}" font-size="8.5" fill="#666">to the load</text>`);
   out.push(...body);
   if (!chain.length) {
