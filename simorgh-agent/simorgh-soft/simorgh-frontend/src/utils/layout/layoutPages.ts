@@ -29,7 +29,11 @@ import { partKeys, partDescription } from '../eplanSingleLine';
 import { stripLocaleTags } from '../tierEquipmentMatrix';
 import { buildPanelLayout } from '../panelLayout';
 import { drawerOfFeeder, type DrawerChoice } from './s8Drawers';
-import { CCS, S8_SECTION, faceOf, isPowerRow, sectionModules, type DeviceFace, type S8Section } from './layoutStandard';
+import { CCS, faceOf, isPowerRow, type DeviceFace } from './layoutStandard';
+import {
+  DEFAULT_SYSTEM, UNIVERSAL, acbCubicleWidth, catalogueModules, cubicleDepth, feederRatingAt, mainBusbarFor,
+  verticalRating, type S8System,
+} from './s8Catalogue';
 
 export interface LayoutPage {
   name: string;
@@ -87,135 +91,311 @@ function symbolFor(code: string, symbols: LibraryItem[]): LibraryItem | undefine
 }
 
 // ── SIVACON S8 front view ─────────────────────────────────────────────────
+//
+// Drawn the way SIMARIS draws an S8 switchboard: the cubicles side by side,
+// CELL 1, CELL 2…, each as wide as it is; a drawer cubicle's drawers stacked
+// under its busbar compartment and numbered cell.position; the position list
+// beside them; the floor plan underneath. What goes where follows the
+// catalogue (s8Catalogue): an incomer or coupler with an air breaker is a
+// cubicle of its own, as wide as its breaker; a drawer cubicle holds 36M
+// (1,800 mm) and only as much current as its distribution busbar carries at
+// the room's temperature.
 
 export interface S8Feeder {
   row: DeviceTableRow;
   modules: number;
-  /** 'line' when the line states its size, 'list' from the assembly list,
-   *  'acb' an air breaker taking the whole section, 'none' guessed. */
-  from: 'line' | 'list' | 'acb' | 'none';
+  /** 'line' the line's SIZE, 'list' the office's assembly list, 'catalogue'
+   *  Siemens' minimum height, 'acb' an air breaker's own cubicle, 'none' guessed. */
+  from: 'line' | 'list' | 'catalogue' | 'acb' | 'none';
   drawer?: DrawerChoice;
+  amps?: number;
+  /** Cubicle number, and where in it (modules from the top of the drawers). */
   column: number;
   offset: number;
+  /** cell.position, as SIMARIS numbers it. */
+  pos: string;
+}
+
+export interface S8Cubicle {
+  column: number;
+  kind: 'drawers' | 'incoming' | 'coupler' | 'outgoing';
+  width: number;
+  busSection: string;
+  feeders: S8Feeder[];
+  /** Modules taken (drawer cubicles). */
+  used: number;
+  /** Σ feeder current × RDF, against what the distribution busbar carries. */
+  load: number;
+  rating: number;
 }
 
 export interface S8Plan {
-  sections: { column: number; feeders: S8Feeder[]; used: number }[];
+  /** Every cubicle in order — kept as `sections` for the screens that list them. */
+  sections: S8Cubicle[];
   capacity: number;
-  /** Feeders with no drawer in the list — drawn at the default, to be chosen. */
   unknown: S8Feeder[];
+  system: S8System;
+  mainBusbar: { rated: number; at: number; icw: number } | null;
+  mainAmps: number;
+  depth: number;
+  warnings: string[];
 }
 
-/**
- * The feeders in sections. MODULE NO. (column.position) is kept where the
- * lines have it; otherwise the feeders are filled in line order, a section
- * at a time, and a feeder that does not fit starts the next one.
- */
-export function planS8(data: ProjectData, equipment: Equipment, section: S8Section = S8_SECTION,
-  fallbackModules = 4): S8Plan {
-  const capacity = sectionModules(section);
-  const stated = (equipment.devices ?? []).some(r => String(r.moduleNo ?? '').trim());
-  const feeders: S8Feeder[] = [];
-  if (stated) {
-    const layout = buildPanelLayout(data, equipment);
-    for (const col of layout.columns) {
-      for (const slot of col.slots) {
-        const d = drawerOfFeeder(data, slot.row);
-        const acb = d.facts.breaker === 'ACB' && d.from !== 'line';
-        feeders.push({ row: slot.row, modules: acb ? capacity : d.modules ?? slot.modules, from: acb ? 'acb' : d.from, drawer: d.choices[0],
-          column: col.column, offset: slot.offset });
-      }
-    }
-    // Restack each column: the size may have come from the list, not the line.
-    const by = new Map<number, S8Feeder[]>();
-    for (const f of feeders) by.set(f.column, [...(by.get(f.column) ?? []), f]);
-    for (const list of by.values()) { let o = 0; for (const f of list) { f.offset = o; o += f.modules; } }
-  } else {
-    let column = 1, used = 0;
-    for (const row of equipment.devices ?? []) {
-      const d = drawerOfFeeder(data, row);
-      const acb = d.facts.breaker === 'ACB' && d.from !== 'line';
-      const modules = acb ? capacity : d.modules ?? fallbackModules;
-      if (used > 0 && used + modules > capacity) { column++; used = 0; }
-      feeders.push({ row, modules, from: acb ? 'acb' : d.from, drawer: d.choices[0], column, offset: used });
-      used += modules;
-    }
-  }
-  const columns = [...new Set(feeders.map(f => f.column))].sort((a, b) => a - b);
+const INCOMER = /incom|main|supply|source|\bINC\b/i;
+const COUPLER = /coupl|bus.?sec|\btie\b|\bBT\b|sectionali/i;
+const text_ = (r: DeviceTableRow) => `${r.wiringType ?? ''} ${r.description ?? ''} ${r.templateName ?? ''} ${r.tag ?? ''} ${r.feederNo ?? ''}`;
+
+/** What the room and the board are, from the switchgear's scope where it says. */
+export function systemOf(data: ProjectData, equipment: Equipment): S8System {
+  const library = data.deviceLibrary?.[equipment.type] ?? [];
+  const spec: any = library.find(d => d.id === equipment.properties?.deviceLibraryItemId)?.properties
+    ?? library.find(d => d.name === equipment.name)?.properties ?? {};
+  const ambient = Number(spec.designTemperature) || Number(data.techSettings?.general?.designTemperature) || 35;
+  const ip = Number(String(spec.ip ?? '').match(/(\d{2})/)?.[1]);
   return {
-    sections: columns.map(column => {
-      const list = feeders.filter(f => f.column === column);
-      return { column, feeders: list, used: list.reduce((s, f) => s + f.modules, 0) };
-    }),
-    capacity,
-    unknown: feeders.filter(f => f.from === 'none'),
+    ...DEFAULT_SYSTEM,
+    ambient,
+    ventilated: !(ip >= 54),
+    doubleBusbar: /double|dual|2\s*[x×]|two/i.test(String(spec.mainBusbarConfiguration ?? '')),
   };
 }
 
-/** Front view pages: as many sections to a sheet as stay readable. */
-export function s8FrontPages(equipment: Equipment, plan: S8Plan, section: S8Section = S8_SECTION): LayoutPage[] {
-  const secW = section.deviceWidth + section.cableWidth;
-  const k = Math.min((AREA.h - 18) / section.height, 1 / 20);
-  const perPage = Math.max(1, Math.floor((AREA.w - 26) / (secW * k)));
-  const pages: LayoutPage[] = [];
-  for (let start = 0; start < plan.sections.length || start === 0; start += perPage) {
-    const chunk = plan.sections.slice(start, start + perPage);
+/**
+ * The cubicles. MODULE NO. (column.position) is kept where the lines have it.
+ * Otherwise, bus section by bus section: its incomers, its drawer cubicles —
+ * a new one when the next drawer would not fit its height or its current —
+ * then the coupler to the next section.
+ */
+export function planS8(data: ProjectData, equipment: Equipment, overrides: Partial<S8System> = {},
+  fallbackModules = 4): S8Plan {
+  const system: S8System = { ...systemOf(data, equipment), ...overrides };
+  const capacity = Math.floor(UNIVERSAL.deviceCompartment(system.frame) / UNIVERSAL.grid);
+  const vRating = verticalRating(system);
+  const warnings: string[] = [];
+  const rows = equipment.devices ?? [];
+
+  const sized = rows.map(row => {
+    const d = drawerOfFeeder(data, row);
+    const acb = d.facts.breaker === 'ACB' && d.from !== 'line';
+    let modules = d.modules;
+    let from: S8Feeder['from'] = acb ? 'acb' : d.from;
+    if (!acb && modules == null) {
+      const c = catalogueModules({
+        frame: d.facts.breaker, poles: d.facts.poles,
+        motorKw: Number(String(row.ratingPower ?? '').replace(/[^\d.]/g, '')) || undefined,
+        contactors: d.facts.contactors,
+      });
+      if (c) { modules = c; from = 'catalogue'; }
+    }
+    const amps = d.facts.amps;
+    const can = feederRatingAt(d.facts.breaker, system);
+    if (!acb && can != null && amps != null && amps > can) {
+      warnings.push(`${row.feederNo || row.templateName}: ${amps} A is more than a ${d.facts.breaker} drawer carries at ${system.ambient} °C (${can} A)`);
+    }
+    return { row, d, acb, modules: modules ?? fallbackModules, from: modules == null && !acb ? 'none' as const : from, amps };
+  });
+
+  const cubicles: S8Cubicle[] = [];
+  const newCubicle = (kind: S8Cubicle['kind'], width: number, busSection: string): S8Cubicle => {
+    const c: S8Cubicle = { column: cubicles.length + 1, kind, width, busSection, feeders: [], used: 0, load: 0, rating: kind === 'drawers' ? vRating : 0 };
+    cubicles.push(c);
+    return c;
+  };
+  const put = (c: S8Cubicle, s: typeof sized[number], modules: number) => {
+    c.feeders.push({
+      row: s.row, modules, from: s.from, drawer: s.d.choices[0], amps: s.amps,
+      column: c.column, offset: c.used, pos: `${c.column}.${c.feeders.length + 1}`,
+    });
+    c.used += modules;
+    c.load += (s.amps ?? 0) * UNIVERSAL.rdf;
+  };
+
+  const stated = rows.some(r => String(r.moduleNo ?? '').trim());
+  if (stated) {
+    const layout = buildPanelLayout(data, equipment);
+    for (const col of layout.columns) {
+      const items = col.slots.map(slot => sized.find(s => s.row === slot.row)!).filter(Boolean);
+      const lone = items.length === 1 && items[0].acb ? items[0] : null;
+      const c = lone
+        ? newCubicle(COUPLER.test(text_(lone.row)) ? 'coupler' : INCOMER.test(text_(lone.row)) ? 'incoming' : 'outgoing',
+          acbCubicleWidth(lone.amps ?? 1600, COUPLER.test(text_(lone.row)) ? 'coupler' : 'incoming', lone.d.facts.poles ?? 3),
+          String(lone.row.busSection ?? ''))
+        : newCubicle('drawers', UNIVERSAL.widths[0], String(items[0]?.row.busSection ?? ''));
+      c.column = col.column;
+      for (const s of items) put(c, s, s.acb ? capacity : s.modules);
+    }
+  } else {
+    const order = [...new Set(rows.map(r => String(r.busSection ?? '').trim()))];
+    const inSection = (b: string) => sized.filter(s => String(s.row.busSection ?? '').trim() === b);
+    const couplers = sized.filter(s => s.acb && COUPLER.test(text_(s.row)));
+    order.forEach((b, i) => {
+      const here = inSection(b).filter(s => !couplers.includes(s));
+      for (const s of here.filter(x => x.acb && INCOMER.test(text_(x.row)))) {
+        put(newCubicle('incoming', acbCubicleWidth(s.amps ?? 1600, 'incoming', s.d.facts.poles ?? 3), b), s, capacity);
+      }
+      let cur: S8Cubicle | null = null;
+      for (const s of here.filter(x => !(x.acb && INCOMER.test(text_(x.row))))) {
+        if (s.acb) { put(newCubicle('outgoing', acbCubicleWidth(s.amps ?? 1600, 'outgoing', s.d.facts.poles ?? 3), b), s, capacity); cur = null; continue; }
+        const load = (s.amps ?? 0) * UNIVERSAL.rdf;
+        if (!cur || cur.used + s.modules > capacity || (cur.used > 0 && cur.load + load > vRating)) {
+          cur = newCubicle('drawers', UNIVERSAL.widths[0], b);
+        }
+        put(cur, s, s.modules);
+      }
+      // The coupler to the next section, between the two.
+      const tie = couplers.filter(c => String(c.row.busSection ?? '').trim() === b || (i === 0 && !order.includes(String(c.row.busSection ?? '').trim())));
+      for (const s of i < order.length - 1 || tie.length ? tie : []) {
+        put(newCubicle('coupler', acbCubicleWidth(s.amps ?? 1600, 'coupler', s.d.facts.poles ?? 3), b), s, capacity);
+      }
+    });
+  }
+
+  for (const c of cubicles) {
+    if (c.kind === 'drawers' && c.load > c.rating) {
+      warnings.push(`CELL ${c.column}: ${Math.round(c.load)} A (× RDF ${UNIVERSAL.rdf}) is more than its distribution busbar carries at ${system.ambient} °C (${c.rating} A)`);
+    }
+    if (c.kind === 'drawers' && c.used > capacity) warnings.push(`CELL ${c.column}: ${c.used}M in ${capacity}M`);
+  }
+
+  // The main busbar carries what the biggest bus section is fed with.
+  const byBus = new Map<string, number>();
+  for (const s of sized) {
+    if (s.acb && INCOMER.test(text_(s.row))) {
+      const b = String(s.row.busSection ?? '').trim();
+      byBus.set(b, Math.max(byBus.get(b) ?? 0, s.amps ?? 0));
+    }
+  }
+  const mainAmps = Math.max(0, ...byBus.values()) || sized.reduce((t, s) => t + (s.amps ?? 0), 0) * UNIVERSAL.rdf;
+  const mainBusbar = mainBusbarFor(mainAmps, system);
+  if (!mainBusbar && mainAmps > 0) warnings.push(`No main busbar carries ${Math.round(mainAmps)} A at ${system.ambient} °C`);
+
+  const all = cubicles.flatMap(c => c.feeders);
+  return {
+    sections: cubicles, capacity, unknown: all.filter(f => f.from === 'none'), system,
+    mainBusbar, mainAmps: Math.round(mainAmps), depth: cubicleDepth(system, mainAmps), warnings,
+  };
+}
+
+/** Front view pages: cubicles, the position list beside them, the floor plan under. */
+export function s8FrontPages(equipment: Equipment, plan: S8Plan): LayoutPage[] {
+  const sys = plan.system;
+  const H = sys.frame + sys.base;
+  const busTop = sys.frame - UNIVERSAL.deviceCompartment(sys.frame);
+  const LIST_W = 74;
+  const k = Math.min(1 / 20, (AREA.h - 30) / (H + plan.depth + 260));
+  const drawW = AREA.w - 26 - LIST_W;
+  const lineH = 3.1;
+  const listLines = (c: S8Cubicle) => 2 + (c.kind === 'drawers' ? c.feeders.length + 1 : 1);
+  const maxLines = Math.floor((AREA.h - 8) / lineH);
+
+  // As many cubicles to a page as its width and its position list allow.
+  const chunks: S8Cubicle[][] = [];
+  let cur: S8Cubicle[] = [];
+  let w = 0, lines = 0;
+  for (const c of plan.sections) {
+    if (cur.length && (w + c.width * k > drawW || lines + listLines(c) > maxLines)) { chunks.push(cur); cur = []; w = 0; lines = 0; }
+    cur.push(c); w += c.width * k; lines += listLines(c);
+  }
+  if (cur.length || chunks.length === 0) chunks.push(cur);
+
+  return chunks.map((chunk, pi) => {
     const s: Shape[] = [];
     const left = AREA.x + 22;
-    const top = AREA.y + 10;
-    const floor = top + section.height * k;
-    s.push(text(AREA.x, AREA.y, `${equipment.name} — SIVACON S8 FRONT VIEW`, 4, 'TITLE', 'start', true));
-    s.push(text(AREA.x, AREA.y + 5, `1M = ${section.moduleMm} mm · ${plan.capacity}M per section · scale 1:${Math.round(1 / k)}`, 2.6));
-    s.push(...heightScale(AREA.x + 12, floor, k, section.height));
+    const top = AREA.y + 12;
+    const floor = top + H * k;
+    const y0 = top + busTop * k;
+    s.push(text(AREA.x, AREA.y, `${equipment.name} — OUTLINE DIAGRAM · SIVACON S8${chunks.length > 1 ? ` (${pi + 1}/${chunks.length})` : ''}`, 4, 'TITLE', 'start', true));
+    s.push(text(AREA.x, AREA.y + 5, [
+      `${sys.ambient} °C`, sys.ventilated ? 'ventilated (≤ IP43)' : 'non-ventilated (IP54)',
+      plan.mainBusbar ? `main busbar ${sys.busbar} ${plan.mainBusbar.rated} A (${plan.mainBusbar.at} A at ${sys.ambient} °C, ${plan.mainBusbar.icw} kA)` : '',
+      sys.doubleBusbar ? 'double busbar' : '', `depth ${plan.depth}`, `1M = ${UNIVERSAL.grid} mm`, `scale 1:${Math.round(1 / k)}`,
+    ].filter(Boolean).join(' · '), 2.4));
+    s.push(...heightScale(AREA.x + 12, floor, k, H));
 
-    chunk.forEach((sec, i) => {
-      const x = left + i * secW * k;
-      const dw = section.deviceWidth * k;
-      const cw = section.cableWidth * k;
-      s.push(rect(x, top, secW * k, section.height * k, 'PANEL', undefined, undefined, 0.5));
-      // Main busbar compartment, across the device compartment.
-      s.push(rect(x, top, dw, section.busbarTop * k, 'PANEL', '#e5e7eb'));
-      s.push(text(x + dw / 2, top + section.busbarTop * k / 2 + 1, 'MAIN BUSBAR', 2.2, 'TEXT', 'middle'));
-      // Cable compartment.
-      s.push(rect(x + dw, top, cw, section.height * k, 'PANEL', undefined, '3 2'));
-      s.push(text(x + dw + cw / 2, top + section.height * k / 2, 'CABLE COMPARTMENT', 2.2, 'TEXT', 'middle', false, 90));
-      s.push(text(x + secW * k / 2, top - 2, `+${sec.column}`, 3.2, 'TAG', 'middle', true));
-
-      const y0 = top + section.busbarTop * k;
-      for (const f of sec.feeders) {
-        const y = y0 + f.offset * section.moduleMm * k;
-        const h = f.modules * section.moduleMm * k;
-        const fill = f.from === 'none' ? '#fef3c7' : '#ffffff';
-        s.push(rect(x + 0.6, y + 0.3, dw - 1.2, h - 0.6, 'SLOT', fill));
-        const no = String(f.row.feederNo ?? '').trim() || '—';
-        s.push(text(x + 2, y + Math.min(h - 1, 3.2), no, 2.6, 'TAG', 'start', true));
-        s.push(text(x + dw - 2, y + Math.min(h - 1, 3.2), `${f.modules}M`, 2.4, 'TEXT', 'end'));
-        if (h > 6.5) {
-          const second = f.from === 'acb' ? 'ACB' : [f.drawer?.row.code, f.row.sfdHfd].filter(Boolean).join(' · ')
-            || String(f.row.templateName ?? '');
-          s.push(text(x + 2, y + 6.2, second.slice(0, 22), 2, 'TEXT'));
+    let x = left;
+    for (const c of chunk) {
+      const cw = c.width * k;
+      s.push(rect(x, top, cw, H * k, 'PANEL', undefined, undefined, 0.5));
+      s.push(text(x + cw / 2, top - 2, `CELL ${c.column}`, 3, 'TAG', 'middle', true));
+      // The main busbar across every cubicle.
+      s.push(rect(x, top, cw, busTop * k, 'PANEL', '#e5e7eb'));
+      if (sys.base) s.push(rect(x, floor - sys.base * k, cw, sys.base * k, 'PANEL', '#f3f4f6'));
+      if (c.kind === 'drawers') {
+        const dw = UNIVERSAL.deviceWidth * k;
+        s.push(rect(x + dw, top + busTop * k, cw - dw, UNIVERSAL.deviceCompartment(sys.frame) * k, 'PANEL', undefined, '3 2'));
+        for (const f of c.feeders) {
+          const y = y0 + f.offset * UNIVERSAL.grid * k;
+          const h = f.modules * UNIVERSAL.grid * k;
+          s.push(rect(x + 0.6, y + 0.3, dw - 1.2, h - 0.6, 'SLOT', f.from === 'none' ? '#fef3c7' : '#ffffff'));
+          s.push(text(x + 1.6, y + Math.min(h - 0.8, 2.8), f.pos, 2.1, 'TAG'));
+          s.push(rect(x + dw * 0.25, y + Math.min(h / 2 - 1, 2), dw * 0.12, Math.min(2.4, h - 1.5), 'SYMBOL', '#111'));
+          s.push(rect(x + dw * 0.45, y + Math.min(h / 2 - 1.5, 1.4), dw * 0.42, Math.min(3.4, h - 1), 'SYMBOL'));
+          s.push(text(x + dw - 1.6, y + h - 1, `${f.modules}M`, 1.8, 'TEXT', 'end'));
         }
+        const free = plan.capacity - c.used;
+        if (free > 0) {
+          const y = y0 + c.used * UNIVERSAL.grid * k;
+          s.push(rect(x + 0.6, y + 0.3, dw - 1.2, free * UNIVERSAL.grid * k - 0.6, 'FREE', undefined, '2 1.5'));
+          // Written only where it fits; a 1M space is in the list beside.
+          if (free * UNIVERSAL.grid * k >= 4.5) s.push(text(x + dw / 2, y + Math.min(4, free * UNIVERSAL.grid * k - 1), `SPACE ${free}M`, 2, 'FREE', 'middle'));
+        }
+      } else {
+        // An air circuit-breaker cubicle: the breaker in the middle of it.
+        const f = c.feeders[0];
+        const bw = Math.min(cw * 0.7, 500 * k);
+        const bh = 420 * k;
+        const by = top + (sys.frame * 0.42) * k;
+        s.push(rect(x + (cw - bw) / 2, by, bw, bh, 'SYMBOL', '#ffffff'));
+        s.push(rect(x + (cw - bw) / 2 + bw * 0.3, by + bh * 0.3, bw * 0.4, bh * 0.35, 'SYMBOL'));
+        s.push(text(x + cw / 2, by - 1.5, c.kind === 'coupler' ? 'COUPLING' : c.kind === 'incoming' ? 'INCOMING' : 'OUTGOING', 2.2, 'TAG', 'middle', true));
+        if (f) s.push(text(x + cw / 2, by + bh + 3, `${f.amps ? `${f.amps} A` : 'ACB'}`, 2, 'TEXT', 'middle'));
       }
-      const free = plan.capacity - sec.used;
+      s.push(...widthDim(x, floor + 5, cw, `${c.width}`));
+      // The floor plan under it.
+      const fy = floor + 14;
+      s.push(rect(x, fy, cw, plan.depth * k, 'PANEL'));
+      s.push(rect(x + 0.08 * cw, fy + 0.07 * plan.depth * k, cw * 0.84, plan.depth * k * 0.75, 'FREE', '#f3f4f6'));
+      x += cw;
+    }
+    const fy = floor + 14;
+    s.push(...heightScale(AREA.x + 12, fy + plan.depth * k, k, plan.depth).filter(sh => sh.t !== 'text' || /^(0|[2-9]00|1[0-9]00)\.0$/.test((sh as any).s)));
+    s.push(text(left, fy + plan.depth * k + 4, `Plant depth [mm]: ${plan.depth}   Plant width [mm]: ${chunk.reduce((t, c) => t + c.width, 0)}`, 2.4));
+
+    // The position list, as SIMARIS writes it.
+    let ly = AREA.y + 4;
+    const lx = AREA.x + AREA.w - LIST_W;
+    s.push(text(lx, ly, 'Pos.', 2.6, 'TITLE', 'start', true));
+    s.push(text(lx + 14, ly, 'Feeder', 2.6, 'TITLE', 'start', true));
+    ly += lineH * 1.4;
+    for (const c of chunk) {
+      ly += lineH * 0.4;
+      if (c.kind !== 'drawers') {
+        const f = c.feeders[0];
+        s.push(text(lx, ly, `${c.column}.1`, 2.2, 'TEXT'));
+        s.push(text(lx + 14, ly, `${c.kind === 'coupler' ? 'COUPLING ' : c.kind === 'incoming' ? 'INCOMING ' : ''}${f ? [f.row.feederNo, f.row.tag].filter(Boolean).join(',') : ''}`.slice(0, 34), 2.2, 'TEXT'));
+        ly += lineH;
+        continue;
+      }
+      for (const f of c.feeders) {
+        s.push(text(lx, ly, f.pos, 2.2, 'TEXT'));
+        const name = [f.row.feederNo, f.row.tag || f.row.description].filter(Boolean).join(',') || f.row.templateName;
+        s.push(text(lx + 14, ly, `${String(name).slice(0, 26)}${f.amps ? `,${f.amps}A` : ''}`, 2.2, 'TEXT'));
+        ly += lineH;
+      }
+      const free = plan.capacity - c.used;
       if (free > 0) {
-        const y = y0 + sec.used * section.moduleMm * k;
-        s.push(rect(x + 0.6, y + 0.3, dw - 1.2, free * section.moduleMm * k - 0.6, 'FREE', undefined, '2 1.5'));
-        s.push(text(x + dw / 2, y + Math.min(4, free * section.moduleMm * k - 1), `SPARE ${free}M`, 2.2, 'FREE', 'middle'));
-      } else if (free < 0) {
-        s.push(text(x + dw / 2, floor + 9, `OVER BY ${-free}M`, 2.4, 'TEXT', 'middle', true));
+        s.push(text(lx, ly, `${c.column}.${c.feeders.length + 1}`, 2.2, 'TEXT'));
+        s.push(text(lx + 14, ly, `SPACE ${free}M`, 2.2, 'FREE'));
+        ly += lineH;
       }
-      s.push(...widthDim(x, floor + 5, secW * k, `${secW}`));
-    });
-    pages.push({
-      name: `${equipment.name} front view`,
-      description: chunk.length
-        ? `S8 sections +${chunk[0].column}…+${chunk[chunk.length - 1].column}`
-        : 'S8 front view',
+    }
+
+    return {
+      name: `${equipment.name} outline`,
+      description: chunk.length ? `CELL ${chunk[0].column}…${chunk[chunk.length - 1].column}` : 'S8 outline',
       width: SHEET.w, height: SHEET.h, shapes: s,
-    });
-    if (plan.sections.length === 0) break;
-  }
-  return pages;
+    };
+  });
 }
 
 // ── Fixed (CCS) internal view ─────────────────────────────────────────────

@@ -4,8 +4,9 @@ import type { DrawingEdits, ProjectData } from '../../types/project';
 import { DrawingPage, nextName, pageKey } from '../../utils/cad/pages';
 import { officeItems } from '../../utils/cad/officeSymbols';
 import { LAYOUT_OF } from '../../utils/tiers';
-import { S8_SECTION, PANEL_WIDTHS } from '../../utils/layout/layoutStandard';
-import { ccsDevices, ccsInternalPages, layoutKindOf, planS8, s8FrontPages, type LayoutPage } from '../../utils/layout/layoutPages';
+import { PANEL_WIDTHS } from '../../utils/layout/layoutStandard';
+import { VERTICAL_BUSBAR, type S8System } from '../../utils/layout/s8Catalogue';
+import { ccsDevices, ccsInternalPages, layoutKindOf, planS8, s8FrontPages, systemOf, type LayoutPage } from '../../utils/layout/layoutPages';
 
 // Layout pages from the project: an LV switchgear's S8 front view, or a fixed
 // panel's internal view, built to the office's standard and then drawn on like
@@ -35,21 +36,23 @@ export const LayoutFromProject: React.FC<Props> = ({ project, pages, edits, onDo
 
   const [chosen, setChosen] = useState<string>(switchgears[0]?.id ?? '');
   const [kind, setKind] = useState<Kind>(() => (switchgears[0] ? kindOf(switchgears[0].id) : 's8'));
-  const [moduleMm, setModuleMm] = useState(S8_SECTION.moduleMm);
-  const [busbarTop, setBusbarTop] = useState(S8_SECTION.busbarTop);
+  // What the room and the board are — read from the switchgear's scope
+  // (design temperature, IP, busbar configuration), changed here per drawing.
+  const [sysEdit, setSysEdit] = useState<Partial<S8System>>({});
   const [ccsWidth, setCcsWidth] = useState(1000);
   const equipment = switchgears.find(e => e.id === chosen);
-  const section = { ...S8_SECTION, moduleMm, busbarTop };
+  const system: S8System | null = equipment ? { ...systemOf(project, equipment), ...sysEdit } : null;
+  const setSys = (patch: Partial<S8System>) => setSysEdit(prev => ({ ...prev, ...patch }));
 
-  const plan = useMemo(() => (equipment && kind === 's8' ? planS8(project, equipment, section) : null),
+  const plan = useMemo(() => (equipment && kind === 's8' ? planS8(project, equipment, sysEdit) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [project, equipment, kind, moduleMm, busbarTop]);
+    [project, equipment, kind, sysEdit]);
   const devices = useMemo(() => (equipment && kind === 'ccs' ? ccsDevices(project, equipment) : []),
     [project, equipment, kind]);
 
   const built: LayoutPage[] = useMemo(() => {
     if (!equipment) return [];
-    if (kind === 's8' && plan) return s8FrontPages(equipment, plan, section);
+    if (kind === 's8' && plan) return s8FrontPages(equipment, plan);
     const symbols = officeItems().filter(i => i.kind === 'old');
     return ccsInternalPages(equipment, devices, ccsWidth, symbols);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -120,17 +123,57 @@ export const LayoutFromProject: React.FC<Props> = ({ project, pages, edits, onDo
 
               {kind === 's8' && plan && (
                 <>
-                  <div className="flex flex-wrap items-center gap-4 text-sm text-gray-700">
-                    <label className="flex items-center gap-2" title="S8 drawers go 100…700 mm: 2M…14M at 50 mm">
-                      1M = <input type="number" className={`${input} w-20`} value={moduleMm}
-                        onChange={e => setModuleMm(Math.max(10, Number(e.target.value) || 50))} /> mm
-                    </label>
-                    <label className="flex items-center gap-2" title="Main busbar compartment at the top of the section">
-                      Busbar compartment <input type="number" className={`${input} w-20`} value={busbarTop}
-                        onChange={e => setBusbarTop(Math.max(0, Number(e.target.value) || 0))} /> mm
-                    </label>
-                    <span className="text-gray-600">{plan.capacity}M per section · {plan.sections.length} section(s)</span>
-                  </div>
+                  {system && (
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-700"
+                      title="SIVACON S8 Technical Planning Information 10/2015: ratings at 35 °C, converted to the room's temperature">
+                      <label className="flex items-center gap-2">
+                        Room <input type="number" className={`${input} w-16`} value={system.ambient}
+                          onChange={e => setSys({ ambient: Number(e.target.value) || 35 })} /> °C
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <select className={input} value={system.ventilated ? 'v' : 'n'} onChange={e => setSys({ ventilated: e.target.value === 'v' })}>
+                          <option value="v">Ventilated (≤ IP43)</option>
+                          <option value="n">Non-ventilated (IP54)</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-2">
+                        Frame
+                        <select className={input} value={system.frame} onChange={e => setSys({ frame: Number(e.target.value) as 2000 | 2200 })}>
+                          <option value={2200}>2200</option><option value={2000}>2000</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-2">
+                        Base
+                        <select className={input} value={system.base} onChange={e => setSys({ base: Number(e.target.value) as 0 | 100 | 200 })}>
+                          {[0, 100, 200].map(b => <option key={b} value={b}>{b}</option>)}
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-2">
+                        Main busbar
+                        <select className={input} value={system.busbar} onChange={e => setSys({ busbar: e.target.value as 'top' | 'rear' })}>
+                          <option value="top">Top</option><option value="rear">Rear</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={system.doubleBusbar} onChange={e => setSys({ doubleBusbar: e.target.checked })} />
+                        Double busbar
+                      </label>
+                      <label className="flex items-center gap-2">
+                        Distribution busbar
+                        <select className={input} value={system.verticalBusbar} onChange={e => setSys({ verticalBusbar: Number(e.target.value) })}>
+                          {VERTICAL_BUSBAR.map((v, i) => <option key={v.name} value={i}>{v.name}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                  )}
+                  <p className="text-sm text-gray-700">
+                    {plan.sections.length} cubicle(s) · {plan.capacity}M a drawer cubicle · main busbar {plan.mainBusbar ? `${plan.mainBusbar.rated} A (${plan.mainBusbar.at} A at ${plan.system.ambient} °C)` : '—'} for {plan.mainAmps} A · depth {plan.depth} mm
+                  </p>
+                  {plan.warnings.length > 0 && (
+                    <ul className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2 list-disc list-inside space-y-0.5">
+                      {plan.warnings.map(w => <li key={w}>{w}</li>)}
+                    </ul>
+                  )}
                   {plan.unknown.length > 0 && (
                     <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                       {plan.unknown.length} feeder(s) match no drawer in the assembly list and are drawn at 4M, shaded — choose their size on the line (SIZE) or in the list.
@@ -139,17 +182,17 @@ export const LayoutFromProject: React.FC<Props> = ({ project, pages, edits, onDo
                   <div className="border border-gray-200 rounded overflow-hidden">
                     <table className="w-full text-xs">
                       <thead className="bg-gray-100 text-gray-700">
-                        <tr>{['Section', 'Feeder', 'Template', 'Size', 'From', 'Drawer', 'Why / check'].map(h =>
+                        <tr>{['Pos.', 'Feeder', 'Template', 'Size', 'From', 'Drawer', 'Why / check'].map(h =>
                           <th key={h} className="text-start font-medium px-2 py-1.5">{h}</th>)}</tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {plan.sections.flatMap(sec => sec.feeders.map(f => (
                           <tr key={f.row.id}>
-                            <td className="px-2 py-1">+{sec.column}</td>
+                            <td className="px-2 py-1">{f.pos}</td>
                             <td className="px-2 py-1 font-medium text-gray-900">{f.row.feederNo || '—'}</td>
                             <td className="px-2 py-1 text-gray-700">{f.row.templateName}</td>
                             <td className="px-2 py-1">{f.modules}M</td>
-                            <td className="px-2 py-1 text-gray-600">{f.from === 'line' ? 'SIZE on the line' : f.from === 'list' ? 'assembly list' : f.from === 'acb' ? 'ACB — whole section' : <span className="text-amber-800">not found</span>}</td>
+                            <td className="px-2 py-1 text-gray-600">{f.from === 'line' ? 'SIZE on the line' : f.from === 'list' ? 'assembly list' : f.from === 'catalogue' ? 'S8 catalogue minimum' : f.from === 'acb' ? `ACB — ${sec.kind} cubicle ${sec.width}` : <span className="text-amber-800">not found</span>}</td>
                             <td className="px-2 py-1 font-mono" title={f.drawer?.row.shortCode}>{f.drawer?.row.code ?? '—'}</td>
                             <td className="px-2 py-1 text-gray-600" title={f.drawer?.row.note}>
                               {f.drawer?.why.join(' · ')}
