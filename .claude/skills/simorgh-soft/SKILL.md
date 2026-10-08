@@ -516,7 +516,12 @@ classes (`DeviceSelectionTab`, `SendToEplanTab` do this now).
   `layoutStandard.ts` is RE-TE-011-01 plus the first duct standard (sides 60,
   MCB rows 40, breaker/contactor rows 60, terminals 80/60, 300 off the floor);
   `layoutPages.ts` draws the S8 front view and the fixed internal view. In the
-  page tree: "Layout from project…".
+  page tree: "Layout from project…". `s8Catalogue.ts` is Siemens' SIVACON S8
+  Technical Planning Information 10/2015 (busbar ratings, temperature
+  factors, ACB cubicle widths, minimum drawer heights); the S8 page is drawn
+  like the office's SIMARIS outlines (CELL n, cell.position, position list,
+  floor plan). CCS: incomer at the top (B29), width auto with 20 % plate spare
+  (B20), twin panel when it does not fit.
 - *Offer control equipment*: `TemplateItem.offerControl`, beside the rows
   (never bought, never sent to EPLAN), edited from the template's "Offer
   control" button; sizes the first drawer; Output tab section 06 compares it
@@ -526,12 +531,11 @@ classes (`DeviceSelectionTab`, `SendToEplanTab` do this now).
   "Stock Compare").
 
 **Open questions — ask before assuming otherwise.**
-- 1M = 50 mm and a 400 mm busbar compartment (36M a section) are assumptions,
-  editable in the layout dialog; the owner has not confirmed them.
-- The 2M drawer: REV(1) said not to use it; REV 32 only says special socket.
+- Confirmed by the owner: 1M = 50 mm (the catalogue's grid too), and the 2M
+  drawer is used.
 - Device faces in `faceOf` are rounded from memory of Siemens catalogues.
-- LV three-line `.ema` needs the office's WD library (.sdb/.slk) and sample LV
-  macros, as SLD.sdb was for MV — not received yet.
-- The Simaris S8 sample layout and the office's skeleton/drawer layout symbols
-  are still to come; layout symbols named with an order code already replace
-  the boxes.
+- LV three-line `.ema`: WD.sdb received (the office's own wiring symbols);
+  sample LV three-line macros (.ema) are still needed for PROTOS, as for MV.
+- The SIMARIS S8 sample (SAMPLE_1.pdf) is in; the owner will send SIMARIS
+  references piece by piece for the details (cell current, double busbar…),
+  and the skeleton/drawer layout symbols.

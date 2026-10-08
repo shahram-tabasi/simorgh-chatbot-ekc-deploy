@@ -39,7 +39,7 @@ export const LayoutFromProject: React.FC<Props> = ({ project, pages, edits, onDo
   // What the room and the board are — read from the switchgear's scope
   // (design temperature, IP, busbar configuration), changed here per drawing.
   const [sysEdit, setSysEdit] = useState<Partial<S8System>>({});
-  const [ccsWidth, setCcsWidth] = useState(1000);
+  const [ccsWidth, setCcsWidth] = useState<number | 'auto'>('auto');
   const equipment = switchgears.find(e => e.id === chosen);
   const system: S8System | null = equipment ? { ...systemOf(project, equipment), ...sysEdit } : null;
   const setSys = (patch: Partial<S8System>) => setSysEdit(prev => ({ ...prev, ...patch }));
@@ -211,15 +211,22 @@ export const LayoutFromProject: React.FC<Props> = ({ project, pages, edits, onDo
                   <div className="flex flex-wrap items-center gap-4 text-sm text-gray-700">
                     <label className="flex items-center gap-2">
                       Panel width
-                      <select className={input} value={ccsWidth} onChange={e => setCcsWidth(Number(e.target.value))}>
+                      <select className={input} value={ccsWidth}
+                        onChange={e => setCcsWidth(e.target.value === 'auto' ? 'auto' : Number(e.target.value))}>
+                        <option value="auto">Auto — narrowest with 20 % spare</option>
                         {PANEL_WIDTHS.map(w => <option key={w} value={w}>{w} mm</option>)}
                       </select>
                     </label>
                     <span className="text-gray-600">{devices.length} device(s) from the feeders’ templates</span>
                   </div>
                   <p className="text-xs text-gray-600">
-                    Ducts: sides 60, MCB and relay rows 40, breaker and contactor rows 60, terminals 80 above / 60 between, the lowest terminals 300 mm off the floor. A device is drawn with the office’s layout symbol whose name carries its order code (e.g. “3RT2027”), else as a box of its catalogue size.
+                    Ducts: sides 60, MCB and relay rows 40, breaker and contactor rows 60, terminals 80 above / 60 between, the lowest terminals 300 mm off the floor. 20 % of the mounting plate left spare (B20); the incoming breaker at the top beside the busbar, 80 mm from the side up to 250 A, 105 mm from 315 A (B29). A device is drawn with the office’s layout symbol whose name carries its order code (e.g. “3RT2027”), else as a box of its catalogue size.
                   </p>
+                  {built[0]?.notes?.length ? (
+                    <ul className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2 list-disc list-inside space-y-0.5">
+                      {built[0].notes.map(n => <li key={n}>{n}</li>)}
+                    </ul>
+                  ) : null}
                 </>
               )}
             </>

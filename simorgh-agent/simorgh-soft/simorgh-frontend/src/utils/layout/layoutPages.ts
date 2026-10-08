@@ -38,6 +38,8 @@ import {
 export interface LayoutPage {
   name: string;
   description: string;
+  /** What the layout could not meet, or chose — shown beside the pages. */
+  notes?: string[];
   width: number;
   height: number;
   shapes: Shape[];
@@ -405,6 +407,8 @@ export interface CcsDevice {
   code: string;
   face: DeviceFace;
   amps?: number;
+  /** The switchgear's own incoming breaker: at the top, beside the busbar. */
+  incoming?: boolean;
 }
 
 const LETTER: Record<DeviceFace['kind'], string> = {
@@ -430,10 +434,12 @@ export function ccsDevices(data: ProjectData, equipment: Equipment): CcsDevice[]
       const face = faceOf(code, desc, poles);
       if (face.kind === 'terminal') continue;
       const qty = Math.max(1, Math.min(12, Number(p?.quantity) || 1));
+      const incoming = INCOMER.test(text_(row)) && (face.kind === 'mccb' || face.kind === 'mcb' || face.kind === 'mpcb')
+        && /CB ORDER|BREAKER/i.test(slot);
       for (let i = 0; i < qty; i++) {
         const letter = LETTER[face.kind];
         count[letter] = (count[letter] ?? 0) + 1;
-        out.push({ tag: `${letter}${count[letter]}`, code, face, amps: Number(row.flc) || undefined });
+        out.push({ tag: `${letter}${count[letter]}`, code, face, amps: Number(row.flc) || undefined, ...(incoming ? { incoming } : {}) });
       }
     }
   }
@@ -452,10 +458,11 @@ export function ccsTerminals(devices: CcsDevice[]): { power: number; control: nu
   return { power, control };
 }
 
-interface Row { devices: CcsDevice[]; power: boolean; h: number }
+interface Row { devices: CcsDevice[]; power: boolean; h: number; used: number }
 
-/** Devices into rows of a plate `usable` wide: small devices first, power after. */
-function intoRows(devices: CcsDevice[], usable: number): Row[] {
+/** Devices into rows of a plate `usable` wide: small devices first, power after,
+ *  each row filled to `fill` of the plate. */
+function intoRows(devices: CcsDevice[], usable: number, fill = 1): Row[] {
   const rows: Row[] = [];
   const groups: [boolean, CcsDevice[]][] = [
     [false, devices.filter(d => !isPowerRow(d.face.kind) && d.face.kind !== 'relay')],
@@ -468,11 +475,11 @@ function intoRows(devices: CcsDevice[], usable: number): Row[] {
       if (!cur.length) return;
       const tallest = Math.max(...cur.map(d => d.face.h));
       const pitch = power ? 0 : (cur.every(d => d.face.kind === 'relay') ? CCS.relayRowPitch : CCS.mcbRowPitch);
-      rows.push({ devices: cur, power, h: Math.max(tallest + 2 * CCS.wireNumbers, pitch) });
+      rows.push({ devices: cur, power, h: Math.max(tallest + 2 * CCS.wireNumbers, pitch), used: w });
       cur = []; w = 0;
     };
     for (const d of list) {
-      if (w + d.face.w > usable && cur.length) flush();
+      if (w + d.face.w > usable * fill && cur.length) flush();
       cur.push(d); w += d.face.w + CCS.gap;
     }
     flush();
@@ -480,14 +487,10 @@ function intoRows(devices: CcsDevice[], usable: number): Row[] {
   return rows;
 }
 
-/**
- * The internal view of a fixed panel, with the door beside it. Devices that do
- * not fit the panel go on into a second panel — the twin the guide allows.
- */
-export function ccsInternalPages(equipment: Equipment, devices: CcsDevice[], width = 1000,
-  symbols: LibraryItem[] = []): LayoutPage[] {
+/** How the devices fall into panels of a width, filling rows to `fill`. */
+function packCcs(devices: CcsDevice[], width: number, fill: number) {
   const usable = width - 2 * CCS.ductSide - 2 * CCS.pastDuct;
-  const rows = intoRows(devices, usable);
+  const rows = intoRows(devices.filter(d => !d.incoming), usable, fill);
   const terminals = ccsTerminals(devices);
   const termPitch = 6.2;
   const STRIP = 50;
@@ -501,8 +504,6 @@ export function ccsInternalPages(equipment: Equipment, devices: CcsDevice[], wid
   // ending 300 off the floor (cable bottom).
   const terminalZone = CCS.ductAboveTerminals + strips.length * STRIP + Math.max(0, strips.length - 1) * CCS.ductBelowTerminals;
   const bottomLimit = CCS.height - CCS.terminalsOffFloor;
-
-  // Rows into panels.
   const panels: Row[][] = [[]];
   let y = CCS.busbarCompartment;
   for (const r of rows) {
@@ -513,7 +514,50 @@ export function ccsInternalPages(equipment: Equipment, devices: CcsDevice[], wid
     }
     panels[panels.length - 1].push(r); y += need;
   }
+  // The spare (B20): what of the mounting plate between the busbar
+  // compartment and the terminals no device row takes — the space under the
+  // last row and what each row leaves at its end.
+  const plate = (bottomLimit - terminalZone - CCS.busbarCompartment) * usable * panels.length;
+  const taken = rows.reduce((t, r) => t + ((r.power ? CCS.ductPowerRow : CCS.ductMcbRow) + r.h) * Math.min(usable, r.used), 0);
+  const spare = plate > 0 ? Math.max(0, 1 - taken / plate) : 0;
+  return { usable, rows, terminals, termPitch, STRIP, strips, terminalZone, bottomLimit, panels, spare };
+}
 
+/** Panel widths a fixed panel is tried at, narrowest first (B5; 1000 only when
+ *  needed — B9: an S8 door that wide sags under its equipment). */
+export const CCS_WIDTHS = [600, 800, 1000] as const;
+
+/**
+ * The internal view of a fixed panel, with the door beside it.
+ *
+ * `auto` picks the narrowest width that holds everything in one panel with
+ * the guide's 20 % of the mounting plate left spare (B20); failing that, 1000
+ * — and says so when the spare is short, for the Clarification form. What
+ * still does not fit goes on into a twin panel, as the guide allows. The
+ * switchgear's own incoming breaker sits at the top, beside the busbar, 80 mm
+ * from the side up to 250 A and 105 mm from 315 A (B29).
+ */
+export function ccsInternalPages(equipment: Equipment, devices: CcsDevice[], width: number | 'auto' = 'auto',
+  symbols: LibraryItem[] = []): LayoutPage[] {
+  const notes: string[] = [];
+  let chosen = typeof width === 'number' ? width : 1000;
+  if (width === 'auto') {
+    const one = CCS_WIDTHS.find(w => {
+      const p = packCcs(devices, w, 1);
+      return p.panels.length === 1 && p.spare >= CCS.spare;
+    });
+    if (one) chosen = one;
+    else if (packCcs(devices, 1000, 1).panels.length > 1) {
+      notes.push('Too much for one panel: a twin panel follows (B26 / wall-mounted: two panels side by side).');
+    }
+  }
+  const packed = packCcs(devices, chosen, 1);
+  if (packed.spare < CCS.spare) {
+    notes.push(`Spare ${Math.round(packed.spare * 100)} % — under the 20 % of the guide: tell the client on the Clarification form (B20).`);
+  }
+  const { usable, termPitch, STRIP, strips, terminalZone, bottomLimit, panels, spare } = packed;
+  width = chosen;
+  const incomers = devices.filter(d => d.incoming);
   const k = (AREA.h - 14) / CCS.height;
   return panels.map((panelRows, pi) => {
     const s: Shape[] = [];
@@ -542,6 +586,17 @@ export function ccsInternalPages(equipment: Equipment, devices: CcsDevice[], wid
         s.push(line(x0 + width * 0.45 * k, by, x0 + (width - 40) * k, by, 'BUS', 0.8));
         s.push(text(x0 + width * 0.45 * k - 2, by + 1, ph, 2.4, 'TAG', 'end'));
       });
+      // The incoming breaker, top left, the guide's distance in from the side.
+      let ix = CCS.breakerFromSide(Math.max(0, ...incomers.map(d => d.amps ?? 0)));
+      for (const dev of incomers) {
+        const dx = x0 + ix * k;
+        const dy = top + 60 * k;
+        const sym = symbolFor(dev.code, symbols);
+        if (sym) s.push(...placeSymbolAt(sym, { x: dx + dev.face.w * k / 2, y: dy }, dev.face.h * k, newBlockId()));
+        else s.push(rect(dx, dy, dev.face.w * k, Math.min(dev.face.h, CCS.busbarCompartment - 80) * k, 'SYMBOL', '#ffffff'));
+        s.push(text(dx + dev.face.w * k / 2, dy - 0.8, dev.tag, 1.8, 'TAG', 'middle'));
+        ix += dev.face.w + CCS.gap;
+      }
     }
 
     const inner = x0 + (CCS.ductSide + CCS.pastDuct) * k;
@@ -595,7 +650,8 @@ export function ccsInternalPages(equipment: Equipment, devices: CcsDevice[], wid
 
     return {
       name: `${equipment.name} internal view${panels.length > 1 ? ` ${pi + 1}` : ''}`,
-      description: `${panelRows.reduce((n, r) => n + r.devices.length, 0)} devices · ${width} wide`,
+      description: `${panelRows.reduce((n, r) => n + r.devices.length, 0)} devices · ${width} wide · spare ${Math.round(spare * 100)} %`,
+      notes,
       width: SHEET.w, height: SHEET.h, shapes: s,
     };
   });
@@ -613,6 +669,6 @@ export function layoutKindOf(data: ProjectData, equipment: Equipment): 's8' | 'c
 /** The layout pages of a switchgear, as its kind draws them. */
 export function layoutPagesOf(data: ProjectData, equipment: Equipment, symbols: LibraryItem[] = []): LayoutPage[] {
   return layoutKindOf(data, equipment) === 'ccs'
-    ? ccsInternalPages(equipment, ccsDevices(data, equipment), 1000, symbols)
+    ? ccsInternalPages(equipment, ccsDevices(data, equipment), 'auto', symbols)
     : s8FrontPages(equipment, planS8(data, equipment));
 }
