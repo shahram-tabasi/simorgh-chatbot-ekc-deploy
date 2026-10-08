@@ -228,8 +228,17 @@ export function planS8(data: ProjectData, equipment: Equipment, overrides: Parti
           acbCubicleWidth(lone.amps ?? 1600, COUPLER.test(text_(lone.row)) ? 'coupler' : 'incoming', lone.d.facts.poles ?? 3),
           String(lone.row.busSection ?? ''))
         : newCubicle('drawers', UNIVERSAL.widths[0], String(items[0]?.row.busSection ?? ''));
-      c.column = col.column;
-      for (const s of items) put(c, s, s.acb ? capacity : s.modules);
+      let cur = c;
+      for (const s of items) {
+        const m = s.acb ? capacity : s.modules;
+        // MODULE NO. puts more in a column than it holds: carry on in the
+        // next cubicle rather than stacking drawers below the floor.
+        if (!lone && cur.used > 0 && cur.used + m > capacity) {
+          warnings.push(`Column ${col.column} of MODULE NO. holds more than ${capacity}M — continued in CELL ${cubicles.length + 1}`);
+          cur = newCubicle('drawers', UNIVERSAL.widths[0], String(s.row.busSection ?? ''));
+        }
+        put(cur, s, m);
+      }
     }
   } else {
     const order = [...new Set(rows.map(r => String(r.busSection ?? '').trim()))];

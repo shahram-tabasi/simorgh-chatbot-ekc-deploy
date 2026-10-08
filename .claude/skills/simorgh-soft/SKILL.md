@@ -457,7 +457,12 @@ symbol from the project's own redraw, else the office's, else the pack
 (`OFFICE_REDRAWS` in iecSymbols) — **except that the newer save wins**: every
 redraw is stamped `savedAt` (an office one without it takes the server's
 `changedOn`), and an office redraw saved after the project's own replaces it.
-Otherwise an older project hid every later correction behind its own copy. "Use in every project" in the symbol library
+Otherwise an older project hid every later correction behind its own copy.
+An office symbol made with "New variant" from a built-in single-line symbol
+**under the same name** ("Ammeter" from Ammeter) counts as the office's redraw
+of it (`standsFor` in officeSymbols) — the owner made his corrected symbols
+that way and the drawings went on with the old ones. A renamed variant is a
+face of its own, chosen per part. "Use in every project" in the symbol library
 copies a project's existing redraws to the office. Redraws are kept out of the
 office's list of new symbols. The server keeps each terminal's `dir`.
 

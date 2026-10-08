@@ -18,6 +18,7 @@
 import { OfficeSymbol, symbolLibraryService } from '../../services/projectService';
 import type { SymbolArtOverride } from '../../types/project';
 import { LibraryItem } from './symbolSource';
+import { IEC_SYMBOLS } from '../iecSymbols';
 
 let cache: OfficeSymbol[] = [];
 /**
@@ -67,17 +68,49 @@ export function loadOfficeSymbols(force = false): Promise<void> {
 /** What has been read so far. Empty until the first read lands. */
 export const officeSymbols = (): OfficeSymbol[] => cache;
 
+/**
+ * The library symbol an office symbol stands in for, when it is the office's
+ * own drawing of it: a variant of a built-in single-line symbol that kept that
+ * symbol's name ("Ammeter" made from Ammeter). Renamed variants — "CB LSIG
+ * 4P" from Circuit breaker — are faces of their own, picked per part.
+ */
+function standsFor(s: OfficeSymbol): string | null {
+  if (s.kind !== 'sld' || !s.variantOf?.startsWith('iec:')) return null;
+  const id = s.variantOf.slice(4);
+  const sym = IEC_SYMBOLS[id as keyof typeof IEC_SYMBOLS];
+  if (!sym) return null;
+  const n = (v: string) => v.trim().toLowerCase();
+  return n(s.name) === n(sym.title) || n(s.name) === n(id) ? id : null;
+}
+
 /** The office's redraws of library symbols, by the symbol they redraw. */
 export function officeRedraws(): Record<string, SymbolArtOverride> {
   const out: Record<string, SymbolArtOverride> = {};
+  // The office's own drawings of library symbols made as same-name variants,
+  // then the explicit redraws; of two for one symbol, the newer save wins.
+  for (const s of cache) {
+    const id = standsFor(s);
+    if (!id || !s.art) continue;
+    const t1 = s.terminals.find(t => t.name === '1') ?? s.terminals[0];
+    const art: SymbolArtOverride = {
+      art: s.art, width: s.width, height: s.height,
+      pinX: t1 && (t1.dir === 'up' || t1.dir === 'down' || !t1.dir) ? t1.x : s.width / 2,
+      cells: undefined as unknown as number,
+      terminals: s.terminals.map(t => ({ x: t.x, y: t.y, name: t.name, dir: t.dir })) as SymbolArtOverride['terminals'],
+      savedAt: (s as { changedOn?: string }).changedOn,
+      editedAt: (s as { changedOn?: string }).changedOn ?? '',
+    };
+    const had = out[id];
+    if (!had || (art.savedAt ?? '') > (had.savedAt ?? '')) out[id] = art;
+  }
   // Its save time: stamped on the drawing, else when the server last changed
   // it — so a redraw saved before stamping still counts as the newer one.
   for (const s of redraws) {
-    if (s.override?.art) {
-      out[s.id.slice(REDRAW_PREFIX.length)] = {
-        ...s.override, savedAt: s.override.savedAt ?? (s as { changedOn?: string }).changedOn,
-      };
-    }
+    if (!s.override?.art) continue;
+    const id = s.id.slice(REDRAW_PREFIX.length);
+    const art = { ...s.override, savedAt: s.override.savedAt ?? (s as { changedOn?: string }).changedOn };
+    const had = out[id];
+    if (!had || (art.savedAt ?? '') >= (had.savedAt ?? '')) out[id] = art;
   }
   return out;
 }
