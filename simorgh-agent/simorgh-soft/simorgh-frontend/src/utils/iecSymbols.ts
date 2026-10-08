@@ -641,6 +641,8 @@ const SYMBOL_RIGHT: Partial<Record<SymbolId, number>> = {
 export interface SymbolOverride {
   /** A picture of the symbol. Ignored when `art` is present. */
   url: string;
+  /** When a redraw was saved — the newer of the project's and the office's wins. */
+  savedAt?: string;
   /**
    * The symbol as geometry rather than as a picture — the markup for its
    * shapes, in its own coordinate space, with no `<svg>` around it.
@@ -769,8 +771,13 @@ export const symbolsChanged = (): void => announce();
 /** What the library will draw for an id, when something has replaced it. */
 export function symbolOverride(id: string): SymbolOverride | undefined {
   if (id.startsWith(OFFICE_PREFIX)) return officeSource(id.slice(OFFICE_PREFIX.length));
-  return PROJECT_OVERRIDES[id as SymbolId]
-    ?? OFFICE_REDRAWS[id as SymbolId]
+  const own = PROJECT_OVERRIDES[id as SymbolId];
+  const office = OFFICE_REDRAWS[id as SymbolId];
+  // The project's own drawing wins, unless the office has redrawn the symbol
+  // since: the newer save is the one somebody means.
+  if (own && office?.savedAt && (!own.savedAt || office.savedAt > own.savedAt)) return office;
+  return own
+    ?? office
     ?? PACK_OVERRIDES[id as SymbolId]
     ?? EPLAN_OVERRIDES[id as SymbolId];
 }

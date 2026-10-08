@@ -229,21 +229,19 @@ const EplanDraftTable: React.FC<{ records: EplanData[]; title: string }> = ({ re
     </div>
   );
 
-  if (full) {
-    return (
-      <div className="fixed inset-0 z-[200] bg-white flex flex-col">
-        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200">
-          <p className="text-sm font-semibold text-gray-900">{title} — EPLAN draft table · {records.length} feeder(s)</p>
-          {tools}
-        </div>
-        <DraftTableGrid records={records} fill />
-      </div>
-    );
-  }
+  // One tree in and out of full screen, so the table is the same table — its
+  // scroll kept — rather than a new one built each way.
   return (
-    <div>
-      <div className="flex justify-end px-3 py-1.5 bg-gray-50 border-b border-gray-200">{tools}</div>
-      <DraftTableGrid records={records} />
+    <div className={full ? 'fixed inset-0 z-[200] bg-white flex flex-col' : ''}>
+      <div className={full
+        ? 'flex items-center justify-between px-4 py-2 border-b border-gray-200'
+        : 'flex justify-end px-3 py-1.5 bg-gray-50 border-b border-gray-200'}>
+        {full && (
+          <p className="text-sm font-semibold text-gray-900">{title} — EPLAN draft table · {records.length} feeder(s)</p>
+        )}
+        {tools}
+      </div>
+      <DraftTableGrid records={records} fill={full} />
     </div>
   );
 };

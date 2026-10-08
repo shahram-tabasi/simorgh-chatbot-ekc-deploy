@@ -70,7 +70,15 @@ export const officeSymbols = (): OfficeSymbol[] => cache;
 /** The office's redraws of library symbols, by the symbol they redraw. */
 export function officeRedraws(): Record<string, SymbolArtOverride> {
   const out: Record<string, SymbolArtOverride> = {};
-  for (const s of redraws) if (s.override?.art) out[s.id.slice(REDRAW_PREFIX.length)] = s.override;
+  // Its save time: stamped on the drawing, else when the server last changed
+  // it — so a redraw saved before stamping still counts as the newer one.
+  for (const s of redraws) {
+    if (s.override?.art) {
+      out[s.id.slice(REDRAW_PREFIX.length)] = {
+        ...s.override, savedAt: s.override.savedAt ?? (s as { changedOn?: string }).changedOn,
+      };
+    }
+  }
   return out;
 }
 

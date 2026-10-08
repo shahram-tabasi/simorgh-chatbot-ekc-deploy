@@ -574,7 +574,9 @@ export const SymbolLibrary: React.FC<Props> = ({
       symbolId={redrawing}
       // This project's own redraw, else the office's — what it is drawn with.
       override={projectData.symbolOverrides?.[redrawing] ?? officeRedraws()[redrawing]}
-      onSave={art => {
+      onSave={drawn => {
+        // Stamped, so the newer of this and any project's own copy is drawn.
+        const art = { ...drawn, savedAt: new Date().toISOString() };
         const before = projectData.symbolOverrides?.[redrawing];
         patchProjectData(prev => {
           const next = { ...(prev.symbolOverrides ?? {}) };

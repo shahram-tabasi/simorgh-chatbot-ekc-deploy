@@ -26,6 +26,7 @@ export function toSymbolOverrides(
       // Left behind, the library falls back to inventing two on the conductor
       // — which is the drawing the office has just finished correcting.
       terminals: art.terminals,
+      savedAt: art.savedAt,
       title: 'Redrawn for this project',
     };
   }

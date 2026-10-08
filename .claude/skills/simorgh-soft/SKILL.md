@@ -454,7 +454,84 @@ live only in `project.symbolOverrides`, so every other project — a new one too
 Saving a redraw now also saves it to the office library (`/api/symbols`, id
 `redraw:<symbol>`, the whole redraw under `override`); the library draws a
 symbol from the project's own redraw, else the office's, else the pack
-(`OFFICE_REDRAWS` in iecSymbols). "Use in every project" in the symbol library
+(`OFFICE_REDRAWS` in iecSymbols) — **except that the newer save wins**: every
+redraw is stamped `savedAt` (an office one without it takes the server's
+`changedOn`), and an office redraw saved after the project's own replaces it.
+Otherwise an older project hid every later correction behind its own copy. "Use in every project" in the symbol library
 copies a project's existing redraws to the office. Redraws are kept out of the
 office's list of new symbols. The server keeps each terminal's `dir`.
 
+
+
+## Working with this owner, and where the work stands
+
+Read this before anything else in a new context window. It is the thread of
+the work so far; keep it current when a feature lands or a question closes.
+
+**How the owner works.** Writes in Persian; answer in Persian. Asks for
+several things in one message — split them into a task list and do all of
+them. "هیچ عملکردی را حذف یا تغییر نده": never drop a capability, even one that
+looks redundant — if a change would remove one, keep it behind an option and
+say so. Deploy line to give after every push:
+`git pull --no-rebase && ./deploy-soft.sh`, then Ctrl+Shift+R. Colours per the
+simorgh-ui skill (neutral, blue only for the primary action).
+
+**Testing without the server.**
+- Drawings and pure utils: bundle a script with
+  `npx esbuild x.ts --bundle --platform=node --format=cjs --define:import.meta.env='{}'`
+  (plain `tsx` dies on `import.meta.env` in projectService), write the SVG,
+  screenshot it with Playwright.
+- A screen that needs the project context: in `src/__preview.tsx` wrap it in
+  `ProjectContextProvider` (exported from ProjectContext) with a `Proxy` value
+  whose missing keys are no-op functions, mount, drive with Playwright.
+  Delete `src/__preview.tsx` and `preview.html` before committing.
+
+**Full screen is one tree.** A screen that returns a different JSX tree when
+maximised gets a *new* component instance, and every setting on it (frozen
+header/columns/rows, filters, widths, scroll) resets. Change only the frame's
+classes (`DeviceSelectionTab`, `SendToEplanTab` do this now).
+
+**What has been built, and where.**
+- *Simorgh Draw tab* (`EplanixTab`): one switchgear at a time. Nothing is
+  drawn until one is chosen ("All" is for print/export only — never drawn
+  together). Single line, layout and mechanical are that switchgear's alone.
+- *LV graphic templates*: wizard asks single/multi-line, 1PH+N/3PH/3PH+N, PEN.
+  Drawn by the MV cell rules with `opts.lv` (`drawMvCell`), or
+  `buildLvMultiLineSvg`. OFW (MOTOR/FEEDER/MODULLAR…): plug-in socket top and
+  bottom, breaker not withdrawable (may be motorised). FIX (CCS/OFF/…): no
+  sockets, breaker withdrawable. The project sheet draws such feeders exactly
+  as their template graphic (`lvCellOf` in `drawSheet`); older LV templates
+  keep `drawBranch`, whose instruments are joined point to point (no column
+  line through them) and whose labels wrap at `LV_WRAP` 16.
+- *Protection/poles*: asked for LV breakers, never written on the drawing; a
+  Symbol Library symbol whose name has both ("CB LSIG 4P") is picked for it.
+- *Part symbol default*: the slot the part was loaded into decides
+  (`slotSymbol` in `symbolForPart`); EPLAN/description only refine within the
+  same kind (`REFINES`).
+- *SIM-TABLE* is its own layer (`SIMTABLE`), toggled at EPLAN export.
+- *Layout* (`utils/layout/`): `s8DrawerTable.ts` is the office's FEEDER
+  ASSEMBLY LIST REV 32 (regenerate from the sheet, do not hand-edit);
+  `s8Drawers.ts` picks the smallest fitting drawer (frame, amps, poles,
+  contactors, SFD/HFD, motor, control-equipment maximum);
+  `layoutStandard.ts` is RE-TE-011-01 plus the first duct standard (sides 60,
+  MCB rows 40, breaker/contactor rows 60, terminals 80/60, 300 off the floor);
+  `layoutPages.ts` draws the S8 front view and the fixed internal view. In the
+  page tree: "Layout from project…".
+- *Offer control equipment*: `TemplateItem.offerControl`, beside the rows
+  (never bought, never sent to EPLAN), edited from the template's "Offer
+  control" button; sizes the first drawer; Output tab section 06 compares it
+  with the design and marks claims.
+- *Breaker codes*: SION 3AE5 (`utils/sion3ae5/engine.ts`), 3AH3 (`ah3.ts`),
+  SIMOPRIME World/A4/EK36 catalogues, stock conversion (`convert.ts`, tab
+  "Stock Compare").
+
+**Open questions — ask before assuming otherwise.**
+- 1M = 50 mm and a 400 mm busbar compartment (36M a section) are assumptions,
+  editable in the layout dialog; the owner has not confirmed them.
+- The 2M drawer: REV(1) said not to use it; REV 32 only says special socket.
+- Device faces in `faceOf` are rounded from memory of Siemens catalogues.
+- LV three-line `.ema` needs the office's WD library (.sdb/.slk) and sample LV
+  macros, as SLD.sdb was for MV — not received yet.
+- The Simaris S8 sample layout and the office's skeleton/drawer layout symbols
+  are still to come; layout symbols named with an order code already replace
+  the boxes.

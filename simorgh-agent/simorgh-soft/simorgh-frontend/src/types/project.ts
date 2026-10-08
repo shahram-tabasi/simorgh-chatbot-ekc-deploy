@@ -240,6 +240,13 @@ export interface ProjectData {
 export interface SymbolArtOverride {
   /** The geometry, as markup with no `<svg>` around it. */
   art: string;
+  /**
+   * When it was saved. The office's redraw and a project's own are both kept;
+   * the newer one is drawn, so a symbol corrected today replaces an older
+   * project's copy instead of hiding behind it. Absent on older saves, which
+   * count as older than any stamped one.
+   */
+  savedAt?: string;
   /** The box it is placed by, and where its conductor runs inside that box. */
   width: number;
   height: number;

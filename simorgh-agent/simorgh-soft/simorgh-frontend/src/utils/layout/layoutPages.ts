@@ -24,6 +24,7 @@ import type { LibraryItem } from '../cad/symbolSource';
 import { placeSymbolAt } from '../cad/symbolSource';
 import { newBlockId } from '../cad/geom';
 import { TIERS } from '../tiers';
+import { familyOf } from '../templateFamilies';
 import { partKeys, partDescription } from '../eplanSingleLine';
 import { stripLocaleTags } from '../tierEquipmentMatrix';
 import { buildPanelLayout } from '../panelLayout';
@@ -418,4 +419,20 @@ export function ccsInternalPages(equipment: Equipment, devices: CcsDevice[], wid
       width: SHEET.w, height: SHEET.h, shapes: s,
     };
   });
+}
+
+/** Which layout a switchgear takes: fixed (CCS, OFF…) when most of its
+ *  feeders' templates are FIX, else S8 drawers. */
+export function layoutKindOf(data: ProjectData, equipment: Equipment): 's8' | 'ccs' {
+  const all = TIERS.flatMap(t => data.templates?.[t] ?? []);
+  const rows = equipment.devices ?? [];
+  const fixed = rows.filter(r => familyOf('LV', all.find(t => t.id === r.templateId)?.hierarchy)?.id === 'FIX').length;
+  return fixed > rows.length / 2 ? 'ccs' : 's8';
+}
+
+/** The layout pages of a switchgear, as its kind draws them. */
+export function layoutPagesOf(data: ProjectData, equipment: Equipment, symbols: LibraryItem[] = []): LayoutPage[] {
+  return layoutKindOf(data, equipment) === 'ccs'
+    ? ccsInternalPages(equipment, ccsDevices(data, equipment), 1000, symbols)
+    : s8FrontPages(equipment, planS8(data, equipment));
 }

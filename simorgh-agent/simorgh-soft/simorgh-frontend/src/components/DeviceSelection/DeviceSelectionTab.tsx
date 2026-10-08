@@ -3709,48 +3709,46 @@ const DeviceSelectionTab: React.FC<DeviceSelectionTabProps> = ({
     </>
   );
 
-  if (isFullscreen) {
-    return (
-      // `right` leaves room for the chatbot column (var set by Chatbot.tsx;
-      // falls back to 0 when the chatbot is not mounted). This way the
-      // assistant stays visible and usable while the device table is maximised.
-      <div
-        className="fixed top-0 left-0 bottom-0 bg-white z-40 overflow-hidden shadow-xl flex flex-col"
-        style={{ right: 'var(--simorgh-chat-w, 0px)' }}
-      >
-        {/* Held to the screen like the tab is: the panels scroll, each on its
-            own. No heading — the project's name is in the app header. Exit Fullscreen is on the
-            Device Specifications panel, where Fullscreen was pressed. */}
-        <div className="p-4 flex-1 min-h-0 flex flex-col">
-          {workspace}
-        </div>
-
-        {overlays}
-      </div>
-    );
-  }
-
+  // One tree for both frames. Full screen used to return a different tree,
+  // which React takes as a different table: it was built afresh, and every
+  // setting on it — the frozen heading, frozen columns and rows, the filters,
+  // the column widths — was back to nothing the moment the screen grew. Now
+  // only the frame's classes change, so the table and everything set on it
+  // carry over in both directions.
   return (
-    <div className="h-full min-h-0 flex flex-col">
-
+    <div
+      className={isFullscreen
+        // `right` leaves room for the chatbot column (var set by Chatbot.tsx;
+        // falls back to 0 when the chatbot is not mounted), so the assistant
+        // stays usable while the table is maximised.
+        ? 'fixed top-0 left-0 bottom-0 bg-white z-40 overflow-hidden shadow-xl flex flex-col'
+        : 'h-full min-h-0 flex flex-col'}
+      style={isFullscreen ? { right: 'var(--simorgh-chat-w, 0px)' } : undefined}
+    >
       {/* Templates and Equipment Tree get just enough fixed width for their
           content (names/tree labels); Device Specifications takes all the
           remaining space so the wide device table isn't squeezed into a
           fixed 50% column.
           The columns are built from which panels are open: a closed one leaves
-          no track behind it, so its width becomes table rather than a gap. */}
-      {workspace}
+          no track behind it, so its width becomes table rather than a gap.
+          In full screen no heading — the project's name is in the app header;
+          Exit Fullscreen is on the panel where Fullscreen was pressed. */}
+      <div className={isFullscreen ? 'p-4 flex-1 min-h-0 flex flex-col' : 'flex-1 min-h-0 flex flex-col'}>
+        {workspace}
+      </div>
 
       {overlays}
 
-      <div className="flex justify-end mt-6 shrink-0">
-        <button
-          className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-          onClick={onNext}
-        >
-          Next →
-        </button>
-      </div>
+      {!isFullscreen && (
+        <div className="flex justify-end mt-6 shrink-0">
+          <button
+            className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            onClick={onNext}
+          >
+            Next →
+          </button>
+        </div>
+      )}
     </div>
   );
 };

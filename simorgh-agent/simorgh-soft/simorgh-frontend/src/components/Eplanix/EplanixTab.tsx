@@ -25,7 +25,7 @@ import {
 import { sheetsToDxf } from '../../utils/cad/sheetDxf';
 import { Drawing } from '../../utils/cad/shapes';
 import { drawingFromSvg, svgSize } from '../../utils/cad/fromSvg';
-import { fingerprint } from '../../utils/cad/edit';
+import { fingerprint, boundsOfAll } from '../../utils/cad/edit';
 import { EditorSheet } from '../SimorghDraw/DrawingEditor';
 import { SheetEditorWindow } from '../SimorghDraw/SheetEditorWindow';
 import { TitleBlockDialog } from '../SimorghDraw/TitleBlockDialog';
@@ -42,8 +42,43 @@ import {
 import {
   DrawingGroups, DrawingPage, newPage, pageKey, readGroups, readPages,
 } from '../../utils/cad/pages';
-import { TIERS } from '../../utils/tiers';
+import { TIERS, LAYOUT_OF } from '../../utils/tiers';
 import { appAlert } from '../shared/AppDialog';
+import { layoutKindOf, layoutPagesOf, type LayoutPage } from '../../utils/layout/layoutPages';
+import { renderSvg } from '../../utils/cad/svg';
+import { renderDxf, mergeDrawings } from '../../utils/cad/dxf';
+import { officeItems } from '../../utils/cad/officeSymbols';
+
+/** "Every switchgear", for print and export only — never drawn together. */
+const ALL = '*';
+
+/** A layout page as a drawing. */
+const pageDrawing = (p: LayoutPage) => {
+  const d = new Drawing(p.width, p.height, p.name);
+  for (const shape of p.shapes) d.add(shape);
+  return d;
+};
+
+/** A layout page on screen: cropped to what is drawn, as wide as the panel. */
+function pageOnScreen(p: LayoutPage): string {
+  const box = boundsOfAll(p.shapes);
+  const svg = renderSvg(pageDrawing(p));
+  if (!box) return svg;
+  const pad = 6;
+  const vb = `${box.x - pad} ${box.y - pad} ${box.w + 2 * pad} ${box.h + 2 * pad}`;
+  return svg.replace(/viewBox="[^"]*" width="[^"]*" height="[^"]*"/,
+    `viewBox="${vb}" width="100%" preserveAspectRatio="xMidYMin meet" style="max-height:78vh;display:block"`);
+}
+
+/** The layout pages of the switchgear, printable. */
+function layoutHtml(data: ProjectData, pages: LayoutPage[]): string {
+  const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(data.projectName || 'Project')} — Layout</title>
+<style>body{margin:0;font-family:Segoe UI,Arial,sans-serif}section{page-break-after:always;padding:8px}
+@page{size:A3 landscape;margin:6mm}@media print{.no-print{display:none}}svg{width:100%;height:auto}</style></head><body>
+<button class="no-print" onclick="window.print()" style="margin:10px;padding:8px 14px">Print / Save as PDF</button>
+${pages.map(p => `<section>${renderSvg(pageDrawing(p))}</section>`).join('')}</body></html>`;
+}
 
 // The Simorgh Draw tab: the drawings-and-lists outputs that come off the
 // switchgear itself — the single line, the panel layout, and the mechanical
@@ -146,7 +181,10 @@ export const EplanixTab: React.FC<{
   // Those need somewhere to start from that is not a switchgear.
   // The page the editor is opened on, or null when it is not open on a page.
   const [openPage, setOpenPage] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string>('');   // equipment id, '' = all
+  // One switchgear at a time: nothing is drawn until one is chosen, and then
+  // its single line, layout and mechanical are that switchgear's alone. ALL
+  // is there for printing and exporting every switchgear at once.
+  const [selected, setSelected] = useState<string>('');
   const [perPage, setPerPage] = useState(8);
   const [sheet, setSheet] = useState(0);
   // What EPLAN says each part is — the symbol it places for it. Without this
@@ -273,10 +311,10 @@ export const EplanixTab: React.FC<{
   }, [packOverrides]);
 
   const withLines = equipments.filter(e => (e.devices ?? []).length > 0);
-  const chosen = selected ? equipments.filter(e => e.id === selected) : equipments;
+  const chosen = selected === ALL ? equipments : selected ? equipments.filter(e => e.id === selected) : [];
   const chosenWithLines = chosen.filter(e => (e.devices ?? []).length > 0);
-  // Previews show one switchgear; the first of the chosen ones.
-  const preview = chosenWithLines[0];
+  // The one switchgear drawn on screen — none until one is picked.
+  const preview = selected && selected !== ALL ? chosenWithLines[0] : undefined;
 
   const pages = useMemo(
     () => (preview ? buildSingleLinePages(projectData, preview, perPage, symbols) : []),
@@ -419,13 +457,27 @@ export const EplanixTab: React.FC<{
       : []),
     [editing, pages, preview, perPage]);
 
-  const layout = useMemo(
-    () => (preview ? buildPanelLayout(projectData, preview) : null),
+  // The layout as the office draws it: an S8 front view of drawers, or a
+  // fixed panel's internal view — the same pages "Layout from project…" puts
+  // in the drawing set.
+  // LV only: an MV or HV board keeps its cell-by-cell elevation.
+  const isLv = (eq: Equipment) => LAYOUT_OF[eq.type] === 'LV';
+  const layoutPages = useMemo(
+    () => (preview && isLv(preview) ? layoutPagesOf(projectData, preview, officeItems().filter(i => i.kind === 'old')) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectData, preview, symbolVersion]);
+  const allLayoutPages = () => chosenWithLines.filter(isLv).flatMap(eq =>
+    layoutPagesOf(projectData, eq, officeItems().filter(i => i.kind === 'old')));
+  const elevation = useMemo(
+    () => (preview && !isLv(preview) ? buildPanelLayout(projectData, preview) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [projectData, preview]);
+  const otherBoards = () => chosenWithLines.filter(eq => !isLv(eq)).map(eq => buildPanelLayout(projectData, eq));
 
+  // On screen, the one switchgear; the Excel covers what is chosen (ALL too).
   const mechanical = useMemo(
-    () => chosen.flatMap(eq => buildMechanicalItems(projectData, eq)),
-    [projectData, chosen]);
+    () => (preview ? buildMechanicalItems(projectData, preview) : []),
+    [projectData, preview]);
 
   const Btn: React.FC<{
     onClick: () => void; icon?: 'download' | 'print'; children: React.ReactNode;
@@ -468,10 +520,13 @@ export const EplanixTab: React.FC<{
             value={selected}
             onChange={e => { setSelected(e.target.value); setSheet(0); }}
           >
-            <option value="">All ({equipments.length})</option>
+            <option value="">Choose a switchgear…</option>
             {equipments.map(eq => (
               <option key={eq.id} value={eq.id}>{eq.name} — {eq.type}</option>
             ))}
+            {equipments.length > 1 && (
+              <option value={ALL}>All {equipments.length} — print / export only</option>
+            )}
           </select>
         </div>
       </div>
@@ -492,6 +547,14 @@ export const EplanixTab: React.FC<{
         <Tab id="mechanical" label="Mechanical" note="Enclosure, busbars, compartments" />
       </div>
 
+      {!preview && (
+        <p className="mb-3 text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-4 py-3">
+          {selected === ALL
+            ? 'One switchgear is drawn at a time — choose one to see it. Print and export below cover all of them.'
+            : 'Choose a switchgear above — its single line, layout and mechanical are drawn for it alone.'}
+        </p>
+      )}
+
       {/* ── Single line ───────────────────────────────────────────────── */}
       {view === 'single-line' && (
         <div className="border border-gray-200 rounded-lg">
@@ -501,7 +564,7 @@ export const EplanixTab: React.FC<{
               <div className="min-w-0">
                 <p className="font-medium text-sm text-gray-800"
                   title={`One sheet per ${perPage} feeders · supply, busbar, scope chain and a data block per feeder`}>
-                  {preview ? `${preview.name} — ${preview.devices?.length ?? 0} feeders` : 'No switchgear with feeder lines'}
+                  {preview ? `${preview.name} — ${preview.devices?.length ?? 0} feeders` : selected ? 'No switchgear with feeder lines' : 'No switchgear chosen'}
                 </p>
                 <p className="text-[11px] text-blue-700 mt-0.5">{symbolNote}</p>
               </div>
@@ -601,11 +664,11 @@ export const EplanixTab: React.FC<{
                 </div>
               )}
             </>
-          ) : (
+          ) : preview || (selected && selected !== ALL) ? (
             <p className="p-6 text-sm text-gray-500">
               Nothing to draw yet — add feeder lines in Scope Selection, or import a switchgear from TPMS.
             </p>
-          )}
+          ) : null}
         </div>
       )}
 
@@ -694,17 +757,27 @@ export const EplanixTab: React.FC<{
               <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">LAYOUT</span>
               <div className="min-w-0">
                 <p className="font-medium text-sm text-gray-800">
-                  {layout ? `${layout.equipment.name} — ${layout.columns.length} column(s), tallest ${layout.tallest}${layout.unit}` : 'No switchgear with feeder lines'}
+                  {!preview ? 'No switchgear chosen'
+                    : elevation ? `${preview.name} — ${elevation.columns.length} column(s), tallest ${elevation.tallest}${elevation.unit}`
+                    : `${preview.name} — ${layoutKindOf(projectData, preview) === 'ccs' ? 'internal view (fixed)' : 'SIVACON S8 front view'} · ${layoutPages.length} page(s)`}
                 </p>
                 <p className="text-xs text-gray-500">
-                  From MODULE NO. (column.position) and SIZE — each column stacked in position order.
+                  S8: each feeder a drawer of its size (SIZE, else the feeder assembly list). Fixed: rows between the office's ducts. "Layout from project…" in the page tree puts these pages in the drawing set.
                 </p>
               </div>
             </div>
             <div className="flex items-center flex-wrap gap-2">
               <Btn
-                onClick={() => openPrintable(
-                  buildLayoutHtml(projectData, chosenWithLines.map(eq => buildPanelLayout(projectData, eq))), 'layout')}
+                onClick={() => {
+                  const lv = allLayoutPages();
+                  const other = otherBoards();
+                  if (other.length && !lv.length) openPrintable(buildLayoutHtml(projectData, other), 'layout');
+                  else if (other.length) {
+                    // Both kinds chosen: the LV pages, then the other boards' elevations.
+                    openPrintable(layoutHtml(projectData, lv), 'layout');
+                    openPrintable(buildLayoutHtml(projectData, other), 'layout');
+                  } else openPrintable(layoutHtml(projectData, lv), 'layout');
+                }}
                 icon="print"
                 className="bg-slate-700 text-white hover:bg-slate-800"
                 disabled={chosenWithLines.length === 0}
@@ -719,10 +792,21 @@ export const EplanixTab: React.FC<{
                 Layout Excel
               </Btn>
               <Btn
-                onClick={() => downloadText(
-                  `${fileSafe(projectData.projectName)}_layout.dxf`,
-                  buildLayoutDxf(projectData, chosenWithLines.map(eq => buildPanelLayout(projectData, eq))),
-                  'image/vnd.dxf')}
+                onClick={() => {
+                  const drawings = allLayoutPages().map(pageDrawing);
+                  const other = otherBoards();
+                  if (drawings.length) {
+                    downloadText(
+                      `${fileSafe(projectData.projectName)}_layout.dxf`,
+                      renderDxf(drawings.length === 1 ? drawings[0] : mergeDrawings(drawings, 40, 'Layout')),
+                      'image/vnd.dxf');
+                  }
+                  if (other.length) {
+                    downloadText(
+                      `${fileSafe(projectData.projectName)}_layout${drawings.length ? '_MV' : ''}.dxf`,
+                      buildLayoutDxf(projectData, other), 'image/vnd.dxf');
+                  }
+                }}
                 className="border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
                 disabled={chosenWithLines.length === 0}
               >
@@ -731,15 +815,22 @@ export const EplanixTab: React.FC<{
             </div>
           </div>
 
-          {layout ? (
-            <div className="p-3 overflow-x-auto bg-white">
-              <div dangerouslySetInnerHTML={{ __html: buildLayoutSvg(layout) }} />
+          {layoutPages.length > 0 ? (
+            <div className="p-3 overflow-x-auto bg-white space-y-3">
+              {layoutPages.map((p, i) => (
+                <div key={i} className="border border-gray-200"
+                  dangerouslySetInnerHTML={{ __html: pageOnScreen(p) }} />
+              ))}
             </div>
-          ) : (
+          ) : elevation ? (
+            <div className="p-3 overflow-x-auto bg-white">
+              <div dangerouslySetInnerHTML={{ __html: buildLayoutSvg(elevation) }} />
+            </div>
+          ) : preview ? (
             <p className="p-6 text-sm text-gray-500">
-              Nothing to lay out yet — feeder lines carry the module numbers this is built from.
+              Nothing to lay out yet — the switchgear has no feeder lines.
             </p>
-          )}
+          ) : null}
         </div>
       )}
 
@@ -751,7 +842,7 @@ export const EplanixTab: React.FC<{
               <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">MECH</span>
               <div className="min-w-0">
                 <p className="font-medium text-sm text-gray-800">
-                  {mechanical.length} item{mechanical.length === 1 ? '' : 's'} across {chosen.length} switchgear(s)
+                  {preview ? `${preview.name} — ${mechanical.length} item${mechanical.length === 1 ? '' : 's'}` : 'No switchgear chosen'}
                 </p>
                 <p className="text-xs text-gray-500">
                   Counted from the panel specification and the feeders — every row says what it was derived from.
@@ -761,7 +852,7 @@ export const EplanixTab: React.FC<{
             <Btn
               onClick={() => exportMechanicalExcel(projectData, chosen)}
               className="border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-              disabled={mechanical.length === 0}
+              disabled={chosen.length === 0}
             >
               Mechanical Excel
             </Btn>
@@ -792,11 +883,11 @@ export const EplanixTab: React.FC<{
                 </tbody>
               </table>
             </div>
-          ) : (
+          ) : selected ? (
             <p className="p-6 text-sm text-gray-500">
               Nothing to list yet — the switchgears need a panel specification in Scope Library.
             </p>
-          )}
+          ) : null}
         </div>
       )}
 

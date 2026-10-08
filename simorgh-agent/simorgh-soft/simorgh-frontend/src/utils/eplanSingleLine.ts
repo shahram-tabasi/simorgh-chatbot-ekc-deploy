@@ -862,6 +862,26 @@ function stepFor(item: ChainItem): number {
   return Math.max(symbolHeight(dk(item)), CELL, textRoom(item));
 }
 
+/**
+ * Where the text of a device that feeds instruments starts: under the line
+ * that leaves it at mid-cell for the instrument column. Written above that
+ * line, a wrapped label ran up into the device before it; written across it,
+ * the line went through the words.
+ */
+const FED_TOP = CELL / 2 + 13;
+const stepForFed = (item: ChainItem) =>
+  Math.max(stepFor(item), FED_TOP + (labelLineCount(item, LV_WRAP) - 1) * TEXT.tag * 1.15 + TEXT.gap);
+
+/** The devices on a branch that a line leaves at mid-cell: to instruments,
+ *  or the control wiring from the first device when nothing else feeds it. */
+function feedingIndices(branch: Branch): Set<number> {
+  const feeds = new Set<number>();
+  branch.fedBy.forEach(s => { if (s != null) feeds.add(s); });
+  branch.alsoFed.forEach(s => { if (s != null) feeds.add(s); });
+  if (branch.fedBy.some(s => s == null) && branch.series.length > 0) feeds.add(0);
+  return feeds;
+}
+
 // ── The order of a cell, and what hangs off it ──────────────────────────────
 //
 // An MV cell is drawn in one order, the order the office draws it in:
@@ -1059,9 +1079,10 @@ function layoutBranch(branch: Branch, top: number): BranchLayout {
   };
 
   placeShunts(-1);
+  const feeds = feedingIndices(branch);
   branch.series.forEach((item, index) => {
     ys.push(y);
-    y += stepFor(item);
+    y += feeds.has(index) ? stepForFed(item) : stepFor(item);
     placeShunts(index);
   });
   const seriesBottom = y;
@@ -1079,8 +1100,11 @@ function layoutBranch(branch: Branch, top: number): BranchLayout {
       .map((_, k) => k).filter(k => branch.fedBy[k] === source);
     if (items.length === 0) continue;
     const start = Math.max(cursor, source == null ? top : ys[source]);
-    groups.push({ source, items, ys: items.map((_, k) => start + k * CELL) });
-    cursor = start + items.length * CELL;
+    const at: number[] = [];
+    let y0 = start;
+    for (const k of items) { at.push(y0); y0 += instrStep(branch.instruments[k]); }
+    groups.push({ source, items, ys: at });
+    cursor = y0;
   }
 
   return {
@@ -1096,6 +1120,11 @@ const branchHeight = (b: Branch) => layoutBranch(b, 0).bottom;
 // the tags and codes written beside the devices never reach them.
 const SHUNT_DX = 56;
 const INSTR_DX = 120;
+/** Room right of the instrument column: the symbol and its wrapped label. */
+const INSTR_ROOM = 140;
+/** How far down the column an instrument takes: its cell, or its label. */
+const instrStep = (item: ChainItem) =>
+  Math.max(CELL, 17 + (labelLineCount(item, LV_WRAP) - 1) * TEXT.tag * 1.15 + 8);
 
 /**
  * While an MV cell is drawn, every connecting line is recorded rather than
@@ -1212,8 +1241,12 @@ function labelLines(text_: string, wrap: number): string[] {
   return lines;
 }
 
-/** Where an LV label is broken. */
-const LV_WRAP = 30;
+/**
+ * Where an LV label is broken: short enough that a label beside the line stops
+ * before the instrument column (INSTR_DX), and an instrument's own label stays
+ * inside its column (INSTR_ROOM) rather than running into the next feeder.
+ */
+const LV_WRAP = 16;
 
 /**
  * Every line written beside a device: its own `label : SIM-TABLE`, broken,
@@ -1333,7 +1366,7 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
   branch.series.forEach((item, index) => {
     out.push(drawDevice(item, x, ys[index]));
     out.push(deviceText(
-      item, labelX, ys[index] + (feeds.has(index) ? TEXT.topWhenFed : TEXT.top), CODE_CHARS));
+      item, labelX, ys[index] + (feeds.has(index) ? FED_TOP : TEXT.top), CODE_CHARS));
   });
 
   // The shunts: beside the line, down to earth. The magnet is the exception —
@@ -1356,13 +1389,29 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
   // connection out to the column, and the instruments strung on it.
   for (const group of groups) {
     const first = group.ys[0];
-    const last = group.ys[group.ys.length - 1] + CELL;
     const ty = group.source == null
       ? (controlFrom == null ? first + CELL / 2 : ys[controlFrom] + CELL / 2)
       : ys[group.source] + CELL / 2;
 
-    out.push(line(ix, Math.min(first, ty), ix, Math.max(last, ty)));
     out.push(secondary(x, ty, ix, group.source == null ? null : branch.series[group.source]));
+    // From the transformer's line to each instrument's own connection point,
+    // and on from one instrument's 2 to the next one's 1 — never a line run
+    // down the column through the symbols. A symbol drawn with its points on
+    // its side is joined at the side; the library's own, at top and foot.
+    const elbow = (a: Pt, b: Pt) => {
+      if (Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5) return;
+      if (Math.abs(a.y - b.y) >= 0.5) out.push(line(a.x, a.y, a.x, b.y));
+      if (Math.abs(a.x - b.x) >= 0.5) out.push(line(a.x, b.y, b.x, b.y));
+    };
+    let from: Pt = { x: ix, y: ty };
+    group.items.forEach((k, n) => {
+      const id = dk(branch.instruments[k]);
+      const p1 = pinOf(id, ix, group.ys[n], '1');
+      const p2 = pinOf(id, ix, group.ys[n], '2');
+      // A library symbol already carries the conductor between its two points.
+      elbow(from, p1);
+      from = p2.y > p1.y + 0.5 || Math.abs(p2.x - p1.x) > 0.5 ? p2 : p1;
+    });
 
     group.items.forEach((k, n) => {
       const item = branch.instruments[k];
@@ -2904,6 +2953,26 @@ function drawSheet(o: {
   };
   const mvCells = isMv ? o.lines.map((line_, i) => mvOf(line_, o.firstIndex + i + 1)) : [];
   const mvSupply = isMv && o.supply ? mvOf(o.supply, 0) : null;
+  // An LV feeder whose template is drawn in Simorgh Draw is drawn on the sheet
+  // exactly as its template graphic draws it — the cell's rules, the drawer's
+  // plug-in contacts (OFW), the phases — not by the older branch drawing.
+  const lvCellOf = (line_: DeviceTableRow, page: number) => {
+    if (isMv || LAYOUT_OF[o.equipment.type] !== 'LV') return null;
+    const template = line_.templateId ? o.templates.get(line_.templateId) : undefined;
+    if (!template || template.useSimorghDraw === false || !template.singleLine?.lvLines) return null;
+    const lvFamily = familyOf('LV', template.hierarchy)?.id;
+    const chain = chainFor(line_, o.templates, o.order, page, o.symbols, o.equipment.type);
+    const opts: MvCellOptions = {
+      answers: template.singleLine, mechanical: template.mechanical,
+      family: '', cellType: '', sub: '', lv: true, lvFamily,
+    };
+    return {
+      chain, opts, size: measureMvCell(chain, opts),
+      plug: lvFamily === 'OFW' ? CELL : 0, phases: template.singleLine.phases,
+    };
+  };
+  const lvCells = o.lines.map((line_, i) => lvCellOf(line_, o.firstIndex + i + 1));
+  const lvAll = lvCells.filter((c): c is NonNullable<typeof c> => c != null);
 
   const branches = o.lines.map((line_, i) =>
     splitBranch(chainFor(
@@ -2934,10 +3003,11 @@ function drawSheet(o: {
   // its racking does — so the line is set far enough in for the widest of them.
   const reach = Math.max(...all.flatMap(b =>
     [...b.series, ...b.instruments].map(i => symbolLeft(dk(i)))), 16);
-  const mvAll = [...mvCells, ...(mvSupply ? [mvSupply] : [])];
-  const branchDx = isMv && mvAll.length
+  const mvAll = [...mvCells, ...(mvSupply ? [mvSupply] : []), ...lvAll];
+  const branchDx = mvAll.length
     ? Math.max(34, reach + 10, ...mvAll.map(c => c.size.left + 12))
     : Math.max(hasShunt ? 130 : 34, reach + 10);
+  // (An LV board with cells keeps the room its older feeders need too.)
 
   /**
    * How wide a feeder column has to be.
@@ -2961,7 +3031,7 @@ function drawSheet(o: {
     textWidth(CODE_CHARS, TEXT.codeSize), textWidth(labelChars, TEXT.tag)) + 18;
   const colWidth = Math.max(
     forText,
-    hasShunt || wide ? branchDx + INSTR_DX + 104 : 0,
+    hasShunt || wide ? branchDx + INSTR_DX + INSTR_ROOM : 0,
     ...mvAll.map(c => branchDx + c.size.right + 24),
   );
 
@@ -2977,14 +3047,18 @@ function drawSheet(o: {
   const chainTop = busY + 26;
   const body = isMv
     ? Math.max(CELL, ...mvCells.map(c => c.size.bottom))
-    : Math.max(CELL, ...branches.map(branchHeight));
+    : Math.max(CELL, ...branches.map((b, i) => {
+      const c = lvCells[i];
+      return c ? c.size.bottom + 2 * c.plug : branchHeight(b);
+    }));
   const loadY = chainTop + body + 20;
   // An MV cell can reach below its own line — the magnet's line down to the
   // feeder it is interlocked with — and the table starts clear of that too.
   // A cable connection ends in its sealing end and the cable below it.
   const endRoom = mvCells.some(c => ['cable', 'cable-in'].includes(mvEndOf(c.opts))) ? CELL + 10 : 0;
   const tableTop = Math.max(loadY + CELL + 36 + endRoom,
-    ...mvCells.map(c => chainTop + c.size.height + 24));
+    ...mvCells.map(c => chainTop + c.size.height + 24),
+    ...lvAll.map(c => chainTop + c.size.height + 2 * c.plug + CELL + 36));
   const tableHeight = TABLE_ROWS.length * cardRowHeight;
   // The sheet is exactly as wide as the feeders on it: busbar and the block
   // underneath both end at the last column, never in mid-air.
@@ -3083,6 +3157,20 @@ function drawSheet(o: {
       out.push(`<circle cx="${x}" cy="${busY}" r="3" fill="#111"/>`);
     }
 
+    const lv = lvCells[i];
+    if (lv) {
+      // As the template graphic: what it carries across the top, the drawer's
+      // plug-in contact, the cell, the plug-in again, then the load.
+      if (lv.phases) out.push(phaseTick(x, chainTop - 9, lv.phases));
+      if (lv.plug) out.push(drawBlock('plug-in', x, chainTop));
+      const cell = drawMvCell(lv.chain, lv.opts, x, chainTop + lv.plug, loadY + 36);
+      out.push(cell.svg);
+      let b = Math.max(cell.bottom, chainTop + lv.plug);
+      if (lv.plug) { out.push(drawBlock('plug-in', x, b)); b += lv.plug; }
+      out.push(`<line x1="${x}" y1="${b}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
+      out.push(drawBlock(isMotorLoad(line_) ? 'motor' : 'outgoing', x, loadY));
+      return;
+    }
     const drawn = isMv
       ? drawMvCell(mvCells[i].chain, mvCells[i].opts, x, chainTop, loadY + 36)
       : drawBranch(branches[i], x, chainTop);
@@ -3219,8 +3307,8 @@ export function buildTemplateSvg(
 
   const drawn = mvSize ? drawMvCell(chain, mvOpts, x, top) : drawBranch(branch, x, top);
   const width = mvSize
-    ? Math.max(x + INSTR_DX + 104, x + mvSize.right + 20) + margin
-    : x + INSTR_DX + 104 + margin;
+    ? Math.max(x + INSTR_DX + INSTR_ROOM, x + mvSize.right + 20) + margin
+    : x + INSTR_DX + INSTR_ROOM + margin;
   const bottom = Math.max(drawn.bottom, top);
   const height = Math.max(bottom + plug + stub + 34 + (mvSize ? CELL + 20 : 0), mvSize ? top + mvSize.height + 20 : 0);
 

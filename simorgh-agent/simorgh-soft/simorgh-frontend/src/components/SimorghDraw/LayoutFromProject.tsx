@@ -3,10 +3,9 @@ import { LayoutGridIcon, XIcon } from 'lucide-react';
 import type { DrawingEdits, ProjectData } from '../../types/project';
 import { DrawingPage, nextName, pageKey } from '../../utils/cad/pages';
 import { officeItems } from '../../utils/cad/officeSymbols';
-import { LAYOUT_OF, TIERS } from '../../utils/tiers';
-import { familyOf } from '../../utils/templateFamilies';
+import { LAYOUT_OF } from '../../utils/tiers';
 import { S8_SECTION, PANEL_WIDTHS } from '../../utils/layout/layoutStandard';
-import { ccsDevices, ccsInternalPages, planS8, s8FrontPages, type LayoutPage } from '../../utils/layout/layoutPages';
+import { ccsDevices, ccsInternalPages, layoutKindOf, planS8, s8FrontPages, type LayoutPage } from '../../utils/layout/layoutPages';
 
 // Layout pages from the project: an LV switchgear's S8 front view, or a fixed
 // panel's internal view, built to the office's standard and then drawn on like
@@ -31,12 +30,7 @@ export const LayoutFromProject: React.FC<Props> = ({ project, pages, edits, onDo
   // FIX templates (CCS, OFF…) are fixed panels; the rest are S8 drawers.
   const kindOf = (id: string): Kind => {
     const eq = switchgears.find(e => e.id === id);
-    const all = TIERS.flatMap(t => project.templates?.[t] ?? []);
-    const fixed = (eq?.devices ?? []).filter(r => {
-      const tpl = all.find(t => t.id === r.templateId);
-      return familyOf('LV', tpl?.hierarchy)?.id === 'FIX';
-    }).length;
-    return fixed > (eq?.devices ?? []).length / 2 ? 'ccs' : 's8';
+    return eq ? layoutKindOf(project, eq) : 's8';
   };
 
   const [chosen, setChosen] = useState<string>(switchgears[0]?.id ?? '');
