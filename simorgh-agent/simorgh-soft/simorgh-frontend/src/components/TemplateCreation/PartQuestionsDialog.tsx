@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { CheckIcon, XIcon, InfoIcon, PlusIcon, TrashIcon } from 'lucide-react';
-import { PartSingleLine, CtCore, CtCorePurpose, SignalDir } from '../../types/project';
+import { PartSingleLine, CtCore, CtCorePurpose, SignalDir, LvProtection, LvPoles } from '../../types/project';
 import { IEC_SYMBOLS, SYMBOL_GROUPS, SymbolId } from '../../utils/iecSymbols';
 import { breakLabel, symbolForPart, coresFromText } from '../../utils/eplanSingleLine';
 import { partCode } from '../../utils/eplanDataExport';
@@ -63,6 +63,15 @@ const CORE_PURPOSES: { id: CtCorePurpose; label: string }[] = [
 ];
 /** The breaker of the cell: the interlocks and the boxes beside it. */
 const BREAKERS: SymbolId[] = ['vcb', 'vcb-racking', 'withdrawable-cb', 'vacuum-contactor-fuse', 'circuit-breaker'];
+/** LV switches with a trip unit: their protection and poles are asked. */
+const LV_TRIP_UNITS: SymbolId[] = ['circuit-breaker', 'mcb', 'motor-starter', 'withdrawable-cb'];
+/** Trip-unit functions: L overload, S short-time, I instantaneous, N neutral, G earth fault. */
+const PROTECTIONS: [LvProtection, string][] = [
+  ['L', 'Overload only'], ['LI', 'Overload + instantaneous (thermal-magnetic)'],
+  ['LSI', '+ short-time delay (electronic)'], ['LSIN', 'LSI + neutral protection'],
+  ['LSIG', 'LSI + earth fault'], ['LSING', 'LSI + neutral + earth fault'],
+];
+const POLES: LvPoles[] = ['1P', '1P+N', '2P', '3P', '3P+N', '4P'];
 const SWITCHES: SymbolId[] = [
   'vcb', 'vcb-racking', 'withdrawable-cb', 'vacuum-contactor-fuse', 'circuit-breaker',
   'contactor', 'disconnector', 'switch-disconnector', 'mcb', 'motor-starter',
@@ -226,6 +235,9 @@ export const PartQuestionsDialog: React.FC<Props> = ({
   const isAccessory = asksRole ? answers.role !== 'main' : answers.role === 'accessory';
   const isRelay = RELAYS.includes(effective);
   const isBreaker = BREAKERS.includes(effective);
+  // LV: the main switch — a breaker with a trip unit — is asked its
+  // protection and its poles.
+  const isLvBreaker = tier === 'LV' && LV_TRIP_UNITS.includes(effective);
   // The magnet by its kind, or by what its row or the part is called.
   const isMagnet = effective === 'magnet' || /magnet|\bMB\d*\b/i.test(`${slotTitle} ${stripLocaleTags(part?.label) || ''}`);
   const isVt = effective === 'voltage-transformer';
@@ -390,6 +402,27 @@ export const PartQuestionsDialog: React.FC<Props> = ({
                   <p className="w-full text-[11px] text-gray-500">
                     Written in the relay’s box in place of “PROTECTION RELAY”. Left empty, the box says PROTECTION RELAY.
                   </p>
+                </Question>
+              )}
+
+              {isLvBreaker && (
+                <Question n={++n} title="Protection (trip unit)">
+                  <Choice on={!answers.protection} title="Not stated" onClick={() => set('protection', undefined)} />
+                  {PROTECTIONS.map(([v, note]) => (
+                    <Choice key={v} on={answers.protection === v} title={v} note={note} onClick={() => set('protection', v)} />
+                  ))}
+                  <p className="w-full text-[11px] text-gray-500">
+                    L overload · S short-time · I instantaneous · N neutral · G earth fault. Written beside the breaker.
+                  </p>
+                </Question>
+              )}
+
+              {isLvBreaker && (
+                <Question n={++n} title="Poles">
+                  <Choice on={!answers.poles} title="Not stated" onClick={() => set('poles', undefined)} />
+                  {POLES.map(v => (
+                    <Choice key={v} on={answers.poles === v} title={v} onClick={() => set('poles', v)} />
+                  ))}
                 </Question>
               )}
 

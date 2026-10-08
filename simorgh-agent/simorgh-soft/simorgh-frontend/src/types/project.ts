@@ -533,6 +533,9 @@ export interface PartSingleLine {
   /** The VT on SIMOPRIME: the incoming has a PT truck — the PT after the
    *  breaker, on a socket. */
   ptTruck?: boolean;
+  /** LV main switch: its trip unit's protection, and how many poles. */
+  protection?: LvProtection;
+  poles?: LvPoles;
 }
 
 /** What one core of a CT is for. */
@@ -588,7 +591,21 @@ export interface TemplateSingleLine {
   connectedTo?: string;
   /** Neutral panel: earthed through a resistor or solidly. */
   neutralEarthing?: 'resistor' | 'solid';
+  /** LV: drawn as a single line, or every conductor (multi-line). */
+  lvLines?: 'single' | 'multi';
+  /** LV: the system the feeder carries — single phase and neutral, three
+   *  phases, or three phases and neutral. */
+  phases?: LvPhases;
+  /** LV multi-line: neutral and protective earth combined in one PEN
+   *  conductor (TN-C) rather than drawn apart. */
+  pen?: boolean;
 }
+
+export type LvPhases = '1PH+N' | '3PH' | '3PH+N';
+/** An LV breaker's trip unit: overload (L), short-time (S), instantaneous
+ *  (I), neutral (N), earth fault (G). */
+export type LvProtection = 'L' | 'LI' | 'LSI' | 'LSIN' | 'LSIG' | 'LSING';
+export type LvPoles = '1P' | '1P+N' | '2P' | '3P' | '3P+N' | '4P';
 
 export interface DeviceItem {
   id: string;

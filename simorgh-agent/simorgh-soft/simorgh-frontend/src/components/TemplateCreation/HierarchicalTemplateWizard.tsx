@@ -890,6 +890,47 @@ export const HierarchicalTemplateWizard: React.FC<Props> = ({
               Answered Yes already — change it if this template's equipment is not drawn here.
               Nothing waits on it.
             </p>
+            {/* LV: how the feeder is drawn — one line or every conductor —
+                and what system it carries. The breaker's protection and
+                poles are asked in the breaker's own window. */}
+            {useSimorghDraw && tier === 'LV' && (
+              <div className="mt-2 rounded border border-gray-200 bg-gray-50 px-3 py-2 space-y-2">
+                <div>
+                  <p className="text-xs font-semibold text-gray-700">Drawing</p>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    <Chip value="Single line" selected={(singleLine.lvLines ?? 'single') === 'single'}
+                      onClick={() => setSingleLine({ ...singleLine, lvLines: 'single', pen: undefined })} />
+                    <Chip value="Multi-line" selected={singleLine.lvLines === 'multi'}
+                      onClick={() => setSingleLine({ ...singleLine, lvLines: 'multi' })} />
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-gray-700">System</p>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    {([['1PH+N', 'Single phase + N'], ['3PH', 'Three phase'], ['3PH+N', 'Three phase + N']] as const).map(([v, l]) => (
+                      <Chip key={v} value={l} selected={singleLine.phases === v}
+                        onClick={() => setSingleLine({ ...singleLine, phases: v })} />
+                    ))}
+                  </div>
+                  {(singleLine.lvLines ?? 'single') === 'single' && (
+                    <p className="mt-1 text-[11px] text-gray-500">
+                      Single line: a slash across the top of the line, marked 1PH+N, 3 or 4.
+                    </p>
+                  )}
+                </div>
+                {singleLine.lvLines === 'multi' && (
+                  <div>
+                    <p className="text-xs font-semibold text-gray-700" title="TN-C: neutral and protective earth in one conductor">PEN</p>
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      <Chip value="PEN — N and PE combined" selected={singleLine.pen === true}
+                        onClick={() => setSingleLine({ ...singleLine, pen: true })} />
+                      <Chip value="N and PE separate" selected={singleLine.pen === false}
+                        onClick={() => setSingleLine({ ...singleLine, pen: false })} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {/* Yes asks what belongs to the cell itself, for the cell type
                 picked above — each part's own questions are asked as the
                 part is entered. Optional, like Mechanical. */}

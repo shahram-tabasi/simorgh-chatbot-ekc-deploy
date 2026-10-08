@@ -296,6 +296,8 @@ export interface TemplateLike {
   singleLine?: TemplateSingleLine;
   /** The earth switch and the magnet are answered here too. */
   mechanical?: TemplateMechanical;
+  /** Drawn in Simorgh Draw — an LV template is then drawn by the cell's rules. */
+  useSimorghDraw?: boolean;
 }
 
 /** Where a part's symbol was decided, so a screen can say why it drew that. */
@@ -599,6 +601,8 @@ function chainOfTemplate(
         key: `${slot}#${k}`,
         anchor: out[out.length - 1],
       };
+      // An LV main switch's poles and trip unit, written under it.
+      if (sld.poles || sld.protection) item.accessoryCodes.push([sld.poles, sld.protection].filter(Boolean).join(' · '));
       out.push(item);
       host = item;
     });
@@ -1393,6 +1397,9 @@ export interface MvCellOptions {
   cellType?: string;
   /** w VT / wo VT, With Fuse / Without Fuse. */
   sub?: string;
+  /** An LV feeder drawn by the cell's rules: its breaker stays the breaker
+   *  it is, not the MV catalogue's vacuum breaker. */
+  lv?: boolean;
 }
 
 export const mvOptionsOf = (template?: TemplateLike): MvCellOptions => ({
@@ -1784,7 +1791,7 @@ function drawMvCellLines(
   // is a different symbol the office has not redrawn, so the sheet showed a
   // stranger where the office's own V.C.B belongs. A symbol picked by hand
   // stays as picked.
-  if (sw && !sw.chosen && !answers.switchType) {
+  if (sw && !sw.chosen && !answers.switchType && !opts.lv) {
     if (['vcb-racking', 'withdrawable-cb', 'circuit-breaker', 'mcb'].includes(sw.id)) sw = { ...sw, id: 'vcb' };
     else if (['contactor', 'motor-starter'].includes(sw.id)) sw = { ...sw, id: 'vacuum-contactor-fuse' };
   }
@@ -3119,8 +3126,15 @@ export function buildTemplateSvg(
   const chain = chainOfTemplate(template, order, 1, symbols, tier);
   const branch = splitBranch(chain);
   const isMv = LAYOUT_OF[tier] === 'MV';
-  const mvOpts = mvOptionsOf(template);
-  const mvSize = isMv ? measureMvCell(chain, mvOpts) : null;
+  // An LV feeder drawn in Simorgh Draw follows the cell's rules too — relays
+  // main and auxiliary, serial links, statuses, interlocks — with its own
+  // breaker kept, and is drawn as one line or as every conductor.
+  const lvCell = tier === 'LV' && template?.useSimorghDraw !== false && !!template?.singleLine?.lvLines;
+  if (lvCell && template?.singleLine?.lvLines === 'multi') return buildLvMultiLineSvg(template, chain);
+  const mvOpts: MvCellOptions = lvCell
+    ? { answers: template?.singleLine, mechanical: template?.mechanical, family: '', cellType: '', sub: '', lv: true }
+    : mvOptionsOf(template);
+  const mvSize = isMv || lvCell ? measureMvCell(chain, mvOpts) : null;
 
   // Room for whatever reaches out sideways, the same way a sheet works out how
   // wide a column has to be.
@@ -3166,6 +3180,10 @@ export function buildTemplateSvg(
     out.push(`<path d="M ${x - 6} ${top - stub + 11} L ${x} ${top - stub} L ${x + 6} ${top - stub + 11} Z" fill="#111"/>`);
     out.push(`<text x="${x + 10}" y="${top - stub + 9}" font-size="8.5" fill="#666">from the busbar</text>`);
   }
+  // An LV single line says what it carries: a slash across the line at the
+  // top, and beside it 1PH+N, 3 or 4.
+  const phases = lvCell ? template?.singleLine?.phases : undefined;
+  if (phases) out.push(phaseTick(x, top - 7, phases));
 
   out.push(drawn.svg);
 
@@ -3186,6 +3204,151 @@ export function buildTemplateSvg(
     out.push(`<text x="${x + 10}" y="${bottom + stub - 2}" font-size="8.5" fill="#666">to the load</text>`);
   }
 
+  out.push('</svg>');
+  return { svg: out.join('\n'), width, height, devices: chain.length };
+}
+
+/** The slash across a single line, and what it carries: 1PH+N, 3 or 4. */
+function phaseTick(x: number, y: number, phases: string): string {
+  const mark = phases === '1PH+N' ? '1PH+N' : phases === '3PH' ? '3' : '4';
+  return `<line x1="${x - 6}" y1="${y + 5}" x2="${x + 6}" y2="${y - 5}" stroke="#111" stroke-width="1.2"/>` +
+    `<text x="${x + 9}" y="${y + 4}" font-size="9" font-weight="600" fill="#111">${esc(mark)}</text>`;
+}
+
+// ── LV multi-line ───────────────────────────────────────────────────────────
+//
+// Every conductor drawn: L1, L2, L3 (or L for single phase), N, and PE — or
+// the PEN, neutral and earth in one, on a TN-C system. A switching device is
+// drawn on each conductor it switches, its poles joined by the dashed line of
+// its mechanism; a CT on each phase; the core-balance CT round every live
+// conductor. Whatever hangs beside the line (meters, relays, arresters) is
+// drawn in a column to the right, fed from the device it hangs on.
+
+const GAP = 44;
+/** Switching devices: drawn on every pole, their mechanism joining them. */
+const MULTIPOLE = new Set<SymbolId>([
+  'circuit-breaker', 'mcb', 'withdrawable-cb', 'motor-starter', 'switch-disconnector', 'disconnector',
+  'contactor', 'switch-fuse', 'fuse', 'hrc-fuse', 'thermal-overload', 'ats', 'vcb', 'vcb-racking',
+]);
+
+/** The conductors a feeder has, left to right. */
+function conductorsOf(sl: TemplateSingleLine): string[] {
+  const ph = sl.phases ?? '3PH+N';
+  const live = ph === '1PH+N' ? ['L'] : ['L1', 'L2', 'L3'];
+  const neutral = ph !== '3PH';
+  if (sl.pen) return [...live, 'PEN'];
+  return [...live, ...(neutral ? ['N'] : []), 'PE'];
+}
+
+/** Which conductors a device switches: its poles, else every phase. */
+function polesOf(item: ChainItem, conductors: string[]): string[] {
+  const live = conductors.filter(c => c.startsWith('L'));
+  const n = conductors.find(c => c === 'N' || c === 'PEN');
+  const p = item.sld?.poles;
+  if (!p) return live;
+  if (p === '1P') return live.slice(0, 1);
+  if (p === '1P+N' || p === '2P') return p === '2P' && live.length > 1 ? live.slice(0, 2) : [live[0], ...(n ? [n] : [])];
+  if (p === '3P') return live;
+  return [...live, ...(n ? [n] : [])];
+}
+
+function buildLvMultiLineSvg(
+  template: TemplateLike, chain: ChainItem[],
+): { svg: string; width: number; height: number; devices: number } {
+  const ln = (x1: number, y1: number, x2: number, y2: number, w = 1.3, dash = '') => rawLine(x1, y1, x2, y2, w, dash);
+  const sl = template.singleLine ?? {};
+  const branch = splitBranch(chain);
+  const conductors = conductorsOf(sl);
+  const margin = 30;
+  const x0 = margin + 40;
+  const xs = conductors.map((_, k) => x0 + k * GAP);
+  const xOf = (c: string) => xs[conductors.indexOf(c)];
+  const lastX = xs[xs.length - 1];
+  const textX = lastX + 34;
+  const colX = textX + 210;
+  const top = 70;
+  const out: string[] = [];
+  const body: string[] = [];
+
+  // The power path, device by device.
+  let y = top;
+  const rowY: number[] = [];
+  for (const item of branch.series) {
+    rowY.push(y);
+    const on = item.id === 'core-balance-ct' ? [] : MULTIPOLE.has(item.id) ? polesOf(item, conductors)
+      : item.id === 'current-transformer' ? conductors.filter(c => c.startsWith('L'))
+      : conductors.slice(0, 1);
+    const h = Math.max(stepFor(item), CELL);
+    // Conductors it does not cut pass straight by.
+    conductors.forEach(c => {
+      if (!on.includes(c)) body.push(ln(xOf(c), y, xOf(c), y + h, c === 'PE' ? 1 : 1.3));
+    });
+    on.forEach(c => {
+      body.push(drawDevice(item, xOf(c), y));
+      if (h > CELL) body.push(ln(xOf(c), y + CELL, xOf(c), y + h, 1.3));
+    });
+    // A core-balance CT: one ring round every live conductor.
+    if (item.id === 'core-balance-ct') {
+      const live = conductors.filter(c => c !== 'PE');
+      const a = xOf(live[0]) - 10, b = xOf(live[live.length - 1]) + 10;
+      body.push(`<ellipse cx="${(a + b) / 2}" cy="${y + HALF}" rx="${(b - a) / 2}" ry="7" fill="none" stroke="#111" stroke-width="1.2"/>`);
+    }
+    // The mechanism joining the poles.
+    if (on.length > 1 && MULTIPOLE.has(item.id)) {
+      body.push(ln(xOf(on[0]) + 6, y + HALF, xOf(on[on.length - 1]) + 6, y + HALF, 0.9, '4 3'));
+    }
+    body.push(deviceText(item, textX, y));
+    y += h;
+  }
+  const bottom = Math.max(y, top + CELL);
+
+  // Beside the line: shunts and instruments, in a column, fed from the
+  // device they hang on (dashed for control wiring).
+  const side = [...branch.shunts, ...branch.instruments];
+  side.forEach((item, k) => {
+    const sy = top + k * (CELL + 10);
+    body.push(drawDevice(item, colX, sy));
+    body.push(deviceText(item, colX + labelOffset(item), sy));
+    const feed = branch.instruments.indexOf(item);
+    const source = feed >= 0 ? branch.fedBy[feed] : branch.shuntAfter[branch.shunts.indexOf(item)];
+    const fy = source != null && source >= 0 ? rowY[source] + HALF : top;
+    body.push(ln(lastX + 6, fy, colX - 18, fy, 0.8, '3 3'));
+    body.push(ln(colX - 18, fy, colX - 18, sy + HALF, 0.8, '3 3'));
+    body.push(ln(colX - 18, sy + HALF, colX - 2, sy + HALF, 0.8, '3 3'));
+  });
+  const sideBottom = top + side.length * (CELL + 10);
+
+  const end = Math.max(bottom, sideBottom) + 30;
+  const width = Math.max(colX + 200, textX + 260) + margin;
+  const height = end + 40;
+  out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" ` +
+    `width="${width}" height="${height}" font-family="Segoe UI, Arial, sans-serif">`);
+  out.push(`<rect width="${width}" height="${height}" fill="#fff"/>`);
+  out.push(`<text x="${margin}" y="22" font-size="12" font-weight="700" fill="#111">${
+    esc(stripLocaleTags(template.name) || 'Template')}</text>`);
+  out.push(`<text x="${width - margin}" y="22" font-size="9" text-anchor="end" fill="#666">${
+    esc(`LV · multi-line · ${sl.phases ?? '3PH+N'}${sl.pen ? ' · PEN' : ''} · ${branch.series.length} in series`)}</text>`);
+
+  // From the busbar and to the load, every conductor, named at both ends.
+  conductors.forEach((c, k) => {
+    const cx = xs[k];
+    out.push(ln(cx, top - 26, cx, top, 1.3));
+    out.push(`<text x="${cx}" y="${top - 30}" font-size="9" font-weight="600" text-anchor="middle" fill="#111">${c}</text>`);
+    if (!branch.series.length) out.push(ln(cx, top, cx, bottom, 1.3));
+    out.push(ln(cx, bottom, cx, end, 1.3));
+    if (c !== 'PE' && c !== 'PEN') {
+      out.push(`<path d="M ${cx - 5} ${end - 9} L ${cx} ${end} L ${cx + 5} ${end - 9} Z" fill="#111"/>`);
+    } else {
+      // The protective conductor ends on its earth mark.
+      out.push(ln(cx - 8, end, cx + 8, end, 1.3) + ln(cx - 5, end + 3, cx + 5, end + 3, 1.1) + ln(cx - 2, end + 6, cx + 2, end + 6, 1));
+    }
+  });
+  out.push(`<text x="${lastX + 12}" y="${top - 16}" font-size="8.5" fill="#666">from the busbar</text>`);
+  out.push(`<text x="${lastX + 12}" y="${end - 2}" font-size="8.5" fill="#666">to the load</text>`);
+  out.push(...body);
+  if (!chain.length) {
+    out.push(`<text x="${textX}" y="${top + 20}" font-size="11" fill="#888">No parts in this template yet.</text>`);
+  }
   out.push('</svg>');
   return { svg: out.join('\n'), width, height, devices: chain.length };
 }
