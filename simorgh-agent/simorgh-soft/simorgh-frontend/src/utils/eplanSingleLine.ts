@@ -184,6 +184,20 @@ const SLOT_SYMBOL: Record<string, SymbolId> = {
   'ACCESSORY': 'accessory',
 };
 
+/** Kinds that only refine one another: a breaker in CB ORDER may be drawn
+ *  withdrawable, a contactor may be a vacuum contactor with fuses. */
+const REFINES: SymbolId[][] = [
+  ['circuit-breaker', 'withdrawable-cb', 'mcb', 'vcb', 'motor-starter'],
+  ['contactor', 'vacuum-contactor-fuse'],
+  ['current-transformer', 'core-balance-ct'],
+];
+
+/** The slot's symbol, whatever the case its name is written in. */
+const slotSymbol = (slot: string): SymbolId | undefined => {
+  const key = String(slot ?? '').trim().toUpperCase();
+  return SLOT_SYMBOL[Object.keys(SLOT_SYMBOL).find(k => k.toUpperCase() === key) ?? ''];
+};
+
 // EPLAN's function definition — "Circuit breaker, 3 pole", "Current
 // transformer", "Motor, 3 phase" — is what the part actually is, so it wins
 // over the slot it was filed under.
@@ -416,9 +430,31 @@ export function symbolForPart(
   }
 
   const fromFunction = kindFromFunction(eplan?.functionDefinition);
+  const described = partDescription(part);
+  // The section a part was loaded into says what it is: a contactor loaded in
+  // CONTACTOR. ORDER is a contactor, even when its description lists its
+  // auxiliary contacts. EPLAN or the description only refine it within the
+  // same kind — a withdrawable breaker in CB ORDER.
+  const bySlot = slotSymbol(slot);
+  if (bySlot && bySlot !== 'accessory') {
+    // "Auxiliary switch for circuit breaker" is still an accessory of it; a
+    // "Power contactor … 1 NO + 1 NC auxiliary contacts" is the contactor.
+    const text = `${stripLocaleTags(part?.label) || ''} ${eplan?.functionDefinition ?? ''} ${described}`;
+    const acc = text.search(ACCESSORY);
+    const own = FUNCTION_SYMBOL
+      .filter(([, id]) => id === bySlot || REFINES.some(f => f.includes(id) && f.includes(bySlot)))
+      .map(([re]) => text.search(re)).filter(i => i >= 0);
+    const ownAt = own.length ? Math.min(...own) : -1;
+    if (acc >= 0 && (ownAt < 0 || acc < ownAt)) return { id: 'accessory', from: 'accessory', eplan };
+    const finer = fromFunction ?? kindFromFunction(described);
+    const same = finer && (finer === bySlot || REFINES.some(f => f.includes(finer) && f.includes(bySlot)));
+    return same
+      ? { id: forTier(finer, tier), from: fromFunction ? 'eplan' : 'description', eplan }
+      : { id: forTier(bySlot, tier), from: 'slot', eplan };
+  }
+
   if (fromFunction) return { id: forTier(fromFunction, tier), from: 'eplan', eplan };
 
-  const described = partDescription(part);
   // The accessory test comes before the description: "auxiliary switch for
   // circuit breaker" is an accessory of the breaker, not a second breaker.
   if (ACCESSORY.test(`${eplan?.functionDefinition ?? ''} ${described}`)) {
@@ -428,7 +464,7 @@ export function symbolForPart(
   const fromDescription = kindFromFunction(described);
   if (fromDescription) return { id: forTier(fromDescription, tier), from: 'description', eplan };
 
-  return { id: forTier(SLOT_SYMBOL[slot] ?? 'accessory', tier), from: 'slot', eplan };
+  return { id: forTier(slotSymbol(slot) ?? 'accessory', tier), from: 'slot', eplan };
 }
 
 const esc = (s: string) => String(s ?? '')
