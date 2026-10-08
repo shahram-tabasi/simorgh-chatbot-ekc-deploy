@@ -479,6 +479,9 @@ export interface ChainItem {
   drawAs?: string;
   /** Everything its window answered, for what the drawing reads directly. */
   sld?: PartSingleLine;
+  /** Lines written under it that are not SIM-TABLE — an LV breaker's poles
+   *  and trip unit. */
+  info?: string[];
   /** The part, as the template knows it: `slot#index`. */
   key?: string;
   /** The device the part above it became — what "series" and "parallel"
@@ -602,7 +605,7 @@ function chainOfTemplate(
         anchor: out[out.length - 1],
       };
       // An LV main switch's poles and trip unit, written under it.
-      if (sld.poles || sld.protection) item.accessoryCodes.push([sld.poles, sld.protection].filter(Boolean).join(' · '));
+      if (sld.poles || sld.protection) item.info = [[sld.poles, sld.protection].filter(Boolean).join(' · ')];
       out.push(item);
       host = item;
     });
@@ -1184,10 +1187,11 @@ const LV_WRAP = 30;
  * Every line written beside a device: its own `label : SIM-TABLE`, broken,
  * then each accessory's SIM-TABLE on lines of its own under it.
  */
-function allLines(item: ChainItem, wrap: number): { text: string; accessory: boolean }[] {
+function allLines(item: ChainItem, wrap: number): { text: string; accessory: boolean; sim: boolean }[] {
   return [
-    ...labelLines(labelText(item), wrap).map(text => ({ text, accessory: false })),
-    ...item.accessoryCodes.flatMap(c => labelLines(c, wrap).map(text => ({ text, accessory: true }))),
+    ...labelLines(labelText(item), wrap).map((text, n) => ({ text, accessory: false, sim: n > 0 })),
+    ...item.accessoryCodes.flatMap(c => labelLines(c, wrap).map(text => ({ text, accessory: true, sim: true }))),
+    ...(item.info ?? []).map(text => ({ text, accessory: true, sim: false })),
   ];
 }
 
@@ -1208,12 +1212,35 @@ function simLabel(
   const a = anchor === 'start' ? '' : ` text-anchor="${anchor}"`;
   const about = [item.tag, item.code, ...item.accessories].filter(Boolean).join(' · ');
   const lines = allLines(item, wrap);
+  // The SIM-TABLE is on a layer of its own, so a sheet can go out with the
+  // designations alone: the first line is the letter, then its SIM-TABLE.
+  const tag = item.simTable ? `${item.label} : ` : '';
+  const sim = ' data-layer="SIMTABLE"';
+  // How wide a piece of text comes out, character by character (a semibold
+  // sans: capitals wide, digits and lower case less, punctuation narrow).
+  const w = (t: string) => [...t].reduce((sum, c) => sum + size * (
+    /[A-Z]/.test(c) ? 0.68 : /[0-9]/.test(c) ? 0.56 : /[a-z]/.test(c) ? 0.53
+      : /[ .,:;/|'()\-]/.test(c) ? 0.3 : 0.6), 0);
+  const first = (t: string) => {
+    if (!tag || !t.startsWith(tag)) return `<tspan x="${tx}" dy="0">${esc(t)}</tspan>`;
+    // The letter alone, and the colon with the SIM-TABLE — hidden, the
+    // SIM-TABLE leaves the designation as it is written without one.
+    const head = item.label;
+    const rest = t.slice(head.length).trimStart();
+    // A fixed gap between the two, so an estimate short of the real width
+    // never runs the code into the letter.
+    const gap = size * 0.4;
+    const total = w(head) + gap + w(rest);
+    const left = anchor === 'start' ? tx : anchor === 'end' ? tx - total : tx - total / 2;
+    const at = (l: number, width: number) => (anchor === 'start' ? l : anchor === 'end' ? l + width : l + width / 2);
+    return `<tspan x="${at(left, w(head))}" dy="0">${esc(head)}</tspan>` +
+      `<tspan x="${at(left + w(head) + gap, w(rest))}" dy="0"${sim}>${esc(rest)}</tspan>`;
+  };
   // An accessory's SIM-TABLE is written lighter than the device's own, so
   // the two read as one device and what came with it.
-  const body = lines.length === 1
-    ? esc(lines[0].text)
-    : lines.map((l, n) => `<tspan x="${tx}" dy="${n === 0 ? 0 : size * 1.15}"${
-      l.accessory ? ' font-weight="400"' : ''}>${esc(l.text)}</tspan>`).join('');
+  const body = lines.map((l, n) => (n === 0
+    ? first(l.text)
+    : `<tspan x="${tx}" dy="${size * 1.15}"${l.accessory ? ' font-weight="400"' : ''}${l.sim ? sim : ''}>${esc(l.text)}</tspan>`)).join('');
   return `<text x="${tx}" y="${y}" font-size="${size}" font-weight="600" fill="#111"${a}>` +
     `${about ? `<title>${esc(about)}</title>` : ''}${body}</text>`;
 }

@@ -26,6 +26,7 @@ export type Layer =
   | 'FRAME'    // sheet border and title band
   | 'TITLE'    // sheet heading text
   | 'TEXT'     // notes, ratings, descriptions
+  | 'SIMTABLE' // the SIM-TABLE (order code) written beside each device
   | 'TAG'      // device designations (-Q1, -F2 …)
   | 'BUS'      // busbar
   | 'WIRE'     // connections between devices
@@ -43,6 +44,7 @@ export const LAYERS: Record<Layer, { aci: number; linetype: 'CONTINUOUS' | 'DASH
   TITLE:  { aci: 7, linetype: 'CONTINUOUS' },
   TEXT:   { aci: 3, linetype: 'CONTINUOUS' },
   TAG:    { aci: 5, linetype: 'CONTINUOUS' },
+  SIMTABLE: { aci: 4, linetype: 'CONTINUOUS' },
   BUS:    { aci: 1, linetype: 'CONTINUOUS' },
   WIRE:   { aci: 7, linetype: 'CONTINUOUS' },
   SYMBOL: { aci: 7, linetype: 'CONTINUOUS' },
@@ -69,6 +71,7 @@ export const LAYER_NOTES: Record<Layer, string> = {
   TITLE: 'Sheet headings',
   TEXT: 'Notes, ratings, descriptions',
   TAG: 'Scope designations',
+  SIMTABLE: 'SIM-TABLE — the order code beside each device',
   BUS: 'Busbar',
   WIRE: 'Connections between scopes',
   SYMBOL: 'Scope symbols',

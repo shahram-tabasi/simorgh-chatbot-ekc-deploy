@@ -106,7 +106,7 @@ interface Props {
    * lines and texts — a template's cell, made of EPLAN's own devices joined
    * by EPLAN (see emaCell.ts). Without it the sheet goes out as drawn.
    */
-  emaOf?: () => string;
+  emaOf?: (opts: { simTable: boolean }) => string;
   sheets: EditorSheet[];
   /** Which sheet to open on. Absent means the first, as it always was. */
   startAt?: number;
@@ -737,6 +737,8 @@ export const DrawingEditor: React.FC<Props> = ({
     ...(hidden.has('PIN') ? [] : pinLabels(shapes)),
   ], [guides, hidden, shapes]);
   const [locked, setLocked] = useState<Set<Layer>>(new Set());
+  /** Exports carry the SIM-TABLE, or go out as schematic and designations. */
+  const [withSimTable, setWithSimTable] = useState(true);
   const [tool, setTool] = useState<Tool>('select');
   // How new geometry is drawn. A drawing office thinks in layer, weight and
   // line type, so that is what the bar offers.
@@ -2057,11 +2059,13 @@ export const DrawingEditor: React.FC<Props> = ({
   // Every sheet goes out with its own edits applied, not just the one on show.
   const editedDrawing = (i: number) => {
     const s = sheets[i];
-    const current = edits[i] ?? s.drawing.shapes;
+    const all = edits[i] ?? s.drawing.shapes;
+    // Without the SIM-TABLE, a sheet goes out as schematic and designations.
+    const current = withSimTable ? all : all.filter(sh => sh.layer !== 'SIMTABLE');
     // The connection point designations go out with the sheet, as they are
     // seen on it — only while the PIN layer is shown.
     const labels = hidden.has('PIN') ? [] : pinLabels(current);
-    if (!edits[i] && labels.length === 0) return s.drawing;
+    if (!edits[i] && labels.length === 0 && withSimTable) return s.drawing;
     return withShapes(s.drawing, [...current, ...labels]);
   };
 
@@ -2073,7 +2077,7 @@ export const DrawingEditor: React.FC<Props> = ({
   // The sheet as an EPLAN window macro, inserted with Insert → Window macro.
   const exportEma = () => {
     downloadText(`${fileSafe(fileBase)}_${fileSafe(sheet.name)}.ema`,
-      emaOf ? emaOf() : renderEma(editedDrawing(index), { name: sheet.name || fileBase }), 'application/xml');
+      emaOf ? emaOf({ simTable: withSimTable }) : renderEma(editedDrawing(index), { name: sheet.name || fileBase }), 'application/xml');
   };
   const exportPdf = () => {
     downloadBlob(`${fileSafe(fileBase)}.pdf`,
@@ -2714,6 +2718,13 @@ export const DrawingEditor: React.FC<Props> = ({
               </RibbonPanel>
 
               <RibbonPanel name={T.panExport}>
+                <label
+                  className="flex items-center gap-1.5 self-start text-sm text-gray-700 cursor-pointer"
+                  title="With the SIM-TABLE beside each device, or the schematic and the designations alone"
+                >
+                  <input type="checkbox" checked={withSimTable} onChange={e => setWithSimTable(e.target.checked)} />
+                  SIM-TABLE
+                </label>
                 <button
                   onClick={exportDxf}
                   className="flex items-center gap-1.5 self-start px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium"

@@ -97,7 +97,7 @@ export const TemplateGraphicEditor: React.FC<Props> = ({
             savedEdits={savedEdits}
             onSaveEdits={onSaveEdits}
             canEdit={canEdit}
-            emaOf={LAYOUT_OF[tier] === 'MV' ? () => renderEmaCell(template as any, tier) : undefined}
+            emaOf={LAYOUT_OF[tier] === 'MV' ? opts => renderEmaCell(template as any, tier, opts) : undefined}
           />
         </div>
 

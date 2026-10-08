@@ -393,11 +393,11 @@ function readElement(d: Drawing, el: Element, m: Matrix, parent?: BlockRef, turn
       // A <title> child is the tooltip, not part of the line.
       const title = el.querySelector('title')?.textContent ?? undefined;
       const isBold = (w: string | null) => w === '700' || w === '600' || w === 'bold';
-      const write = (lx: number, ly: number, shown: string, bold: boolean, withTitle: boolean) => {
+      const write = (lx: number, ly: number, shown: string, bold: boolean, withTitle: boolean, layer?: string | null) => {
         const [tx, ty] = turnPoint(turn, lx, ly);
         const [x, y] = apply(here, tx, ty);
         d.text(x, y, shown, size, inBlock({
-          layer: layerFor(el, 'text', 0, false),
+          layer: (layer as Layer | null) || layerFor(el, 'text', 0, false),
           color: el.getAttribute('fill') ?? undefined,
           anchor: anchor === 'middle' ? 'middle' : anchor === 'end' ? 'end' : 'start',
           bold,
@@ -416,7 +416,7 @@ function readElement(d: Drawing, el: Element, m: Matrix, parent?: BlockRef, turn
           ly += num(span.getAttribute('dy'), 0);
           const lx = span.getAttribute('x') != null ? num(span.getAttribute('x')) : x0;
           const shown = (span.textContent ?? '').trim();
-          if (shown) write(lx, ly, shown, isBold(span.getAttribute('font-weight') ?? weight), k === 0);
+          if (shown) write(lx, ly, shown, isBold(span.getAttribute('font-weight') ?? weight), k === 0, span.getAttribute('data-layer'));
         });
         return;
       }

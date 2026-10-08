@@ -236,12 +236,26 @@ const serialize = (doc: Document) => {
     .join('\r\n');
 };
 
+/** Whether the macro being written carries the SIM-TABLE, or the letters alone. */
+let WITH_SIM = true;
+
 /** The text a device carries: its letter and SIM-TABLE, broken as the sheet breaks it. */
 const labelOf = (item: ChainItem, wrap = 26) =>
-  breakLabel(item.simTable ? `${item.label} : ${item.simTable}` : item.label, wrap).join('\n');
+  breakLabel(item.simTable && WITH_SIM ? `${item.label} : ${item.simTable}` : item.label, wrap).join('\n');
 
-/** A template's cell as an EPLAN window macro of EPLAN's own devices. */
-export function renderEmaCell(template: { name?: string } & Record<string, any>, tier: Tier): string {
+/** A template's cell as an EPLAN window macro of EPLAN's own devices —
+ *  with each device's SIM-TABLE, or (simTable false) its letter alone. */
+export function renderEmaCell(template: { name?: string } & Record<string, any>, tier: Tier, opts: { simTable?: boolean } = {}): string {
+  const prev = WITH_SIM;
+  WITH_SIM = opts.simTable !== false;
+  try {
+    return renderEmaCellBody(template, tier);
+  } finally {
+    WITH_SIM = prev;
+  }
+}
+
+function renderEmaCellBody(template: { name?: string } & Record<string, any>, tier: Tier): string {
   const { chain, answers, family, cores: coresFor } = templateCell(template as any, tier);
   const page = new Page(60, 280);
   const skipped = (item: ChainItem) => page.missing.push(`${item.label} (${item.id})`);
