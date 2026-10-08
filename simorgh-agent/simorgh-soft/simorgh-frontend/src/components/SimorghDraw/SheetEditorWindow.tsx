@@ -1,6 +1,6 @@
 import React from 'react';
 import { XIcon } from 'lucide-react';
-import { DrawingEdits, TitleBlockSettings } from '../../types/project';
+import { DrawingEdits, ProjectData, TitleBlockSettings } from '../../types/project';
 import { PaperChoice } from '../../utils/cad/paper';
 import { DrawingGroups, DrawingPage } from '../../utils/cad/pages';
 import { DrawingEditor, EditorSheet } from './DrawingEditor';
@@ -34,12 +34,14 @@ interface Props {
   headerActions?: React.ReactNode;
   /** The set's sign-off, for the title blocks — see the editor. */
   signoff?: TitleBlockSettings;
+  /** The project the pages belong to — for layout pages built from it. */
+  project?: ProjectData;
   onClose: () => void;
 }
 
 export const SheetEditorWindow: React.FC<Props> = ({
   title, note, sheets, startAt, fileBase, titleBlock, paper, savedEdits, onSaveEdits,
-  canEdit = true, pages, pageGroups, onPages, headerActions, signoff, onClose,
+  canEdit = true, pages, pageGroups, onPages, headerActions, signoff, project, onClose,
 }) => (
   <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-[210]" onClick={onClose}>
     <div
@@ -74,6 +76,7 @@ export const SheetEditorWindow: React.FC<Props> = ({
           pageGroups={pageGroups}
           onPages={onPages}
           signoff={signoff}
+          project={project}
         />
       </div>
     </div>

@@ -28,7 +28,7 @@ import {
   FilePlusIcon, FilesIcon, PencilIcon, ChevronLeftIcon, ChevronRightIcon,
   PanelLeftIcon, PanelRightIcon, PictureInPicture2Icon } from 'lucide-react';
 import logoMark from '../../assets/logo-mark.png';
-import { DrawingEdits } from '../../types/project';
+import { DrawingEdits, ProjectData } from '../../types/project';
 import {
   Drawing, LAYERS, Layer, LAYER_NOTES, Pen, Pt, Shape, layerColor, translateShape,
 } from '../../utils/cad/shapes';
@@ -211,6 +211,8 @@ interface Props {
    * rather than as the view being tight.
    */
   fitPad?: number;
+  /** The project the page set belongs to — the page tree builds layout pages from it. */
+  project?: ProjectData;
 }
 
 const SNAPS = [0, 1, 5, 10, 25];
@@ -629,6 +631,7 @@ export const DrawingEditor: React.FC<Props> = ({
   fitPad,
   onSheetChange,
   emaOf,
+  project,
 }) => {
   const [index, setIndex] = useState(startAt);
   const sheet = sheets[Math.min(index, Math.max(0, sheets.length - 1))];
@@ -2186,6 +2189,7 @@ export const DrawingEditor: React.FC<Props> = ({
           canEdit={canEdit && Boolean(onPages)}
           currentId={page?.id}
           fileBase={fileBase}
+          project={project}
           onChange={(next, nextEdits, nextGroups) => {
             onPages?.(next, nextEdits, nextGroups);
             setTouched(new Set());

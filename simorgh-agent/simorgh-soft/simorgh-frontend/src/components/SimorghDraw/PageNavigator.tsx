@@ -2,10 +2,10 @@ import React, { useMemo, useState } from 'react';
 import {
   ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, ChevronRightIcon,
   ClipboardPasteIcon, CopyIcon, CopyPlusIcon, FilePlusIcon, FileSpreadsheetIcon,
-  FolderIcon, FolderOpenIcon, FolderPlusIcon, ListIcon, MoreVerticalIcon,
+  FolderIcon, FolderOpenIcon, FolderPlusIcon, LayoutGridIcon, ListIcon, MoreVerticalIcon,
   PencilRulerIcon, PlusIcon, SettingsIcon, Trash2Icon,
 } from 'lucide-react';
-import { DrawingEdits, SheetEdit } from '../../types/project';
+import { DrawingEdits, ProjectData, SheetEdit } from '../../types/project';
 import {
   DrawingGroups, DrawingPage, PageNode, PageType, addGroup, copyOfPage, countPages,
   groupPaths, movePageInGroup, newPage, nextGroupName, pageKey, pageTree, pathLabel,
@@ -14,6 +14,7 @@ import {
 import { PAPERS } from '../../utils/cad/paper';
 import { SYMBOL_LIBRARIES, libraryOf } from '../../utils/cad/symbolLibraries';
 import { IoListImport } from './IoListImport';
+import { LayoutFromProject } from './LayoutFromProject';
 import { DrawingReportsModal } from './DrawingReportsModal';
 import { ContextMenu, Field, MenuItem, PropertiesModal } from './PageMenu';
 import { appConfirm } from '../shared/AppDialog';
@@ -110,16 +111,19 @@ interface Props {
    * have to count down every time you turn a page.
    */
   currentId?: string;
+  /** The project, when the set belongs to one: layout pages are built from it. */
+  project?: ProjectData;
 }
 
 export const PageNavigator: React.FC<Props> = ({
   pages, groups = [], edits, onChange, onOpen, canEdit, fileBase, projectName,
-  compact = false, dir = 'ltr', currentId,
+  compact = false, dir = 'ltr', currentId, project,
 }) => {
   // Where a new page lands. The empty path is the project itself.
   const [into, setInto] = useState<string[]>([]);
   const [shut, setShut] = useState<string[]>([]);
   const [fromList, setFromList] = useState(false);
+  const [fromProject, setFromProject] = useState(false);
   const [made, setMade] = useState<number | null>(null);
   const [reporting, setReporting] = useState(false);
   const [menu, setMenu] = useState<{ at: { x: number; y: number }; on: Target } | null>(null);
@@ -339,6 +343,10 @@ export const PageNavigator: React.FC<Props> = ({
       label: 'From I/O list…', icon: FileSpreadsheetIcon, disabled: !canEdit,
       on: () => setFromList(true),
     },
+    ...(project ? [{
+      label: 'Layout from project…', icon: LayoutGridIcon, disabled: !canEdit,
+      on: () => setFromProject(true),
+    }] : []),
     {
       label: 'Reports…', icon: ListIcon, disabled: pages.length === 0,
       on: () => setReporting(true),
@@ -358,6 +366,13 @@ export const PageNavigator: React.FC<Props> = ({
       disabled: !canEdit,
       on: () => setFromList(true),
     },
+    ...(project ? [{
+      label: 'Layout from project…',
+      hint: 'S8 front view or internal view',
+      icon: LayoutGridIcon,
+      disabled: !canEdit,
+      on: () => setFromProject(true),
+    }] : []),
   ];
 
   const menuFor = (on: Target): MenuItem[] => {
@@ -589,6 +604,21 @@ export const PageNavigator: React.FC<Props> = ({
             .filter(p => p.shapes.length > 0)}
           fileBase={fileBase}
           onClose={() => setReporting(false)}
+        />
+      )}
+
+      {fromProject && project && (
+        <LayoutFromProject
+          project={project}
+          pages={pages}
+          edits={edits}
+          onDone={(next, nextEdits, count) => {
+            const here = new Set(pages.map(p => p.id));
+            put(next.map(p => (here.has(p.id) ? p : { ...p, path: into })), nextEdits, groups);
+            setFromProject(false);
+            setMade(count);
+          }}
+          onClose={() => setFromProject(false)}
         />
       )}
 

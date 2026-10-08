@@ -629,6 +629,7 @@ export const EplanixTab: React.FC<{
           pages={drawPages}
           pageGroups={drawGroups}
           onPages={setPages}
+          project={projectData}
           titleBlock={[
             drawPages.find(p => p.id === openPage)?.name ?? 'DRAWING',
             [projectData.projectName, projectData.projectNumber && `OE ${projectData.projectNumber}`]
