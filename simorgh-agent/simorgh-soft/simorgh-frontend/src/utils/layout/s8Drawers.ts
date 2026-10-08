@@ -241,7 +241,7 @@ export function feederFacts(data: ProjectData, row: DeviceTableRow): FeederFacts
     const text = `${slot} ${part?.label ?? ''} ${partDescription(part)}`;
     const qty = Math.max(1, Number(part?.quantity) || 1);
     const frame = frameOf(code);
-    if (/^3WL|^3WT/.test(code) && !facts.breaker) {
+    if (/^3W[LTA]/.test(code) && !facts.breaker) {
       // An air circuit breaker: not a drawer, a section of its own.
       facts.breaker = 'ACB';
       facts.breakerCode = code;

@@ -52,7 +52,7 @@ export const LayoutFromProject: React.FC<Props> = ({ project, pages, edits, onDo
 
   const built: LayoutPage[] = useMemo(() => {
     if (!equipment) return [];
-    if (kind === 's8' && plan) return s8FrontPages(equipment, plan);
+    if (kind === 's8' && plan) return s8FrontPages(equipment, plan, officeItems().filter(i => i.kind === 'old'));
     const symbols = officeItems().filter(i => i.kind === 'old');
     return ccsInternalPages(equipment, devices, ccsWidth, symbols);
     // eslint-disable-next-line react-hooks/exhaustive-deps

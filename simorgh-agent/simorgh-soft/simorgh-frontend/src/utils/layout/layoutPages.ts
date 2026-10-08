@@ -30,6 +30,7 @@ import { stripLocaleTags } from '../tierEquipmentMatrix';
 import { buildPanelLayout } from '../panelLayout';
 import { drawerOfFeeder, type DrawerChoice } from './s8Drawers';
 import { CCS, faceOf, isPowerRow, type DeviceFace } from './layoutStandard';
+import { acbFront, waFrameFor } from './acbFront';
 import {
   DEFAULT_SYSTEM, UNIVERSAL, acbCubicleWidth, catalogueModules, cubicleDepth, feederRatingAt, mainBusbarFor,
   verticalRating, type S8System,
@@ -111,6 +112,9 @@ export interface S8Feeder {
   from: 'line' | 'list' | 'catalogue' | 'acb' | 'none';
   drawer?: DrawerChoice;
   amps?: number;
+  /** The main breaker's order code, as the template has it. */
+  code?: string;
+  poles?: 3 | 4;
   /** Cubicle number, and where in it (modules from the top of the drawers). */
   column: number;
   offset: number;
@@ -206,6 +210,7 @@ export function planS8(data: ProjectData, equipment: Equipment, overrides: Parti
   const put = (c: S8Cubicle, s: typeof sized[number], modules: number) => {
     c.feeders.push({
       row: s.row, modules, from: s.from, drawer: s.d.choices[0], amps: s.amps,
+      code: s.d.facts.breakerCode, poles: s.d.facts.poles,
       column: c.column, offset: c.used, pos: `${c.column}.${c.feeders.length + 1}`,
     });
     c.used += modules;
@@ -279,7 +284,7 @@ export function planS8(data: ProjectData, equipment: Equipment, overrides: Parti
 }
 
 /** Front view pages: cubicles, the position list beside them, the floor plan under. */
-export function s8FrontPages(equipment: Equipment, plan: S8Plan): LayoutPage[] {
+export function s8FrontPages(equipment: Equipment, plan: S8Plan, symbols: LibraryItem[] = []): LayoutPage[] {
   const sys = plan.system;
   const H = sys.frame + sys.base;
   const busTop = sys.frame - UNIVERSAL.deviceCompartment(sys.frame);
@@ -342,15 +347,23 @@ export function s8FrontPages(equipment: Equipment, plan: S8Plan): LayoutPage[] {
           if (free * UNIVERSAL.grid * k >= 4.5) s.push(text(x + dw / 2, y + Math.min(4, free * UNIVERSAL.grid * k - 1), `SPACE ${free}M`, 2, 'FREE', 'middle'));
         }
       } else {
-        // An air circuit-breaker cubicle: the breaker in the middle of it.
+        // An air circuit-breaker cubicle: the 3WA seen through its door, the
+        // top of the breaker 1,450 above the floor as SIMARIS places it — the
+        // office's own 3WA layout symbol when the library has one.
         const f = c.feeders[0];
-        const bw = Math.min(cw * 0.7, 500 * k);
-        const bh = 420 * k;
-        const by = top + (sys.frame * 0.42) * k;
-        s.push(rect(x + (cw - bw) / 2, by, bw, bh, 'SYMBOL', '#ffffff'));
-        s.push(rect(x + (cw - bw) / 2 + bw * 0.3, by + bh * 0.3, bw * 0.4, bh * 0.35, 'SYMBOL'));
-        s.push(text(x + cw / 2, by - 1.5, c.kind === 'coupler' ? 'COUPLING' : c.kind === 'incoming' ? 'INCOMING' : 'OUTGOING', 2.2, 'TAG', 'middle', true));
-        if (f) s.push(text(x + cw / 2, by + bh + 3, `${f.amps ? `${f.amps} A` : 'ACB'}`, 2, 'TEXT', 'middle'));
+        const role = c.kind === 'coupler' ? 'COUPLING' : c.kind === 'incoming' ? 'INCOMING' : 'OUTGOING';
+        const by = floor - (sys.base + 1450) * k;
+        const sym = f?.code ? symbolFor(f.code, symbols) ?? symbolFor('3WA', symbols) : symbolFor('3WA', symbols);
+        if (sym) {
+          s.push(...placeSymbolAt(sym, { x: x + cw / 2, y: by }, waFrameFor(f?.amps).h * k, newBlockId()));
+          s.push(text(x + cw / 2, by - 1.2, role, 2.2, 'TAG', 'middle', true));
+        } else {
+          s.push(...acbFront(x + cw / 2, by, k, { amps: f?.amps, poles: f?.poles, label: role }));
+        }
+        // The door's instrument panel above it, and the cubicle's handle.
+        s.push(rect(x + cw * 0.15, by - 330 * k, cw * 0.7, 220 * k, 'PANEL', undefined, '1.5 1'));
+        s.push(text(x + cw / 2, by - 330 * k + 3, 'INSTRUMENT PLATE', 1.6, 'TEXT', 'middle'));
+        s.push(rect(x + cw - 4, top + (busTop + 700) * k, 1.4, 260 * k, 'PANEL', '#111'));
       }
       s.push(...widthDim(x, floor + 5, cw, `${c.width}`));
       // The floor plan under it.
@@ -670,5 +683,5 @@ export function layoutKindOf(data: ProjectData, equipment: Equipment): 's8' | 'c
 export function layoutPagesOf(data: ProjectData, equipment: Equipment, symbols: LibraryItem[] = []): LayoutPage[] {
   return layoutKindOf(data, equipment) === 'ccs'
     ? ccsInternalPages(equipment, ccsDevices(data, equipment), 'auto', symbols)
-    : s8FrontPages(equipment, planS8(data, equipment));
+    : s8FrontPages(equipment, planS8(data, equipment), symbols);
 }
