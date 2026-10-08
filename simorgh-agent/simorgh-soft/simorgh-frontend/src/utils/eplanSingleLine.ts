@@ -3130,37 +3130,40 @@ function drawSheet(o: {
     const j = [i + 1, i - 1].find(k => ends[k] === 'riser' && !pairOf.has(k));
     if (j != null) { pairOf.set(i, j); pairOf.set(j, i); }
   });
-  const breaks: { x: number; label: string }[] = [];
+  // The coupling splits the bar: the section it hangs from ends at its tap,
+  // the next one starts at the riser's — nothing of either runs past them.
+  const tapX = (i: number) => bodyLeft + i * colWidth + branchDx;
+  const breaks: { end: number; start: number; label: string }[] = [];
   ends.forEach((end, i) => {
     const j = pairOf.get(i);
     if (end !== 'coupling' || j == null) return;
     const riserRow = o.lines[j];
     breaks.push({
-      x: bodyLeft + Math.max(i, j) * colWidth,
+      end: Math.min(tapX(i), tapX(j)),
+      start: Math.max(tapX(i), tapX(j)),
       label: String((isMv ? mvCells[i].opts.answers?.otherSection : '') ?? '').trim()
         || (riserRow.busSection ? `BUS ${riserRow.busSection}` : 'BUS B'),
     });
   });
   // A coupling with no riser cell beside it rises at the right edge of its
-  // own column to the next section: the bar is split just before it.
+  // own column to the next section.
   const ownRiser = (i: number) => bodyLeft + (i + 1) * colWidth - 14;
-  {
-    ends.forEach((end, i) => {
-      if (end !== 'coupling' || pairOf.has(i)) return;
-      const next = o.lines[i + 1];
-      const here = String(o.lines[i].busSection ?? '').trim();
-      breaks.push({
-        x: ownRiser(i) - 10,
-        label: next?.busSection && next.busSection !== here ? `BUS ${next.busSection}` : 'BUS B',
-      });
+  ends.forEach((end, i) => {
+    if (end !== 'coupling' || pairOf.has(i)) return;
+    const next = o.lines[i + 1];
+    const here = String(o.lines[i].busSection ?? '').trim();
+    breaks.push({
+      end: tapX(i),
+      start: ownRiser(i),
+      label: next?.busSection && next.busSection !== here ? `BUS ${next.busSection}` : 'BUS B',
     });
-  }
-  breaks.sort((a, b) => a.x - b.x);
+  });
+  breaks.sort((a, b) => a.end - b.end);
   let from = margin;
   for (const b of breaks) {
-    out.push(`<line data-layer="BUS" x1="${from}" y1="${busY}" x2="${b.x - 7}" y2="${busY}" stroke="#111" stroke-width="3.2"/>`);
-    out.push(`<text x="${b.x + 11}" y="${busY - 9}" font-size="9.5" font-weight="600" fill="#111">${esc(b.label)}</text>`);
-    from = b.x + 7;
+    out.push(`<line data-layer="BUS" x1="${from}" y1="${busY}" x2="${b.end}" y2="${busY}" stroke="#111" stroke-width="3.2"/>`);
+    out.push(`<text x="${b.start + 4}" y="${busY - 9}" font-size="9.5" font-weight="600" fill="#111">${esc(b.label)}</text>`);
+    from = b.start;
   }
   out.push(`<line data-layer="BUS" x1="${from}" y1="${busY}" x2="${contentRight}" y2="${busY}" stroke="#111" stroke-width="3.2"/>`);
 

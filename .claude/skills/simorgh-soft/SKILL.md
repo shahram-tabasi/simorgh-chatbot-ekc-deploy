@@ -286,7 +286,7 @@ supply column when a row is an incomer: `roleOf` (Type, Description,
 template name, tag, feeder no.) marks each row incoming / coupling / riser /
 outgoing. An incomer is a cell under the bus fed from below (MV `cable-in`,
 LV arrow up, `lvEnd`); a coupling joins the riser beside it, or with none
-rises in its own column (`ownRiser`) to the next section with the bus broken
+rises in its own column (`ownRiser`) to the next section; the bus section ends at the coupling's tap and the next starts at the riser (nothing between them, owner's rule)
 there — MV and LV alike. The placeholder supply arrow is drawn only when no
 row of the switchgear is an incomer.
 
