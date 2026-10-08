@@ -281,6 +281,14 @@ joins the riser beside it under a broken bus, a cable connection ends in a
 sealing end, a dummy and the neutral panel are off the bus) and which
 questions it is asked (`mvAsks`). On an MV board only a *feeder* cell can be
 the supply: the old wording test took the coupling and the incoming VT cell.
+Since the owner asked for EPLAN/SIMARIS-style ends, there is no separate
+supply column when a row is an incomer: `roleOf` (Type, Description,
+template name, tag, feeder no.) marks each row incoming / coupling / riser /
+outgoing. An incomer is a cell under the bus fed from below (MV `cable-in`,
+LV arrow up, `lvEnd`); a coupling joins the riser beside it, or with none
+rises in its own column (`ownRiser`) to the next section with the bus broken
+there — MV and LV alike. The placeholder supply arrow is drawn only when no
+row of the switchgear is an incomer.
 
 **Each part answers for itself** (`part.sld`, asked in `PartQuestionsDialog`
 when the part is entered and from its edit button in the parts list). A later

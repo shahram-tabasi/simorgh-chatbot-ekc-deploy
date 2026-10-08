@@ -702,10 +702,12 @@ export function buildSingleLinePages(
     const { cellType } = mvCellType(t);
     return Boolean(cellType) && !/^feeder/i.test(cellType);
   };
-  const incomers = all.filter(l => isIncomer(l) && !mvNotSupply(l));
-  const outgoing = all.filter(l => !isIncomer(l) || mvNotSupply(l));
-  const branches = outgoing.length > 0 ? outgoing : all;
-  const supply = outgoing.length > 0 ? incomers[0] : undefined;
+  // The incomer is a cell under the busbar like every other, its cable
+  // coming up from below — the office's standard, EPLAN's and SIMARIS's —
+  // not a column drawn above the bar. (`mvNotSupply` stays for what it says.)
+  void mvNotSupply; void isIncomer;
+  const branches = all;
+  const supply: DeviceTableRow | undefined = undefined;
 
   const chunks: DeviceTableRow[][] = [];
   for (let i = 0; i < branches.length; i += perPage) chunks.push(branches.slice(i, i + perPage));
@@ -3104,7 +3106,24 @@ function drawSheet(o: {
   // A bus sectionalizer splits the bar: the coupling's breaker on one side,
   // its riser on the other, joined underneath by the bar connection. Each
   // coupling is paired with the riser beside it on the sheet.
-  const ends = isMv ? mvCells.map(c => mvEndOf(c.opts)) : [];
+  // What each cell is on the board: the incomer fed from below, a coupling
+  // and its riser joined underneath across the split busbar, or a feeder.
+  const roleOf = (l: DeviceTableRow): 'incoming' | 'coupling' | 'riser' | 'outgoing' => {
+    const t = `${l.wiringType ?? ''} ${l.description ?? ''} ${l.templateName ?? ''} ${l.tag ?? ''} ${l.feederNo ?? ''}`;
+    if (/riser/i.test(t)) return 'riser';
+    if (/coupl|bus.?sec|\btie\b|\bB\.?T\b|sectionali/i.test(t)) return 'coupling';
+    if (/incom|\bmain\b|supply|source|\bINC\b/i.test(t)) return 'incoming';
+    return 'outgoing';
+  };
+  const ends: (MvEnd | 'incoming')[] = o.lines.map((l, i) => {
+    const role = roleOf(l);
+    if (isMv) {
+      const e = mvEndOf(mvCells[i].opts);
+      if (e !== 'outgoing') return e;
+      return role === 'incoming' ? 'cable-in' : role === 'outgoing' ? e : role;
+    }
+    return role === 'incoming' ? 'incoming' : role;
+  });
   const pairOf = new Map<number, number>();
   ends.forEach((end, i) => {
     if (end !== 'coupling' || pairOf.has(i)) return;
@@ -3118,10 +3137,24 @@ function drawSheet(o: {
     const riserRow = o.lines[j];
     breaks.push({
       x: bodyLeft + Math.max(i, j) * colWidth,
-      label: String(mvCells[i].opts.answers?.otherSection ?? '').trim()
+      label: String((isMv ? mvCells[i].opts.answers?.otherSection : '') ?? '').trim()
         || (riserRow.busSection ? `BUS ${riserRow.busSection}` : 'BUS B'),
     });
   });
+  // A coupling with no riser cell beside it rises at the right edge of its
+  // own column to the next section: the bar is split just before it.
+  const ownRiser = (i: number) => bodyLeft + (i + 1) * colWidth - 14;
+  {
+    ends.forEach((end, i) => {
+      if (end !== 'coupling' || pairOf.has(i)) return;
+      const next = o.lines[i + 1];
+      const here = String(o.lines[i].busSection ?? '').trim();
+      breaks.push({
+        x: ownRiser(i) - 10,
+        label: next?.busSection && next.busSection !== here ? `BUS ${next.busSection}` : 'BUS B',
+      });
+    });
+  }
   breaks.sort((a, b) => a.x - b.x);
   let from = margin;
   for (const b of breaks) {
@@ -3142,11 +3175,46 @@ function drawSheet(o: {
       : drawBranch(supplyBranch, supplyX, supplyTop);
     out.push(drawn.svg);
     out.push(`<line x1="${supplyX}" y1="${drawn.bottom}" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
-  } else {
+  } else if (!(o.equipment.devices ?? []).some(l => roleOf(l) === 'incoming')) {
     out.push(drawBlock('incoming', supplyX, 92));
     out.push(`<line x1="${supplyX}" y1="132" x2="${supplyX}" y2="${busY}" stroke="#111" stroke-width="1.4"/>`);
     out.push(`<text x="${supplyX}" y="84" font-size="9" text-anchor="middle" fill="#555">supply</text>`);
   }
+
+  // ── How an LV cell ends: to its load, fed from below, or across to the
+  // riser of a coupling ───────────────────────────────────────────────────
+  const lvEnd = (i: number, x: number, from: number, line_: DeviceTableRow): string => {
+    const end = ends[i];
+    const parts: string[] = [];
+    if (end === 'coupling' || end === 'riser') {
+      const barY = loadY + 12;
+      parts.push(`<line x1="${x}" y1="${from}" x2="${x}" y2="${barY}" stroke="#111" stroke-width="1.3"/>`);
+      const j = pairOf.get(i);
+      if (end === 'coupling') {
+        const rx = j != null ? bodyLeft + j * colWidth + branchDx : ownRiser(i);
+        parts.push(`<line x1="${x}" y1="${barY}" x2="${rx}" y2="${barY}" stroke="#111" stroke-width="2.2"/>`);
+        if (j == null) {
+          // Its own riser, up to the next section of the busbar.
+          parts.push(`<line x1="${rx}" y1="${barY}" x2="${rx}" y2="${busY}" stroke="#111" stroke-width="1.3"/>`);
+          parts.push(`<circle cx="${rx}" cy="${busY}" r="3" fill="#111"/>`);
+        }
+        parts.push(`<text x="${x + 8}" y="${barY + 14}" font-size="8" fill="#111">COUPLING</text>`);
+      } else if (j == null) {
+        parts.push(`<text x="${x + 8}" y="${barY + 4}" font-size="8" fill="#111">TO COUPLING</text>`);
+      }
+      return parts.join('');
+    }
+    if (end === 'incoming') {
+      // The supply comes up from below.
+      parts.push(`<line x1="${x}" y1="${from}" x2="${x}" y2="${loadY + 36}" stroke="#111" stroke-width="1.3"/>`);
+      parts.push(`<path d="M ${x - 6} ${loadY + 36} L ${x} ${loadY + 24} L ${x + 6} ${loadY + 36} Z" fill="#111"/>`);
+      parts.push(`<text x="${x + 10}" y="${loadY + 34}" font-size="8" fill="#111">INCOMING</text>`);
+      return parts.join('');
+    }
+    parts.push(`<line x1="${x}" y1="${from}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
+    parts.push(drawBlock(isMotorLoad(line_) ? 'motor' : 'outgoing', x, loadY));
+    return parts.join('');
+  };
 
   // ── Outgoing feeders ──────────────────────────────────────────────────
   o.lines.forEach((line_, i) => {
@@ -3167,8 +3235,7 @@ function drawSheet(o: {
       out.push(cell.svg);
       let b = Math.max(cell.bottom, chainTop + lv.plug);
       if (lv.plug) { out.push(drawBlock('plug-in', x, b)); b += lv.plug; }
-      out.push(`<line x1="${x}" y1="${b}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
-      out.push(drawBlock(isMotorLoad(line_) ? 'motor' : 'outgoing', x, loadY));
+      out.push(lvEnd(i, x, b, line_));
       return;
     }
     const drawn = isMv
@@ -3176,30 +3243,19 @@ function drawSheet(o: {
       : drawBranch(branches[i], x, chainTop);
     out.push(drawn.svg);
     if (!isMv) {
-      out.push(`<line x1="${x}" y1="${drawn.bottom}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
-      out.push(drawBlock(isMotorLoad(line_) ? 'motor' : 'outgoing', x, loadY));
+      out.push(lvEnd(i, x, drawn.bottom, line_));
       return;
     }
     const end = ends[i];
     if (end === 'none') return;
     if (end === 'coupling' || end === 'riser') {
-      // Down to the bar connection, and — from the coupling's side — across
-      // to the riser.
-      const barY = loadY + 12;
-      out.push(`<line x1="${x}" y1="${drawn.bottom}" x2="${x}" y2="${barY}" stroke="#111" stroke-width="1.3"/>`);
-      const j = pairOf.get(i);
-      if (end === 'coupling' && j != null) {
-        const rx = bodyLeft + j * colWidth + branchDx;
-        out.push(`<line x1="${x}" y1="${barY}" x2="${rx}" y2="${barY}" stroke="#111" stroke-width="2.2"/>`);
-      } else if (j == null) {
-        // No partner on this sheet: say where the bar goes.
-        out.push(`<text x="${x + 8}" y="${barY + 4}" font-size="8" fill="#111">${
-          esc(end === 'coupling' ? 'TO RISER' : 'TO COUPLING')}</text>`);
-      }
+      // Down to the bar connection, across to the riser — its own when no
+      // riser cell stands beside it — as on an LV board.
+      out.push(lvEnd(i, x, drawn.bottom, line_));
       return;
     }
     out.push(`<line x1="${x}" y1="${drawn.bottom}" x2="${x}" y2="${loadY}" stroke="#111" stroke-width="1.3"/>`);
-    out.push(drawMvEnd(end, x, loadY, mvCells[i].opts, isMotorLoad(line_)));
+    out.push(drawMvEnd(end as MvEnd, x, loadY, mvCells[i].opts, isMotorLoad(line_)));
   });
 
   // ── The block under the drawing ───────────────────────────────────────
