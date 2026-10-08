@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import * as XLSX from 'xlsx-js-style';
 import {
   DownloadIcon, PrinterIcon, ChevronLeftIcon, ChevronRightIcon, PencilRulerIcon,
@@ -47,7 +47,7 @@ import { appAlert } from '../shared/AppDialog';
 import { layoutKindOf, layoutPagesOf, type LayoutPage } from '../../utils/layout/layoutPages';
 import { renderSvg } from '../../utils/cad/svg';
 import { renderDxf, mergeDrawings } from '../../utils/cad/dxf';
-import { officeItems } from '../../utils/cad/officeSymbols';
+import { officeItems, officeRedraws, officeVersion, onOfficeSymbols, saveOfficeRedraw } from '../../utils/cad/officeSymbols';
 
 /** "Every switchgear", for print and export only — never drawn together. */
 const ALL = '*';
@@ -205,6 +205,26 @@ export const EplanixTab: React.FC<{
   const [symbolNote, setSymbolNote] = useState('Reading the EPLAN symbols…');
 
   const equipments = projectData.equipments ?? [];
+
+  // Symbols this project redrew that the office library does not have: the
+  // other projects (a TPMS one too) go on drawing the library's own until they
+  // are shared. Said here, with the one click that shares them.
+  useSyncExternalStore(onOfficeSymbols, officeVersion, officeVersion);
+  const [sharing, setSharing] = useState<string | null>(null);
+  const unshared = Object.entries(projectData.symbolOverrides ?? {})
+    .filter(([id, art]) => art?.art && !officeRedraws()[id]);
+  const shareUnshared = async () => {
+    setSharing('…');
+    let done = 0;
+    for (const [id, art] of unshared) {
+      try {
+        await saveOfficeRedraw(id, { ...art, savedAt: art.savedAt ?? new Date().toISOString() },
+          IEC_SYMBOLS[id as keyof typeof IEC_SYMBOLS]?.title ?? id);
+        done += 1;
+      } catch { /* reported below */ }
+    }
+    setSharing(done === unshared.length ? null : `${unshared.length - done} could not be saved — try again.`);
+  };
 
   // Every part on the project's templates, by the codes EPLAN might know it
   // under. Looked up once per project, not once per sheet.
@@ -546,6 +566,22 @@ export const EplanixTab: React.FC<{
         <Tab id="layout" label="Layout" note="Front elevation, column by column" />
         <Tab id="mechanical" label="Mechanical" note="Enclosure, busbars, compartments" />
       </div>
+
+      {unshared.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+          <span>
+            This project redrew {unshared.length} symbol{unshared.length > 1 ? 's' : ''} ({unshared.map(([id]) => IEC_SYMBOLS[id as keyof typeof IEC_SYMBOLS]?.title ?? id).join(', ')}) that the other projects do not have yet — they still draw the library's own.
+            {sharing && sharing !== '…' ? ` ${sharing}` : ''}
+          </span>
+          <button
+            onClick={shareUnshared}
+            disabled={sharing === '…'}
+            className="px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50 disabled:opacity-50"
+          >
+            {sharing === '…' ? 'Saving…' : 'Use in every project'}
+          </button>
+        </div>
+      )}
 
       {!preview && (
         <p className="mb-3 text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-4 py-3">
