@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { OfferControlSection } from './OfferControlSection';
 import * as XLSX from 'xlsx-js-style';
 import { useProject } from '../../context/ProjectContext';
 import {
@@ -1128,6 +1129,10 @@ export const OutputTypesTab: React.FC = () => {
         equipments={eqs.filter(e => LAYOUT_OF[e.type] === 'MV')}
         projectData={projectData}
       />
+
+      {/* ── Section 06: what the offer counted for control equipment, against
+          the design — read only; the list is kept on each template. */}
+      <OfferControlSection projectData={projectData} badge="06" />
 
       {/* (HV equipment breakdown intentionally omitted — covered by the full
           Excel/PDF export buttons at the top.) */}

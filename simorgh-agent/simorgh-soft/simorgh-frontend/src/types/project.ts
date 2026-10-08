@@ -407,11 +407,27 @@ export interface TemplateHierarchy {
   };
 }
 
+/**
+ * A control part the offer counted for a template — the MCBs, relays and the
+ * rest the quotation priced. Kept apart from the template's rows on purpose:
+ * it sizes the first drawer and prices the offer, and tells the engineer later
+ * what was quoted, but it is never bought and never sent to EPLAN.
+ */
+export interface OfferControlPart {
+  partNumber: string;
+  label?: string;
+  /** Per feeder of the template. */
+  quantity: number;
+  fullData?: any;
+}
+
 export interface TemplateItem {
   id: string;
   name: string;
   type: Tier;
   properties: Record<string, string>;
+  /** What the offer counted for control equipment — see OfferControlPart. */
+  offerControl?: OfferControlPart[];
   /** Optional hierarchical classification used by recommendations / AI tools. */
   hierarchy?: TemplateHierarchy;
   /** 'tpms' when this template was built from a TPMS draft. */

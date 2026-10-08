@@ -1,7 +1,7 @@
 // src/components/TemplateCreation/TemplateProperties.tsx - FIXED SQL CONNECTION
 import React, { useEffect, useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
-import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon, CopyIcon, ClipboardPasteIcon } from 'lucide-react';
+import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon, CopyIcon, ClipboardPasteIcon, ListChecksIcon } from 'lucide-react';
 import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
 import { PanelFrame } from '../shared/PanelFrame';
 import { PartCell } from './PartCell';
@@ -14,6 +14,8 @@ import { useSymbolVersion } from '../../utils/cad/useSymbols';
 import { templateMeta } from '../../utils/templateMeta';
 import { type Tier, LAYOUT_OF } from '../../utils/tiers';
 import { appConfirm } from '../shared/AppDialog';
+import { OfferControlDialog } from './OfferControlDialog';
+import type { OfferControlPart } from '../../types/project';
 
 // Reserved keys inside template.properties used to carry per-template metadata.
 // These keys are NOT real property rows; the renderer skips them.
@@ -89,6 +91,9 @@ interface PartInfo {
    *  own Manufacturer field. */
   manufacturerOverride?: string;
 }
+
+/** The part dialog's slot when it is picking for the offer list, not a row. */
+const OFFER_SLOT = '__OFFER_CONTROL__';
 
 interface TemplatePropertiesProps {
   template: TemplateItem;
@@ -887,6 +892,22 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     }
   };
 
+  // ── The offer's control equipment ───────────────────────────────────────
+  // Beside the rows, never in them: purchasing and Send to EPLAN read the rows.
+  const [offerOpen, setOfferOpen] = useState(false);
+  const liveTemplate = (projectData.templates?.[template.type] ?? []).find(t => t.id === template.id) ?? template;
+  const offerParts: OfferControlPart[] = (liveTemplate as { offerControl?: OfferControlPart[] }).offerControl ?? [];
+  const saveOffer = (next: OfferControlPart[]) => {
+    if (!isCurrentRevisionEditable) return;
+    patchProjectData(prev => ({
+      templates: {
+        ...prev.templates,
+        [template.type]: (prev.templates?.[template.type] ?? []).map(t =>
+          t.id === template.id ? { ...t, offerControl: next } : t),
+      },
+    }));
+  };
+
   const handleOpenPartDialog = (propertyName: string, currentPart?: PartInfo, partIndex?: number) => {
     setDialogState({
       isOpen: true,
@@ -898,6 +919,12 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
 
   const handlePartSelect = (part: any) => {
     const { propertyName, partIndex } = dialogState;
+    if (propertyName === OFFER_SLOT) {
+      saveOffer([...offerParts, {
+        partNumber: part.PartNumber, label: part.Designation1 || '', quantity: 1, fullData: part,
+      }]);
+      return;
+    }
     const currentProperty = properties[propertyName] || { parts: [] };
 
     // First row of LV (CB ORDER) / MV (VCB OR VC/FUSE) → default label "Q"
@@ -1020,7 +1047,17 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
   return (
     <div className="h-full min-h-0 flex flex-col">
       <div className="mb-4 shrink-0">
+        <div className="flex items-start justify-between gap-3">
         <h3 className="text-lg font-semibold">{template.name}</h3>
+        <button
+          onClick={() => setOfferOpen(true)}
+          className="flex items-center gap-1.5 px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50 shrink-0"
+          title="Control equipment the offer counted — sizes the first drawer and prices the offer; not bought, not sent to EPLAN"
+        >
+          <ListChecksIcon className="w-4 h-4" />
+          Offer control{offerParts.length ? ` (${offerParts.length})` : ''}
+        </button>
+        </div>
         <p className="text-sm text-gray-500">
           Type: {template.type}
           {templateMeta(template) && <span className="ml-2">· {templateMeta(template)}</span>}
@@ -1447,6 +1484,17 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           />
         );
       })()}
+
+      {offerOpen && !dialogState.isOpen && (
+        <OfferControlDialog
+          templateName={template.name}
+          parts={offerParts}
+          canEdit={isCurrentRevisionEditable}
+          onChange={saveOffer}
+          onAdd={() => handleOpenPartDialog(OFFER_SLOT)}
+          onClose={() => setOfferOpen(false)}
+        />
+      )}
 
       <PartSelectionDialog
         isOpen={dialogState.isOpen}

@@ -13,6 +13,7 @@ import type { DeviceTableRow, ProjectData } from '../../types/project';
 import { TIERS } from '../tiers';
 import { partKeys, partDescription } from '../eplanSingleLine';
 import { feederCurrent } from '../sion3ae5/fromProject';
+import { controlCounts } from '../offerControl';
 import { S8_DRAWERS, type S8DrawerRow } from './s8DrawerTable';
 
 /** What a feeder holds, as far as choosing its drawer goes. */
@@ -32,6 +33,9 @@ export interface FeederFacts {
   ct: boolean;
   motorised: boolean;
   sfdHfd?: 'SFD' | 'HFD';
+  /** Control equipment — the offer's list where the template has one. */
+  mcb?: number;
+  relay?: number;
 }
 
 export interface DrawerChoice {
@@ -90,7 +94,15 @@ interface RowFacts {
   sfdHfd: Set<'SFD' | 'HFD'>;
   earthFault: boolean;
   ct: boolean;
+  /** The most control equipment the drawer takes ("MCB 2P: 1 / FINDER90.23 : 2"). */
+  mcb?: number;
+  relay?: number;
 }
+
+const countOf = (text: string, re: RegExp) => {
+  const all = [...text.matchAll(re)].map(m => Number(m[1]));
+  return all.length ? all.reduce((a, b) => a + b, 0) : undefined;
+};
 
 function readRow(r: S8DrawerRow): RowFacts {
   const short = up(r.shortCode);
@@ -138,6 +150,8 @@ function readRow(r: S8DrawerRow): RowFacts {
     sfdHfd,
     earthFault: Boolean(r.earthFault.trim()),
     ct: Boolean(r.ct.trim()),
+    mcb: countOf(up(r.control), /M\.?C\.?B[^:]*:\s*(\d+)/g),
+    relay: countOf(up(r.control), /FINDER[^:]*:\s*(\d+)/g),
   };
 }
 
@@ -179,6 +193,10 @@ export function drawersFor(f: FeederFacts): DrawerChoice[] {
       if (!facts.sfdHfd.has(f.sfdHfd)) continue;
       why.push(f.sfdHfd);
     }
+    // The row is "حداکثر تجهیزات فرمان" — the most control equipment it takes.
+    if (f.mcb && facts.mcb != null && f.mcb > facts.mcb) continue;
+    if (f.relay && facts.relay != null && f.relay > facts.relay) continue;
+    if (f.mcb || f.relay) why.push(`control ${f.mcb ?? 0} MCB / ${f.relay ?? 0} relay`);
     if (f.motorised !== facts.motorised) {
       if (f.motorised) continue;
       check.push('the drawer is for a motorised breaker');
@@ -189,9 +207,17 @@ export function drawersFor(f: FeederFacts): DrawerChoice[] {
     if (f.overload && !facts.overload && f.contactors) { check.push('overload relay not in this drawer’s list'); score--; }
     out.push({ row, modules, why, check, score });
   }
-  return out
+  const sorted = out
     .sort((a, b) => a.modules - b.modules || b.score - a.score)
     .map(({ score: _score, ...rest }) => rest);
+  // More control equipment than any such drawer was proven with: still the
+  // drawer for the power side, with the excess to be checked.
+  if (!sorted.length && (f.mcb || f.relay)) {
+    return drawersFor({ ...f, mcb: undefined, relay: undefined }).map(c => ({
+      ...c, check: [...c.check, `${f.mcb ?? 0} MCB / ${f.relay ?? 0} relay is more control equipment than this drawer’s list`],
+    }));
+  }
+  return sorted;
 }
 
 // ── What a feeder holds, read off the project ────────────────────────────
@@ -234,6 +260,10 @@ export function feederFacts(data: ProjectData, row: DeviceTableRow): FeederFacts
     if (/^CT RATING$/i.test(slot.trim()) || /current.?transformer/i.test(text)) facts.ct = true;
     if (/motor.?operat|3VA9[2-4]67-0HA/i.test(`${text} ${code}`)) facts.motorised = true;
   }
+  const template = TIERS.flatMap(t => data.templates?.[t] ?? []).find(t => t.id === row.templateId);
+  const control = controlCounts(template);
+  if (control.mcb) facts.mcb = control.mcb;
+  if (control.relay) facts.relay = control.relay;
   const amps = feederCurrent(data, row);
   if (amps != null) facts.amps = Math.round(amps);
   const sh = up(row.sfdHfd);
