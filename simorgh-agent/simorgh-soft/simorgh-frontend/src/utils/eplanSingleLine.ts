@@ -1220,7 +1220,7 @@ function simLabel(
   // sans: capitals wide, digits and lower case less, punctuation narrow).
   const w = (t: string) => [...t].reduce((sum, c) => sum + size * (
     /[A-Z]/.test(c) ? 0.68 : /[0-9]/.test(c) ? 0.56 : /[a-z]/.test(c) ? 0.53
-      : /[ .,:;/|'()\-]/.test(c) ? 0.3 : 0.6), 0);
+      : /[ .,:;/|'()-]/.test(c) ? 0.3 : 0.6), 0);
   const first = (t: string) => {
     if (!tag || !t.startsWith(tag)) return `<tspan x="${tx}" dy="0">${esc(t)}</tspan>`;
     // The letter alone, and the colon with the SIM-TABLE — hidden, the
