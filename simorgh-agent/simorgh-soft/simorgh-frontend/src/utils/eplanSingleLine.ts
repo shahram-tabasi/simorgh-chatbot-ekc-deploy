@@ -1680,6 +1680,11 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
         const ly = bottom + 8 + j * 11;
         out.push(line(vx, ly, vx, bottom + 7, 1, '4 3'), arrowUp(vx, bottom));
         out.push(line(vx, ly, ix + hit.w + 34, ly, 1, '4 3'));
+        // Through its test terminal, XD1.
+        const tx = ix + hit.w + 18;
+        out.push(`<g ${symbolBlock('test-block', tx, ly)}><circle cx="${tx}" cy="${ly}" r="3.6" fill="#fff" stroke="#111" stroke-width="1.1"/>` +
+          `<circle cx="${tx}" cy="${ly}" r="1.4" fill="#111"/></g>`);
+        if (j === 0) out.push(`<text x="${tx}" y="${ly - 6}" font-size="6.5" text-anchor="middle" fill="#111">XD1</text>`);
         out.push(`<text x="${ix + hit.w + 38}" y="${ly + 3}" font-size="7.5" fill="#111">${esc(t.toUpperCase())}</text>`);
       });
     } else if (branch.series.length) {
@@ -1689,6 +1694,10 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
         const ly = by - 6 + j * 11;
         const ex = x - symbolLeft(dk(branch.series[0])) - 2;
         out.push(line(ex - 40, ly, ex - 7, ly, 1, '4 3'), arrowRight(ex, ly));
+        const tx = ex - 22;
+        out.push(`<g ${symbolBlock('test-block', tx, ly)}><circle cx="${tx}" cy="${ly}" r="3.6" fill="#fff" stroke="#111" stroke-width="1.1"/>` +
+          `<circle cx="${tx}" cy="${ly}" r="1.4" fill="#111"/></g>`);
+        if (j === 0) out.push(`<text x="${tx}" y="${ly - 6}" font-size="6.5" text-anchor="middle" fill="#111">XD1</text>`);
         out.push(`<text x="${ex - 44}" y="${ly + 3}" font-size="7.5" text-anchor="end" fill="#111">${esc(t.toUpperCase())}</text>`);
       });
     }
@@ -2348,16 +2357,16 @@ function drawMvCellLines(
   // floor, or lower when the longest text needs it — never each at its own.
   // Each arrow points as its window says: down, a signal going out; up, one
   // coming in.
-  const signals: { x: number; fromY: number; name: string; up?: boolean }[] = [];
-  const signalDown = (sx_: number, fromY: number, text_: string, up?: boolean) => {
-    signals.push({ x: sx_, fromY, name: text_.trim().toUpperCase(), up });
+  const signals: { x: number; fromY: number; name: string; up?: boolean; xd?: boolean }[] = [];
+  const signalDown = (sx_: number, fromY: number, text_: string, up?: boolean, xd?: boolean) => {
+    signals.push({ x: sx_, fromY, name: text_.trim().toUpperCase(), up, xd });
   };
   const arrowAt = (x_: number, y_: number, up?: boolean) => (up ? arrowUp(x_, y_) : arrowDown(x_, y_));
   const textLen = (name: string) => name.length * 7.5 * 0.68;
   const drawSignals = () => {
     if (!signals.length) return;
-    const end = Math.max(floor, ...signals.map(sg => sg.fromY + textLen(sg.name) + 24));
-    for (const { x: sx_, fromY, name, up } of signals) {
+    const end = Math.max(floor, ...signals.map(sg => sg.fromY + textLen(sg.name) + 24 + (sg.xd ? 24 : 0)));
+    for (const { x: sx_, fromY, name, up, xd } of signals) {
       const tw = textLen(name);
       const mid = (fromY + end) / 2;
       // The line stops either side of its text rather than running under a
@@ -2371,8 +2380,19 @@ function drawMvCellLines(
       } else {
         out.push(dashed([{ x: sx_, y: fromY }, { x: sx_, y: end }]), arrowAt(sx_, end, up));
       }
+      // A voltage sample comes in through its test terminal, XD1, just above
+      // the arrow at the foot of the cell.
+      if (xd) {
+        const ty_ = end - 14;
+        out.push(`<g ${symbolBlock('test-block', sx_, ty_)}><circle cx="${sx_}" cy="${ty_}" r="3.6" fill="#fff" stroke="#111" stroke-width="1.1"/>` +
+          `<circle cx="${sx_}" cy="${ty_}" r="1.4" fill="#111"/></g>`);
+        // Named once, beside the outermost of them.
+        if (sx_ === Math.max(...signals.filter(sg => sg.xd).map(sg => sg.x))) {
+          out.push(`<text x="${sx_ + 6}" y="${ty_ + 2.5}" font-size="6.5" fill="#111">XD1</text>`);
+        }
+      }
       reach(sx_ - 6, end);
-      reach(sx_ + 6, end);
+      reach(sx_ + (xd ? 20 : 6), end);
     }
   };
   // **The line is drawn between the devices, never through them.** One line
@@ -2559,8 +2579,8 @@ function drawMvCellLines(
     || (ct ? coresOf(answers, false, false, ct).some(c => c.purpose === 'protection') : false);
   const swSignals = [
     ...(sw?.statuses ?? [])
-      .map((t, k) => ({ text: t.trim(), up: sw?.sld?.statusDirs?.[k] === 'up' })).filter(sg => sg.text),
-    ...(hasRelay ? [] : (opts.samplesIn ?? []).map(t => ({ text: t, up: true }))),
+      .map((t, k) => ({ text: t.trim(), up: sw?.sld?.statusDirs?.[k] === 'up', xd: false })).filter(sg => sg.text),
+    ...(hasRelay ? [] : (opts.samplesIn ?? []).map(t => ({ text: t, up: true, xd: true }))),
   ];
   const swStatuses = swSignals.map(sg => sg.text);
   const swStatusUp = swSignals.map(sg => sg.up);
@@ -2569,7 +2589,7 @@ function drawMvCellLines(
     const first = left - 14;
     const lanes = swStatuses.map((_, k) => first - k * 16);
     out.push(dashed([s3, { x: lanes[lanes.length - 1], y: s3.y }]));
-    swStatuses.forEach((t, k) => signalDown(lanes[k], s3.y, t, swStatusUp[k]));
+    swStatuses.forEach((t, k) => signalDown(lanes[k], s3.y, t, swStatusUp[k], swSignals[k].xd));
   }
 
   // ── What hangs on the breaker, along the key interlock's line ─────────
@@ -2631,7 +2651,7 @@ function drawMvCellLines(
    * and down to the foot of the cell. A signal that leaves higher up takes a
    * lane further out, so none crosses another on its way.
    */
-  const instrSignals: { lead: Pt[]; y: number; text: string; up?: boolean }[] = [];
+  const instrSignals: { lead: Pt[]; y: number; text: string; up?: boolean; xd?: boolean }[] = [];
 
   /**
    * A meter whose connection point 1 is on its side — the office draws them
@@ -2919,11 +2939,12 @@ function drawMvCellLines(
     // two of them cross.
     // The synchro-check samples come in from below, arrows up into it.
     const signals = [...signalsOf(item),
-      ...(item === (relay ?? item) ? (opts.samplesIn ?? []).map(t => ({ text: t, up: true })) : [])];
+      ...(item === (relay ?? item) ? (opts.samplesIn ?? []).map(t => ({ text: t, up: true, xd: true })) : [])];
     signals.forEach((t, k) => {
       const sx_ = Math.max(relayBox.cx + 8, relayBox.right - 6 - k * 7);
       const turn = relayBox.bottom + 6 + k * 6;
-      instrSignals.push({ lead: [{ x: sx_, y: relayBox.bottom }, { x: sx_, y: turn }], y: turn, text: t.text, up: t.up });
+      instrSignals.push({ lead: [{ x: sx_, y: relayBox.bottom }, { x: sx_, y: turn }], y: turn, text: t.text, up: t.up,
+        xd: 'xd' in t && Boolean(t.xd) });
     });
     return Math.max(y0 + h, k.bottom + 4 + signals.length * 6);
   };
@@ -3212,7 +3233,7 @@ function drawMvCellLines(
     order.forEach((sg, i) => {
       const lane = base + (order.length - 1 - i) * 16;
       out.push(dashed([...sg.lead, { x: lane, y: sg.y }]));
-      signalDown(lane, sg.y, sg.text, sg.up);
+      signalDown(lane, sg.y, sg.text, sg.up, sg.xd);
     });
   }
   drawSignals();
