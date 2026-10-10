@@ -439,6 +439,8 @@ export interface OfferTemplatePart {
   quantity: number;
   note?: string;
   fullData?: any;
+  /** Taken into its row in Create Template — the hint there is gone. */
+  used?: boolean;
 }
 
 /** A header dropped onto the offer template, with the parts given to it. */

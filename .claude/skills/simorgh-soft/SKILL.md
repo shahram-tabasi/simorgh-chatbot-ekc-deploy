@@ -545,7 +545,10 @@ SIM-TABLE; the EKC NUMBER column = TypeNumber, kept in `partNumber`), and
 header's catalogue shows its own kind; `PartSelectionDialog`'s `kind` prop
 (absent in Create Template = unchanged). Create Template rows show the offer's
 parts of the same header with "use" (`offerHint`, `handlePartSelect(part,
-target)`).
+target)`). A part taken in is marked `used` on its `OfferTemplatePart`
+(`markOfferUsed`; a words-only part once the search it opens puts a part in
+the row, via `pendingOfferUse`) and its hint never shows again — the offer
+tab still lists it.
 The catalogue from the offer (`PartSelectionDialog` with `kind`/`voltage`)
 shows three lists — voltage (LV / MV / both; default from the template's
 tier), equipment kind (`DEVICE_KINDS`, default the header's) and brand, the

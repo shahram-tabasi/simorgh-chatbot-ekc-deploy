@@ -1,5 +1,5 @@
 // src/components/TemplateCreation/TemplateProperties.tsx - FIXED SQL CONNECTION
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useProject } from '../../context/ProjectContext';
 import { PlusIcon, TrashIcon, Search, RefreshCw, ChevronLeftIcon, ChevronRightIcon, Edit2Icon, LockIcon, UnlockIcon, CheckIcon, XIcon, CopyIcon, ClipboardPasteIcon, ListChecksIcon } from 'lucide-react';
 import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
@@ -1007,7 +1007,25 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     const keys = [property, label].map(k => k.trim().toUpperCase());
     return ((liveTemplate as { offerTemplate?: { header: string; parts: any[] }[] }).offerTemplate ?? [])
       .filter(s => keys.includes(String(s.header ?? '').trim().toUpperCase()))
-      .flatMap(s => s.parts);
+      .flatMap(s => s.parts)
+      .filter(op => !op.used);
+  };
+  // An offer part taken in is marked used, and its hint is gone for good —
+  // the Offer Template tab still lists it. One described only in words is
+  // marked when the search it opens puts a part in this row.
+  const pendingOfferUse = useRef<{ id: string; propertyName: string } | null>(null);
+  const markOfferUsed = (id: string) => {
+    patchProjectData(prev => ({
+      templates: {
+        ...prev.templates,
+        [template.type]: (prev.templates?.[template.type] ?? []).map(t =>
+          t.id === template.id && t.offerTemplate
+            ? { ...t, offerTemplate: t.offerTemplate.map(sec => ({
+              ...sec, parts: sec.parts.map(p => (p.id === id ? { ...p, used: true } : p)),
+            })) }
+            : t),
+      },
+    }));
   };
   const offerHint = (property: string, label: string, enabled: boolean) => {
     const parts = offerFor(property, label);
@@ -1023,9 +1041,15 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
               <button
                 className="text-blue-700 hover:underline"
                 title={op.fullData ? 'Put this part in the row' : 'Find this part in the catalogue for this row'}
-                onClick={() => (op.fullData
-                  ? handlePartSelect(op.fullData, { propertyName: property, partIndex: null })
-                  : handleOpenPartDialog(property))}
+                onClick={() => {
+                  if (op.fullData) {
+                    handlePartSelect(op.fullData, { propertyName: property, partIndex: null });
+                    markOfferUsed(op.id);
+                  } else {
+                    pendingOfferUse.current = { id: op.id, propertyName: property };
+                    handleOpenPartDialog(property);
+                  }
+                }}
               >
                 use
               </button>
@@ -1123,6 +1147,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
 
     setProperties(updatedProperties);
     updateTemplate(template.id, updatedProperties as any);
+    if (pendingOfferUse.current?.propertyName === propertyName) markOfferUsed(pendingOfferUse.current.id);
+    pendingOfferUse.current = null;
     // Show the part that was just entered, which is the whole point of the
     // panel beside the table: put a part in, see what it draws.
     const entered = {
@@ -1640,7 +1666,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
 
       <PartSelectionDialog
         isOpen={dialogState.isOpen}
-        onClose={() => setDialogState({ isOpen: false, propertyName: '', currentPart: null, partIndex: null })}
+        onClose={() => { pendingOfferUse.current = null; setDialogState({ isOpen: false, propertyName: '', currentPart: null, partIndex: null }); }}
         onSelect={handlePartSelect}
         propertyName={dialogState.propertyName}
         currentPart={dialogState.currentPart}
