@@ -792,6 +792,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
       // And its single-line answers, for the same reason.
       let baseSingleLine: TemplateSingleLine | undefined;
       let baseOffer: OfferControlPart[] | undefined;
+      let baseOfferTemplate: TemplateItem['offerTemplate'];
       if (copyFromId) {
         const source = prev.templates[type].find(t => t.id === copyFromId);
         if (source) {
@@ -799,6 +800,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
           if (source.mechanical) baseMechanical = { ...source.mechanical };
           if (source.singleLine) baseSingleLine = JSON.parse(JSON.stringify(source.singleLine));
           if (source.offerControl?.length) baseOffer = JSON.parse(JSON.stringify(source.offerControl));
+          if (source.offerTemplate?.length) baseOfferTemplate = JSON.parse(JSON.stringify(source.offerTemplate));
         }
       }
       const mech = mechanical && Object.keys(mechanical).length > 0
@@ -819,6 +821,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
           ? { singleLine }
           : baseSingleLine ? { singleLine: baseSingleLine } : {}),
         ...(baseOffer ? { offerControl: baseOffer } : {}),
+        ...(baseOfferTemplate ? { offerTemplate: baseOfferTemplate } : {}),
       };
       return {
         ...prev,

@@ -3,7 +3,8 @@ import { projectService } from './services/projectService';
 import { TabNavigation } from './components/Tabs/TabNavigation';
 import { ProjectDefinitionTab } from './components/ProjectDefinition/ProjectDefinitionTab';
 import { TemplateCreationTab, KeyboardShortcutsDialog } from './components/TemplateCreation/TemplateCreationTab';
-import DeviceSelectionTab from './components/DeviceSelection/DeviceSelectionTab'; // Changed from named to default import
+import DeviceSelectionTab from './components/DeviceSelection/DeviceSelectionTab';
+import OfferTemplateTab from './components/OfferTemplate/OfferTemplateTab'; // Changed from named to default import
 import { OutputTypesTab } from './components/OutputTypes/OutputTypesTab';
 import { ProjectSelection } from './components/ProjectSelection/ProjectSelection';
 import { SplashScreen } from './components/SplashScreen/SplashScreen';
@@ -1173,6 +1174,14 @@ const MainApp: React.FC = () => {
       id: 7,
       title: `Send to EPLAN`,
       component: <SendToEplanTab />
+    },
+    {
+      // At the end so every tab before it keeps its number — the assistant
+      // and the screens that jump between tabs go by number.
+      id: 8,
+      title: `Offer Template`,
+      fill: true,
+      component: <OfferTemplateTab />
     }
   ];
 

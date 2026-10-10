@@ -57,7 +57,7 @@ import { TIERS } from '../../utils/tiers';
 // Tab labels used both in the context snapshot we send to the model and in
 // the local tool runner that resolves `set_active_tab`.
 const TAB_LABELS = ['Project Definition', 'Create Template', 'Scope Selection', 'Output Types',
-  'Simorgh Draw', 'PLC', 'Documents', 'Send to EPLAN'] as const;
+  'Simorgh Draw', 'PLC', 'Documents', 'Send to EPLAN', 'Offer Template'] as const;
 
 // What each tab owns, in the words the model is given. Sent with every turn
 // so an unqualified instruction ("set the temperature to 50") is read against
@@ -82,6 +82,9 @@ const TAB_SCOPE: Record<number, string> = {
    + 'the user to the page.',
   6: 'Documents — the files kept with the project. No editing tools; answer questions.',
   7: 'Send to EPLAN — the handover. No editing tools; answer questions.',
+  8: 'Offer Template — the offer version of each template: headers dragged in from a side list, '
+   + 'each with general parts (description, optional part number, quantity). Kept beside the '
+   + 'template\'s rows; not bought, not sent to EPLAN. No chat tools for it; answer questions.',
 };
 
 type Mode = 'local' | 'online';

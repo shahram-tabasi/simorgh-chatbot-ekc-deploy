@@ -428,11 +428,38 @@ export interface OfferControlPart {
   fullData?: any;
 }
 
+/**
+ * One part on the offer version of a template — general, not the exact
+ * device: a description is enough, a part number is optional.
+ */
+export interface OfferTemplatePart {
+  id: string;
+  description: string;
+  partNumber?: string;
+  quantity: number;
+  note?: string;
+  fullData?: any;
+}
+
+/** A header dropped onto the offer template, with the parts given to it. */
+export interface OfferTemplateSection {
+  id: string;
+  header: string;
+  parts: OfferTemplatePart[];
+}
+
 export interface TemplateItem {
   id: string;
   name: string;
   type: Tier;
   properties: Record<string, string>;
+  /**
+   * The template as the offer sees it (the Offer Template tab): headers the
+   * engineer dropped in, in their order, each with general parts. Beside the
+   * template's rows, never in them — purchasing and Send to EPLAN read the
+   * rows only.
+   */
+  offerTemplate?: OfferTemplateSection[];
   /** What the offer counted for control equipment — see OfferControlPart. */
   offerControl?: OfferControlPart[];
   /** Optional hierarchical classification used by recommendations / AI tools. */

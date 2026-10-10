@@ -515,6 +515,16 @@ office's list of new symbols. The server keeps each terminal's `dir`.
 
 
 
+**Offer Template tab** (`components/OfferTemplate/OfferTemplateTab.tsx`, last
+in the tab row — tab 8 — so no earlier tab's number moved): the offer version
+of each Create Template template, from the same tree. Headers are a side list
+(the tier's property headers without SPARE, plus custom ones) dragged into the
+page; each header gets general parts (description, optional part number /
+catalogue pick via the exported `PartSelectionDialog`, qty, note); headers and
+parts reorder by drag. Kept on `TemplateItem.offerTemplate`, beside the rows —
+never read by purchasing or Send to EPLAN; copied with a template. No
+mechanical, cell type or graphic.
+
 **Symbols live in three places** (`utils/cad/symbolBackup.ts`): the office
 library in Mongo (`/api/symbols`, new symbols and `redraw:` office redraws),
 the DXF pack in the browser's localStorage (`simorgh-draw:dxf-symbols` — per

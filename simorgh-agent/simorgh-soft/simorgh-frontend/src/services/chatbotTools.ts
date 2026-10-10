@@ -418,11 +418,12 @@ const TAB_NAMES: Record<string, number> = {
   'plc':                5, 'controller': 5, 'ladder': 5, 'scl': 5, 'program': 5,
   'documents':          6, 'document': 6, 'docs': 6,
   'send to eplan':      7, 'send-to-eplan': 7, 'send_to_eplan': 7, 'eplan': 7,
+  'offer':              8, 'offer template': 8, 'offer-template': 8, 'offer_template': 8,
 };
 
 const set_active_tab: ChatTool = {
   name: 'set_active_tab',
-  description: 'Switch the visible tab. Accepts "project", "template", "devices", "output", "draw", "plc", "documents" or "eplan" (case-insensitive; spaces/hyphens/underscores are OK).',
+  description: 'Switch the visible tab. Accepts "project", "template", "devices", "output", "draw", "plc", "documents", "eplan" or "offer" (case-insensitive; spaces/hyphens/underscores are OK).',
   args: {
     tab: { type: 'string', description: 'project | template | devices | output | draw', required: true },
   },
@@ -432,7 +433,7 @@ const set_active_tab: ChatTool = {
     if (!ctx.setActiveTab) return { ok: false, summary: 'Tab navigation not wired into this context.' };
     ctx.setActiveTab(idx);
     const label = ['Project Definition', 'Create Template', 'Device Selection', 'Output Types',
-      'Simorgh Draw', 'PLC', 'Documents', 'Send to EPLAN'][idx];
+      'Simorgh Draw', 'PLC', 'Documents', 'Send to EPLAN', 'Offer Template'][idx];
     return { ok: true, summary: `Switched to "${label}" tab.` };
   },
 };

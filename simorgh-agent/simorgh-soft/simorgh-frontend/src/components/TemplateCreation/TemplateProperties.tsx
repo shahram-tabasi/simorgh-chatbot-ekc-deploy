@@ -108,7 +108,7 @@ interface PartSelectionDialogProps {
 }
 
 // دیالوگ انتخاب پارت از SQL Server - با صفحه‌بندی کامل
-const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
+export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
   isOpen,
   onClose,
   onSelect,
