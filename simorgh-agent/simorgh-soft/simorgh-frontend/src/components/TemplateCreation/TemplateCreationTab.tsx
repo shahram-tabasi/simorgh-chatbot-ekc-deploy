@@ -261,9 +261,12 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
       setSelectedTemplate(null);
       void openTemplate(initialSelectedTemplate);
     } else {
-      // Arriving from Offer Template: open what was open there.
+      // Arriving from Offer Template: open what was open there — unless it is
+      // still a name only. Each of those is opened by a click on it, and asks
+      // for its own cell type first: ten offer templates are ten panels.
       const shared = sharedTemplate();
-      if (shared && TIERS.some(type => (projectData?.templates?.[type] ?? []).some(t => t.id === shared))) {
+      const there = TIERS.flatMap(type => projectData?.templates?.[type] ?? []).find(t => t.id === shared);
+      if (shared && there && !there.fromOffer) {
         void openTemplate(shared);
       }
     }
@@ -354,19 +357,24 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
           />
         </PanelFrame>
         <div className="flex-1 min-w-0 min-h-0 p-4 overflow-hidden">
-          {selectedTemplateData?.fromOffer && (
-            <div className="mb-3 flex items-center justify-between gap-3 px-3 py-2 rounded border border-amber-200 bg-amber-50 text-sm text-amber-800">
-              <span>Made in Offer Template with a name only — its cell type, Simorgh Draw and the rest are completed here.</span>
-              <button
-                onClick={() => askFor(selectedTemplateData)}
-                disabled={!isCurrentRevisionEditable}
-                className="shrink-0 px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50 disabled:opacity-50"
-              >
-                Complete…
-              </button>
+          {selectedTemplateData?.fromOffer ? (
+            // Still a name only: nothing of it is shown until its own cell type
+            // and the rest are given — then its rows, and the offer's parts
+            // under them to be taken in.
+            <div className="flex items-center justify-center h-full">
+              <div className="max-w-md text-center px-6 py-5 rounded border border-amber-200 bg-amber-50 text-sm text-amber-800">
+                <p className="font-semibold text-gray-800 mb-1">{selectedTemplateData.name}</p>
+                <p className="mb-3">Made in Offer Template with a name only. Give this template its own cell type, Simorgh Draw and the rest first — then its rows and the offer's parts appear here.</p>
+                <button
+                  onClick={() => askFor(selectedTemplateData)}
+                  disabled={!isCurrentRevisionEditable}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                >
+                  Complete…
+                </button>
+              </div>
             </div>
-          )}
-          {selectedTemplateData ? (
+          ) : selectedTemplateData ? (
             <TemplateProperties template={selectedTemplateData} />
           ) : (
             <div className="flex items-center justify-center h-full text-gray-500">

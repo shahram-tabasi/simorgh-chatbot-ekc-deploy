@@ -531,9 +531,12 @@ Its tree is `TemplateTree offerMode`: new / rename / copy open `OfferNameDialog`
 (a name only — never the HierarchicalTemplateWizard), Mechanical, Edit path,
 Cut and the moves are hidden. A template made there carries `fromOffer` and
 `offerFamily` (the section, so `groupByFamily` files it before it has a path)
-and shows "needs technical". Opened in Create Template, the wizard opens on it
-in `edit` mode (also from the banner's Complete…); on save `fromOffer` /
-`offerFamily` are dropped, the id kept. **The offer comes first**: shown
+and shows "needs technical". Opened in Create Template (only by a click — the
+shared selection never auto-opens a `fromOffer` template), the wizard opens on
+it in `edit` mode; until it is completed the panel shows only a card with
+Complete…, never its rows. On save `fromOffer` / `offerFamily` are dropped,
+the id kept — each template its own cell type. The properties table's
+`thead` is sticky. **The offer comes first**: shown
 order 0, 8, 1, 2…; Next: Project Definition → Offer (8) → Create Template (1)
 → Scope Selection. `addTemplate` takes an optional last `extra`.
 `utils/offerTemplate.ts`: the template open in either tab (`sharedTemplate`),

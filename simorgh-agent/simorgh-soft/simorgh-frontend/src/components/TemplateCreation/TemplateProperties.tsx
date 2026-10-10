@@ -1326,7 +1326,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
           headings, which is what a wide table is supposed to do. */}
       <div className="flex-1 min-w-0 min-h-0 border border-gray-200 rounded-md overflow-auto">
         <table className="w-full min-w-[1180px]">
-          <thead>
+          {/* The headings stay put while the rows scroll under them. */}
+          <thead className="sticky top-0 z-10 bg-gray-50 shadow-[0_1px_0_0_rgba(0,0,0,0.08)]">
             <tr className="bg-gray-50">
               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600 border-b w-36">
                 Property
