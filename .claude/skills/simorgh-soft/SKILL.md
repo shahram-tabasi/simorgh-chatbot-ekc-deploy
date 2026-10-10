@@ -323,9 +323,11 @@ under it, `sampleRelay`; cell: the relay's signals with `up: true`); with no
 relay, into the breaker (cell: the breaker's signal lanes). A coupling/riser
 cell's height counts what hangs under its line (`barEnd`), and its signals
 stop above the bar connection.
-Each incoming sample passes its XD1 test terminal before the relay (branch:
+Each incoming sample passes its test terminal before the relay — named from
+the template (`sampleTerminalName`: the test block worded for voltage, else
+the first test block, else "XD1") — (branch:
 on its line under the relay; cell: the signal's `xd` flag draws it above the
-arrow, "XD1" written once beside the outermost).
+arrow, its name written once beside the outermost).
 
 **Each part answers for itself** (`part.sld`, asked in `PartQuestionsDialog`
 when the part is entered and from its edit button in the parts list). A later

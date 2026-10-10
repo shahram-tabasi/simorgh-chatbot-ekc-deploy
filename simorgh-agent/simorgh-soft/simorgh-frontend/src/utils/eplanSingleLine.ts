@@ -965,6 +965,16 @@ const isInstrument = (id: SymbolId) => INSTRUMENT_RANK[id] != null;
 const AUX_CT = /aux(?:iliary)?\.?[\s-]*(?:current[\s-]*)?(?:transformer|c\.?\s?t\b)|interposing|کمکی/i;
 const itemText = (i: ChainItem) =>
   [i.label, i.tag, i.slot, i.code, i.simTable, ...(i.accessories ?? [])].join(' ');
+/**
+ * The test terminal a voltage sample comes into the relay through, by its own
+ * name in the template: the test block whose wording says it is for voltage,
+ * else the template's (first) test block — "XD1" only when it has none.
+ */
+const sampleTerminalName = (items: ChainItem[]): string => {
+  const blocks = items.filter(i => i.id === 'test-block');
+  const forVolts = blocks.find(i => /volt|\bv\.?t\b|\bp\.?t\b/i.test(itemText(i)));
+  return String((forVolts ?? blocks[0])?.label ?? '').trim() || 'XD1';
+};
 const isAuxCt = (i: ChainItem) => i.id === 'current-transformer' && AUX_CT.test(itemText(i));
 /** Where an instrument hangs on the secondary side. */
 const rankOf = (i: ChainItem) => (isAuxCt(i) ? 3 : INSTRUMENT_RANK[i.id] ?? 99);
@@ -1668,6 +1678,7 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
   // with what it is — or, with no relay on the feeder, into the breaker.
   if (branch.samplesIn?.length) {
     const rel = sampleRelay(branch);
+    const xdName = sampleTerminalName(branch.instruments);
     let at: { x: number; y: number; w: number } | null = null;
     groups.forEach(g => g.items.forEach((k, n) => {
       if (branch.instruments[k] === rel) at = { x: ix, y: g.ys[n], w: symbolRight(dk(rel!)) };
@@ -1684,7 +1695,7 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
         const tx = ix + hit.w + 18;
         out.push(`<g ${symbolBlock('test-block', tx, ly)}><circle cx="${tx}" cy="${ly}" r="3.6" fill="#fff" stroke="#111" stroke-width="1.1"/>` +
           `<circle cx="${tx}" cy="${ly}" r="1.4" fill="#111"/></g>`);
-        if (j === 0) out.push(`<text x="${tx}" y="${ly - 6}" font-size="6.5" text-anchor="middle" fill="#111">XD1</text>`);
+        if (j === 0) out.push(`<text x="${tx}" y="${ly - 6}" font-size="6.5" text-anchor="middle" fill="#111">${esc(xdName)}</text>`);
         out.push(`<text x="${ix + hit.w + 38}" y="${ly + 3}" font-size="7.5" fill="#111">${esc(t.toUpperCase())}</text>`);
       });
     } else if (branch.series.length) {
@@ -1697,7 +1708,7 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
         const tx = ex - 22;
         out.push(`<g ${symbolBlock('test-block', tx, ly)}><circle cx="${tx}" cy="${ly}" r="3.6" fill="#fff" stroke="#111" stroke-width="1.1"/>` +
           `<circle cx="${tx}" cy="${ly}" r="1.4" fill="#111"/></g>`);
-        if (j === 0) out.push(`<text x="${tx}" y="${ly - 6}" font-size="6.5" text-anchor="middle" fill="#111">XD1</text>`);
+        if (j === 0) out.push(`<text x="${tx}" y="${ly - 6}" font-size="6.5" text-anchor="middle" fill="#111">${esc(xdName)}</text>`);
         out.push(`<text x="${ex - 44}" y="${ly + 3}" font-size="7.5" text-anchor="end" fill="#111">${esc(t.toUpperCase())}</text>`);
       });
     }
@@ -2153,6 +2164,7 @@ function drawMvCellLines(
   floorAt?: number,
 ): { svg: string; bottom: number; reachBottom: number; left: number; right: number } {
   chain = chain.map(asVt);
+  const xdName = sampleTerminalName(chain);
   const answers = withPartAnswers(opts.answers ?? {}, chain);
   const mech = opts.mechanical ?? {};
   const kind = cellKind(opts.cellType, opts.sub);
@@ -2388,7 +2400,7 @@ function drawMvCellLines(
           `<circle cx="${sx_}" cy="${ty_}" r="1.4" fill="#111"/></g>`);
         // Named once, beside the outermost of them.
         if (sx_ === Math.max(...signals.filter(sg => sg.xd).map(sg => sg.x))) {
-          out.push(`<text x="${sx_ + 6}" y="${ty_ + 2.5}" font-size="6.5" fill="#111">XD1</text>`);
+          out.push(`<text x="${sx_ + 6}" y="${ty_ + 2.5}" font-size="6.5" fill="#111">${esc(xdName)}</text>`);
         }
       }
       reach(sx_ - 6, end);
