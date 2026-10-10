@@ -8,7 +8,7 @@ import { PartCell } from './PartCell';
 import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
 import { EplanSymbolMap, mvCellType, mvFamily, symbolForPart } from '../../utils/eplanSingleLine';
 import { officeLabel } from '../../utils/officeLabels';
-import { DEVICE_KINDS, LV_WORDS, MV_WORDS } from '../../utils/offerTemplate';
+import { DEVICE_KINDS, STRICT_VOLTAGE_KINDS } from '../../utils/offerTemplate';
 import { stripLocaleTags } from '../../utils/tierEquipmentMatrix';
 import { PartQuestionsDialog } from './PartQuestionsDialog';
 import { TemplateSingleLine, TemplateMechanical, PartSingleLine } from '../../types/project';
@@ -191,7 +191,6 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
     if (isOpen) {
       setCurrentPage(1);
       setSelectedPart(null);
-      fetchParts(1);
     }
   }, [isOpen]);
 
@@ -201,24 +200,23 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, kind?.label, voltage]);
 
-  // Another kind or voltage: page 1 again.
+  // Opened, or another kind, voltage or brand: page 1 again — asked once,
+  // after the lists have settled (opening resets them, which used to send
+  // two or three searches, the slowest of them winning).
   useEffect(() => {
-    if (isOpen && offerMode) {
+    if (!isOpen) return;
+    const wait = window.setTimeout(() => {
       setCurrentPage(1);
       fetchParts(1);
-    }
+    }, 120);
+    return () => window.clearTimeout(wait);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kindLabel, volt]);
+  }, [isOpen, kindLabel, volt, selectedManufacturer]);
 
-  // Reload when manufacturer changes (reset to page 1)
-  useEffect(() => {
-    if (isOpen) {
-      setCurrentPage(1);
-      fetchParts(1);
-    }
-  }, [selectedManufacturer]);
-
+  // Only the latest search is shown: an earlier one that answers late is dropped.
+  const lastAsked = React.useRef(0);
   const fetchParts = async (page: number = currentPage) => {
+    const asked = ++lastAsked.current;
     setLoading(true);
     setError(null);
 
@@ -230,7 +228,7 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
           searchTerm: searchTerm || undefined,
           manufacturer: selectedManufacturer || undefined,
           ...(kindWords ? { kindWords } : {}),
-          ...(offerMode && volt ? { voltage: volt, mvWords: MV_WORDS, lvWords: LV_WORDS } : {}),
+          ...(offerMode && volt ? { voltage: volt, strict: STRICT_VOLTAGE_KINDS.includes(kindLabel) } : {}),
           page: page,
           pageSize: PAGE_SIZE
         })
@@ -238,6 +236,7 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
 
       // Parse the body first so we can show the real SQL error message
       const result = await response.json();
+      if (asked !== lastAsked.current) return;
 
       if (!response.ok) {
         // Show the actual error from the server (e.g. SQL connection message)
@@ -259,12 +258,13 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
       }
 
     } catch (err) {
+      if (asked !== lastAsked.current) return;
       const errorMsg = err instanceof Error ? err.message : 'Connection error';
       setError(errorMsg);
       setParts([]);
       console.error('❌ SQL Server error:', errorMsg);
     } finally {
-      setLoading(false);
+      if (asked === lastAsked.current) setLoading(false);
     }
   };
 

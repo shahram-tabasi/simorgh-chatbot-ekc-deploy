@@ -24,6 +24,7 @@ import { registerDocumentRoutes } from './documents.js';
 import { registerPlotframeFieldRoutes } from './plotframeFields.js';
 import { registerSymbolLibraryRoutes } from './symbolLibrary.js';
 import { registerAccessPartsRoutes } from './partsAccess.js';
+import { SQL_TEXT, sqlFilter } from './partsMatch.js';
 import { registerLocalDesktopRoutes } from './localDesktop.js';
 import { isRename, projectNameKey } from './projectNames.js';
 import {
@@ -734,6 +735,25 @@ app.post('/api/eplan-parts/notes', async (req, res) => {
   }
 });
 
+// The brands in tblPart, kept for ten minutes — every first page asks.
+let manCache = { at: 0, list: [] };
+async function sqlManufacturers(sqlDb) {
+  if (manCache.list.length && Date.now() - manCache.at < 10 * 60 * 1000) return manCache.list;
+  try {
+    const manResult = await sqlDb.request().query(`
+      SELECT DISTINCT manufacturer
+      FROM tblPart WITH (NOLOCK)
+      WHERE manufacturer IS NOT NULL AND manufacturer != ''
+      ORDER BY manufacturer
+    `);
+    manCache = { at: Date.now(), list: manResult.recordset.map(r => r.manufacturer) };
+    return manCache.list;
+  } catch (manErr) {
+    console.warn('⚠️ Manufacturers query skipped:', manErr.message);
+    return [];
+  }
+}
+
 /**
  * POST /api/eplan-parts - Fetch parts from EPLAN SQL (Frontend compatible endpoint)
  * This endpoint matches what the frontend TemplateProperties.tsx expects
@@ -749,17 +769,13 @@ app.post('/api/eplan-parts', async (req, res) => {
     const sqlDb = await connectToSqlServer();
 
     const { searchTerm = '', manufacturer = '', page = 1, pageSize = 100 } = req.body;
-    // The kind of device asked for (the Offer Template's headers): words any
-    // one of which a part's type number or descriptions must hold. Absent,
-    // nothing is narrowed — every other caller is answered as before.
-    const words = list => (Array.isArray(list) ? list : [])
+    // The kind of device and the voltage asked for (the Offer Template's
+    // catalogue) — see partsMatch.js. Absent, nothing is narrowed and every
+    // other caller is answered as before.
+    const kindWords = (Array.isArray(req.body?.kindWords) ? req.body.kindWords : [])
       .map(w => String(w ?? '').trim()).filter(Boolean).slice(0, 60);
-    const kindWords = words(req.body?.kindWords);
-    // MV or LV: a part that belongs only to the other is left out — one that
-    // says neither (a relay, a meter) is kept for both.
     const voltage = ['MV', 'LV'].includes(req.body?.voltage) ? req.body.voltage : '';
-    const mvWords = words(req.body?.mvWords);
-    const lvWords = words(req.body?.lvWords);
+    const strict = req.body?.strict === true;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSizeNum = Math.min(500, Math.max(1, parseInt(pageSize) || 100));
     const offset = (pageNum - 1) * pageSizeNum;
@@ -792,70 +808,54 @@ app.post('/api/eplan-parts', async (req, res) => {
       params.man = manufacturer;
     }
 
-    // Kind filter — parameterised like the rest, one parameter per word.
-    if (kindWords.length) {
-      const any = kindWords.map((w, i) => {
-        params[`kind${i}`] = `%${w}%`;
-        return `(typenr LIKE @kind${i} OR description1 LIKE @kind${i} OR description2 LIKE @kind${i} OR description3 LIKE @kind${i})`;
-      });
-      where.push(`(${any.join(' OR ')})`);
-    }
-
-    // Voltage filter — the same fields, the same way.
-    const anyOf = (list, tag) => list.map((w, i) => {
-      params[`${tag}${i}`] = `%${w}%`;
-      return `typenr LIKE @${tag}${i} OR description1 LIKE @${tag}${i} OR description2 LIKE @${tag}${i} OR description3 LIKE @${tag}${i}`;
-    }).join(' OR ');
-    if (voltage && mvWords.length && lvWords.length) {
-      const mv = `(${anyOf(mvWords, 'mv')})`;
-      const lv = `(${anyOf(lvWords, 'lv')})`;
-      where.push(voltage === 'MV' ? `(${mv} OR NOT ${lv})` : `(${lv} OR NOT ${mv})`);
-    }
+    // Kind and voltage — matched in one text per row (partsMatch.js).
+    const matchWhere = sqlFilter({ kindWords, voltage, strict }, params);
+    where.push(...matchWhere);
+    const fromClause = matchWhere.length ? `tblPart WITH (NOLOCK) ${SQL_TEXT}` : 'tblPart WITH (NOLOCK)';
 
     const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
+    // The count, the page and the brand list are asked for together, not one
+    // after the other — each is a pass over the table, and the brand list is
+    // the same for every search, so it is kept for ten minutes.
+    const bind = request => {
+      Object.keys(params).forEach(key => request.input(key, sql.NVarChar, params[key]));
+      return request;
+    };
+
     // Count query — use NOLOCK to avoid lock contention on large tables
     // Wrapped in try-catch so a slow COUNT never breaks the data response
-    let total = 0;
-    let totalPages = 1;
-    try {
-      const countRequest = sqlDb.request();
-      Object.keys(params).forEach(key => {
-        countRequest.input(key, sql.NVarChar, params[key]);
+    const countJob = bind(sqlDb.request())
+      .query(`SELECT COUNT(*) AS total FROM ${fromClause} ${whereClause}`)
+      .then(r => r.recordset[0].total)
+      .catch(countErr => {
+        console.warn('⚠️ COUNT query skipped:', countErr.message);
+        return -1; // unknown
       });
-      const countResult = await countRequest.query(
-        `SELECT COUNT(*) AS total FROM tblPart WITH (NOLOCK) ${whereClause}`
-      );
-      total = countResult.recordset[0].total;
-      totalPages = Math.ceil(total / pageSizeNum) || 1;
-      console.log(`📈 Total matching records: ${total}`);
-    } catch (countErr) {
-      console.warn('⚠️ COUNT query skipped:', countErr.message);
-      total = -1; // unknown
-      totalPages = 999;
-    }
 
     // Data query with pagination — SELECT * to avoid "Invalid column name" errors
     // on older SQL Server schemas that may not have all expected columns.
-    const dataRequest = sqlDb.request();
-    Object.keys(params).forEach(key => {
-      dataRequest.input(key, sql.NVarChar, params[key]);
-    });
-
     const rowStart = offset + 1;
     const rowEnd = offset + pageSizeNum;
 
     const dataQuery = `
       SELECT *
       FROM (
-        SELECT *, ROW_NUMBER() OVER (ORDER BY partnr) AS RowNum
-        FROM tblPart WITH (NOLOCK)
+        SELECT tblPart.*, ROW_NUMBER() OVER (ORDER BY partnr) AS RowNum
+        FROM ${fromClause}
         ${whereClause}
       ) AS NumberedRows
       WHERE RowNum >= ${rowStart} AND RowNum <= ${rowEnd}
     `;
+    const dataJob = bind(sqlDb.request()).query(dataQuery);
 
-    const dataResult = await dataRequest.query(dataQuery);
+    // Get manufacturers list (READ-ONLY) - only on first page to save time
+    // Uses NOLOCK to avoid lock contention; wrapped in try-catch to prevent timeout breaking the response
+    const manJob = pageNum !== 1 ? Promise.resolve([]) : sqlManufacturers(sqlDb);
+
+    const [total, dataResult, manufacturers] = await Promise.all([countJob, dataJob, manJob]);
+    const totalPages = total < 0 ? 999 : (Math.ceil(total / pageSizeNum) || 1);
+    console.log(`📈 Total matching records: ${total}`);
     console.log(`📦 Records received: ${dataResult.recordset.length}`);
     if (dataResult.recordset.length === 0) {
       console.warn(`⚠️ 0 rows returned. Query: rowStart=${rowStart}, rowEnd=${rowEnd}, where="${whereClause}"`);
@@ -865,25 +865,6 @@ app.post('/api/eplan-parts', async (req, res) => {
     // cleanText() runs here, in-memory, after the SELECT result is received.
     // No SQL writes occur — the SQL database is never modified.
     const transformedData = dataResult.recordset.map(transformPartToFrontend);
-
-    // Get manufacturers list (READ-ONLY) - only on first page to save time
-    // Uses NOLOCK to avoid lock contention; wrapped in try-catch to prevent timeout breaking the response
-    let manufacturers = [];
-    if (pageNum === 1) {
-      try {
-        const manRequest = sqlDb.request();
-        const manQuery = `
-          SELECT DISTINCT manufacturer
-          FROM tblPart WITH (NOLOCK)
-          WHERE manufacturer IS NOT NULL AND manufacturer != ''
-          ORDER BY manufacturer
-        `;
-        const manResult = await manRequest.query(manQuery);
-        manufacturers = manResult.recordset.map(r => r.manufacturer);
-      } catch (manErr) {
-        console.warn('⚠️ Manufacturers query skipped:', manErr.message);
-      }
-    }
 
     res.json({
       success: true,

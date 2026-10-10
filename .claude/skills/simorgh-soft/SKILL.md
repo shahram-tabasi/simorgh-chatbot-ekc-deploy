@@ -552,9 +552,16 @@ tab still lists it.
 The catalogue from the offer (`PartSelectionDialog` with `kind`/`voltage`)
 shows three lists — voltage (LV / MV / both; default from the template's
 tier), equipment kind (`DEVICE_KINDS`, default the header's) and brand, the
-last two searchable (`SearchSelect`). Voltage is sent as `voltage` with
-`MV_WORDS`/`LV_WORDS`: a part only of the other voltage is dropped, a neutral
-one (relay, meter) kept in both. Create Template's dialog is unchanged.
+last two searchable (`SearchSelect`). Voltage is sent as `voltage` plus
+`strict` (breakers, contactors: `STRICT_VOLTAGE_KINDS`); the rule lives in
+`simorgh-backend/partsMatch.js`, shared by SQL (`sqlFilter` on one
+CROSS APPLY text column) and Access (`voltageOk`): MV = MV families (3AE,
+3AH, 3TL, 4MR…) or a rating > 1 kV; LV = not MV; strict MV needs MV proof, a
+neutral part (relay, meter) is kept under MV unless it names an LV family.
+Codes and short words match at a word start only ("3AH" ≠ "23Ah"). The route
+runs count, page and (10-min cached) brand list in parallel; the dialog sends
+one debounced search per change and drops late answers (`lastAsked`).
+Create Template's dialog is unchanged.
 **Labels**: `utils/officeLabels.ts` is the office LABEL sheet (Q, QW for a
 SIMOPRIME-WORLD truck cell, K, F1, F30…, FB, FA, B1–20 CT, B21–40 VT,
 B41–51 CBCT, P1…, AS, VS, TF, XD1…, PA…, PV…, QC…, MB…); `handlePartSelect`

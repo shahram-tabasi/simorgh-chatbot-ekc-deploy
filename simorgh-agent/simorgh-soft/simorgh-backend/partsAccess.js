@@ -17,6 +17,7 @@
 
 import fs from 'fs';
 import MDBReader from 'mdb-reader';
+import { hasWord, matchText, voltageOk } from './partsMatch.js';
 
 export const partsMode = () =>
   String(process.env.PARTS_SOURCE || 'sql').toLowerCase() === 'access' ? 'access' : 'sql';
@@ -74,31 +75,20 @@ export function loadAccessParts(file = process.env.PARTS_ACCESS_FILE) {
 }
 
 // SQL Server's LIKE '%x%' under the default collation: anywhere, any case.
+// The kind and the voltage as partsMatch.js says, the same as on SQL Server.
 function filterParts(rows, search, man, kindWords = [], volt = {}) {
   const needle = text(search).trim().toLowerCase();
   const maker = text(man);
   const kinds = (Array.isArray(kindWords) ? kindWords : [])
     .map(w => text(w).trim().toLowerCase()).filter(Boolean);
-  const kindOf = r => ['typenr', 'description1', 'description2', 'description3']
-    .map(f => text(r[f]).toLowerCase()).join(' ');
-  const low = list => (Array.isArray(list) ? list : []).map(w => text(w).trim().toLowerCase()).filter(Boolean);
-  const mvWords = low(volt.mvWords);
-  const lvWords = low(volt.lvWords);
-  const voltage = ['MV', 'LV'].includes(volt.voltage) && mvWords.length && lvWords.length ? volt.voltage : '';
-  // A part that belongs only to the other voltage is left out; one that says
-  // neither is kept for both.
-  const voltOk = r => {
-    if (!voltage) return true;
-    const t = kindOf(r);
-    const mv = mvWords.some(w => t.includes(w));
-    const lv = lvWords.some(w => t.includes(w));
-    return voltage === 'MV' ? mv || !lv : lv || !mv;
-  };
-  return rows.filter(r =>
-    (!maker || text(r.manufacturer) === maker)
-    && (!needle || SEARCH_FIELDS.some(f => text(r[f]).toLowerCase().includes(needle)))
-    && (!kinds.length || kinds.some(k => kindOf(r).includes(k)))
-    && voltOk(r));
+  const voltage = ['MV', 'LV'].includes(volt.voltage) ? volt.voltage : '';
+  return rows.filter(r => {
+    if (maker && text(r.manufacturer) !== maker) return false;
+    if (needle && !SEARCH_FIELDS.some(f => text(r[f]).toLowerCase().includes(needle))) return false;
+    if (!kinds.length && !voltage) return true;
+    const t = matchText(r);
+    return (!kinds.length || kinds.some(k => hasWord(t, k))) && voltageOk(t, voltage, volt.strict === true);
+  });
 }
 
 /**
@@ -119,10 +109,10 @@ export function registerAccessPartsRoutes(app, transformPartToFrontend) {
 
   app.post('/api/eplan-parts', onlyInAccessMode((req, res) => {
     const { rows, manufacturers } = loadAccessParts();
-    const { searchTerm = '', manufacturer = '', page = 1, pageSize = 100, kindWords = [], voltage = '', mvWords = [], lvWords = [] } = req.body || {};
+    const { searchTerm = '', manufacturer = '', page = 1, pageSize = 100, kindWords = [], voltage = '', strict = false } = req.body || {};
     const pageNum = Math.max(1, parseInt(page) || 1);
     const size = Math.min(500, Math.max(1, parseInt(pageSize) || 100));
-    const hits = filterParts(rows, searchTerm, manufacturer, kindWords, { voltage, mvWords, lvWords });
+    const hits = filterParts(rows, searchTerm, manufacturer, kindWords, { voltage, strict });
     res.json({
       success: true,
       data: hits.slice((pageNum - 1) * size, pageNum * size).map(transformPartToFrontend),
