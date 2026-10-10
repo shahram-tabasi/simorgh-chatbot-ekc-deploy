@@ -546,6 +546,17 @@ header's catalogue shows its own kind; `PartSelectionDialog`'s `kind` prop
 (absent in Create Template = unchanged). Create Template rows show the offer's
 parts of the same header with "use" (`offerHint`, `handlePartSelect(part,
 target)`).
+The catalogue from the offer (`PartSelectionDialog` with `kind`/`voltage`)
+shows three lists — voltage (LV / MV / both; default from the template's
+tier), equipment kind (`DEVICE_KINDS`, default the header's) and brand, the
+last two searchable (`SearchSelect`). Voltage is sent as `voltage` with
+`MV_WORDS`/`LV_WORDS`: a part only of the other voltage is dropped, a neutral
+one (relay, meter) kept in both. Create Template's dialog is unchanged.
+**Labels**: `utils/officeLabels.ts` is the office LABEL sheet (Q, QW for a
+SIMOPRIME-WORLD truck cell, K, F1, F30…, FB, FA, B1–20 CT, B21–40 VT,
+B41–51 CBCT, P1…, AS, VS, TF, XD1…, PA…, PV…, QC…, MB…); `handlePartSelect`
+gives a new part that label, numbered after the template's labels (a
+replaced part's own is left out). Unknown kinds keep the old default.
 
 **Symbols live in three places** (`utils/cad/symbolBackup.ts`): the office
 library in Mongo (`/api/symbols`, new symbols and `redraw:` office redraws),

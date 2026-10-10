@@ -6,7 +6,9 @@ import { PartSchematicPanel, PartRef } from './PartSchematicPanel';
 import { PanelFrame } from '../shared/PanelFrame';
 import { PartCell } from './PartCell';
 import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
-import { EplanSymbolMap, mvFamily } from '../../utils/eplanSingleLine';
+import { EplanSymbolMap, mvCellType, mvFamily, symbolForPart } from '../../utils/eplanSingleLine';
+import { officeLabel } from '../../utils/officeLabels';
+import { DEVICE_KINDS, LV_WORDS, MV_WORDS } from '../../utils/offerTemplate';
 import { stripLocaleTags } from '../../utils/tierEquipmentMatrix';
 import { PartQuestionsDialog } from './PartQuestionsDialog';
 import { TemplateSingleLine, TemplateMechanical, PartSingleLine } from '../../types/project';
@@ -107,9 +109,54 @@ interface PartSelectionDialogProps {
   onSelect: (part: any) => void;
   propertyName: string;
   currentPart?: PartInfo | null;
-  /** Only parts of this kind — the Offer Template's headers. Absent, all. */
+  /**
+   * Opened from the Offer Template: the header's kind of device and the
+   * template's voltage, as the defaults of the category and voltage lists.
+   * Absent (Create Template), the dialog is as it always was.
+   */
   kind?: { label: string; words: string[] } | null;
+  voltage?: 'LV' | 'MV';
 }
+
+/** A drop-down list with a search box in it — for the brands and the kinds. */
+const SearchSelect: React.FC<{
+  value: string; options: string[]; allLabel: string; onChange: (v: string) => void; className?: string;
+}> = ({ value, options, allLabel, onChange, className }) => {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const box = React.useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [open]);
+  const shown = options.filter(o => o.toLowerCase().includes(q.trim().toLowerCase()));
+  const pick = (v: string) => { onChange(v); setOpen(false); setQ(''); };
+  return (
+    <div ref={box} className={`relative ${className ?? ''}`}>
+      <button type="button" onClick={() => setOpen(o => !o)}
+        className="w-full py-2 px-3 border border-gray-300 rounded-lg bg-white text-start text-sm truncate focus:outline-none focus:ring-2 focus:ring-blue-500">
+        {value || allLabel} <span className="float-right text-gray-500">▾</span>
+      </button>
+      {open && (
+        <div className="absolute z-10 mt-1 w-full min-w-[14rem] bg-white border border-gray-300 rounded-lg shadow-lg">
+          <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search…"
+            className="w-full px-3 py-2 text-sm border-b border-gray-200 rounded-t-lg focus:outline-none" />
+          <div className="max-h-64 overflow-y-auto text-sm">
+            <button type="button" onClick={() => pick('')}
+              className={`block w-full text-start px-3 py-1.5 hover:bg-gray-100 ${value === '' ? 'font-semibold text-blue-700' : 'text-gray-800'}`}>{allLabel}</button>
+            {shown.map(o => (
+              <button type="button" key={o} onClick={() => pick(o)}
+                className={`block w-full text-start px-3 py-1.5 hover:bg-gray-100 ${value === o ? 'font-semibold text-blue-700' : 'text-gray-800'}`}>{o}</button>
+            ))}
+            {shown.length === 0 && <p className="px-3 py-2 text-gray-500">Nothing matches.</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // دیالوگ انتخاب پارت از SQL Server - با صفحه‌بندی کامل
 export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
@@ -119,11 +166,14 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
   propertyName,
   currentPart,
   kind,
+  voltage,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  /** The kind filter set aside, to see every part. */
-  const [allKinds, setAllKinds] = useState(false);
-  const kindWords = kind && !allKinds ? kind.words : undefined;
+  /** From the Offer Template: the category and voltage lists are shown. */
+  const offerMode = kind !== undefined || voltage !== undefined;
+  const [kindLabel, setKindLabel] = useState(kind?.label ?? '');
+  const [volt, setVolt] = useState<'' | 'LV' | 'MV'>(voltage ?? '');
+  const kindWords = offerMode ? DEVICE_KINDS.find(k => k.label === kindLabel)?.words : undefined;
   const [parts, setParts] = useState<any[]>([]);
   const [selectedPart, setSelectedPart] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -141,19 +191,24 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
     if (isOpen) {
       setCurrentPage(1);
       setSelectedPart(null);
-      setAllKinds(false);
       fetchParts(1);
     }
   }, [isOpen]);
 
-  // The kind filter set aside or back: page 1 again.
+  // Each opening starts from the header's own kind and the template's voltage.
   useEffect(() => {
-    if (isOpen && kind) {
+    if (isOpen) { setKindLabel(kind?.label ?? ''); setVolt(voltage ?? ''); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, kind?.label, voltage]);
+
+  // Another kind or voltage: page 1 again.
+  useEffect(() => {
+    if (isOpen && offerMode) {
       setCurrentPage(1);
       fetchParts(1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allKinds]);
+  }, [kindLabel, volt]);
 
   // Reload when manufacturer changes (reset to page 1)
   useEffect(() => {
@@ -175,6 +230,7 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
           searchTerm: searchTerm || undefined,
           manufacturer: selectedManufacturer || undefined,
           ...(kindWords ? { kindWords } : {}),
+          ...(offerMode && volt ? { voltage: volt, mvWords: MV_WORDS, lvWords: LV_WORDS } : {}),
           page: page,
           pageSize: PAGE_SIZE
         })
@@ -282,6 +338,21 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
         {/* Search Bar with Manufacturer Filter */}
         <div className="px-6 py-3 border-b bg-gray-50">
           <div className="flex gap-4">
+            {offerMode ? (
+              <>
+                <select value={volt} onChange={e => setVolt(e.target.value as '' | 'LV' | 'MV')}
+                  title="MV or LV — a part that serves both (a relay, a meter) is in both"
+                  className="w-28 py-2 px-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-sm">
+                  <option value="">LV + MV</option>
+                  <option value="LV">LV</option>
+                  <option value="MV">MV</option>
+                </select>
+                <SearchSelect className="w-52" value={kindLabel} allLabel="All equipment"
+                  options={DEVICE_KINDS.map(k => k.label)} onChange={setKindLabel} />
+                <SearchSelect className="w-48" value={selectedManufacturer} allLabel="All Manufacturers"
+                  options={manufacturers} onChange={setSelectedManufacturer} />
+              </>
+            ) : (
             <div className="w-48">
               <select
                 value={selectedManufacturer}
@@ -294,6 +365,7 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
                 ))}
               </select>
             </div>
+            )}
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input
@@ -316,14 +388,6 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
             </button>
           </div>
           <div className="mt-2 flex items-center gap-3 flex-wrap">
-            {kind && (
-              <span className="text-xs text-gray-700 bg-gray-100 border border-gray-200 rounded-full px-2 py-0.5 flex items-center gap-2">
-                {allKinds ? 'All parts' : `Only ${kind.label}`}
-                <button className="text-blue-700 hover:underline" onClick={() => setAllKinds(v => !v)}>
-                  {allKinds ? `Only ${kind.label}` : 'Show all'}
-                </button>
-              </span>
-            )}
             {selectedManufacturer && (
               <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-sm flex items-center gap-1">
                 {selectedManufacturer}
@@ -993,7 +1057,19 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
 
     // First row of LV (CB ORDER) / MV (VCB OR VC/FUSE) → default label "Q"
     const isFirstQRow = propertyName === firstQRow;
-    const defaultLabel = isFirstQRow ? 'Q' : (part.Designation1 || '');
+    // The office's label for the device (its LABEL sheet): Q, K, B1…, B21…,
+    // F30…, P1…, XD1… — numbered after the labels the template already has,
+    // the replaced part's own left out so a replacement keeps its number.
+    // A part the sheet says nothing about is labelled as it always was.
+    const usedLabels = Object.entries(properties).flatMap(([slot, v]) =>
+      ((v as PropertyValue)?.parts ?? [])
+        .filter((_, i) => !(slot === propertyName && i === partIndex))
+        .map(x => x.label));
+    const kind = symbolForPart({ fullData: part, label: part.Designation1 }, propertyName, undefined, template.type).id;
+    const office = officeLabel(kind, usedLabels, {
+      tier: template.type, family: mvFamily(template), cellType: mvCellType(template).cellType,
+    });
+    const defaultLabel = office ?? (isFirstQRow ? 'Q' : (part.Designation1 || ''));
 
     // A part replaced in its place keeps what was said about that place —
     // accessory or device, series or parallel — and is asked again below.

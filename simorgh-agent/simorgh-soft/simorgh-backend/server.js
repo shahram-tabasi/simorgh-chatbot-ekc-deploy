@@ -752,8 +752,14 @@ app.post('/api/eplan-parts', async (req, res) => {
     // The kind of device asked for (the Offer Template's headers): words any
     // one of which a part's type number or descriptions must hold. Absent,
     // nothing is narrowed — every other caller is answered as before.
-    const kindWords = (Array.isArray(req.body?.kindWords) ? req.body.kindWords : [])
-      .map(w => String(w ?? '').trim()).filter(Boolean).slice(0, 20);
+    const words = list => (Array.isArray(list) ? list : [])
+      .map(w => String(w ?? '').trim()).filter(Boolean).slice(0, 60);
+    const kindWords = words(req.body?.kindWords);
+    // MV or LV: a part that belongs only to the other is left out — one that
+    // says neither (a relay, a meter) is kept for both.
+    const voltage = ['MV', 'LV'].includes(req.body?.voltage) ? req.body.voltage : '';
+    const mvWords = words(req.body?.mvWords);
+    const lvWords = words(req.body?.lvWords);
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSizeNum = Math.min(500, Math.max(1, parseInt(pageSize) || 100));
     const offset = (pageNum - 1) * pageSizeNum;
@@ -793,6 +799,17 @@ app.post('/api/eplan-parts', async (req, res) => {
         return `(typenr LIKE @kind${i} OR description1 LIKE @kind${i} OR description2 LIKE @kind${i} OR description3 LIKE @kind${i})`;
       });
       where.push(`(${any.join(' OR ')})`);
+    }
+
+    // Voltage filter — the same fields, the same way.
+    const anyOf = (list, tag) => list.map((w, i) => {
+      params[`${tag}${i}`] = `%${w}%`;
+      return `typenr LIKE @${tag}${i} OR description1 LIKE @${tag}${i} OR description2 LIKE @${tag}${i} OR description3 LIKE @${tag}${i}`;
+    }).join(' OR ');
+    if (voltage && mvWords.length && lvWords.length) {
+      const mv = `(${anyOf(mvWords, 'mv')})`;
+      const lv = `(${anyOf(lvWords, 'lv')})`;
+      where.push(voltage === 'MV' ? `(${mv} OR NOT ${lv})` : `(${lv} OR NOT ${mv})`);
     }
 
     const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";

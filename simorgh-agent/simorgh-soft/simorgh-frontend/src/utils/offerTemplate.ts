@@ -38,6 +38,29 @@ const KINDS: [RegExp, DeviceKind][] = [
   [/VOLTAGE INDICATOR/i, { label: 'voltage indicators', words: ['voltage indicat', 'capacitive', 'capdis', 'voltage detect'] }],
 ];
 
+/** Every kind there is, for the catalogue's category list. */
+export const DEVICE_KINDS: DeviceKind[] = KINDS.map(([, k]) => k)
+  .filter((k, i, all) => all.findIndex(x => x.label === k.label) === i);
+
+/**
+ * What makes a part medium-voltage only: a kV rating, a vacuum switch, the
+ * Siemens MV families and instrument transformers. Relays, meters, selectors
+ * and test blocks say none of it — they serve both, and are listed under
+ * either, so nothing is left out of MV or of LV.
+ */
+export const MV_WORDS = [
+  '3.6kv', '3.6 kv', '7.2kv', '7.2 kv', '12kv', '12 kv', '17.5kv', '17.5 kv', '24kv', '24 kv',
+  '36kv', '36 kv', '40.5kv', '40.5 kv', 'vacuum', 'medium voltage', 'medium-voltage', 'mittelspannung',
+  '3ah', '3ae', '3af', '3ak', '3tl', '3tm', '3ad', '3cg', '3gd',
+  '4mr', '4mt', '4ma', '4mc', '4mb', '4ms', '4me',
+  'simoprime', 'nxair', 'nxplus', '8da', '8dj', '8dh', 'sion',
+];
+/** And LV-only: the low-voltage switchgear families. */
+export const LV_WORDS = [
+  '3va', '3wa', '3wl', '3vl', '3rv', '3rt', '3ru', '3rb', '3ua', '3nj', '3kd', '3kl', '5sy', '5sl', '5sv',
+  'mccb', 'mcb', 'acb', 'low voltage', 'niederspannung',
+];
+
 /** The kind of device a header holds, or none when the header says nothing. */
 export function kindOfHeader(header: string): DeviceKind | null {
   const h = String(header ?? '').trim();

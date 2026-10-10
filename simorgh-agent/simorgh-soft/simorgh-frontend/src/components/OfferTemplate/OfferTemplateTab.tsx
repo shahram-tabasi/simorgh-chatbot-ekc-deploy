@@ -449,6 +449,7 @@ export const OfferTemplateTab: React.FC<{ onComplete?: () => void }> = ({ onComp
         propertyName={sections.find(s => s.id === picking?.section)?.header ?? ''}
         currentPart={null}
         kind={kindOfHeader(sections.find(s => s.id === picking?.section)?.header ?? '')}
+        voltage={template && LAYOUT_OF[template.type] === 'LV' ? 'LV' : 'MV'}
       />
     </div>
   );
