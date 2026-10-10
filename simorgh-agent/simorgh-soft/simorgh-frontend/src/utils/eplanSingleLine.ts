@@ -1015,6 +1015,11 @@ function synchroSample(tap: Pt, lx: number, downTo: number, outTo: number, to: s
   return { svg: out.join(''), bottom: ay + 12, right: outTo + 10 + Math.max(l1.length, l2.length) * 7.5 * 0.62 };
 }
 
+/** The relay a branch's synchro-check samples come into: the protection
+ *  relay, else the earth-fault relay. */
+const sampleRelay = (b: { instruments: ChainItem[] }): ChainItem | undefined =>
+  b.instruments.find(i => i.id === 'protection-relay') ?? b.instruments.find(i => i.id === 'earth-fault-relay');
+
 /** The source index a VT beside the line is given among the series indices. */
 const SHUNT_SRC = 1000;
 
@@ -1046,6 +1051,9 @@ interface Branch {
   /** An incomer on a board with a coupling: where its VT's synchro-check
    *  sample goes. */
   synchro?: string;
+  /** Voltage samples coming in for synchro-check: an incomer's relay takes the
+   *  other bus's, the coupling's takes each incomer's. */
+  samplesIn?: string[];
 }
 
 function splitBranch(chain_: ChainItem[]): Branch {
@@ -1190,7 +1198,10 @@ function layoutBranch(branch: Branch, top: number): BranchLayout {
     let y0 = start;
     for (let n = 0; n < items.length;) {
       const it = branch.instruments[items[n]];
-      if (!sideFed(dk(it))) { at.push(y0); y0 += instrStep(it); n++; continue; }
+      // Room under the relay for the synchro-check samples coming into it.
+      const room = (i: ChainItem) =>
+        (branch.samplesIn?.length && i === sampleRelay(branch) ? branch.samplesIn.length * 11 + 6 : 0);
+      if (!sideFed(dk(it))) { at.push(y0); y0 += instrStep(it) + room(it); n++; continue; }
       // A row of side-fed meters in series: one level, their labels above.
       let m = n;
       while (m < items.length && sideFed(dk(branch.instruments[items[m]]))) m++;
@@ -1198,7 +1209,7 @@ function layoutBranch(branch: Branch, top: number): BranchLayout {
       const lift = Math.max(...row.map(r => labelLineCount(r, ROW_WRAP))) * TEXT.tag * 1.15 + 4;
       const h = Math.max(CELL, ...row.map(r => symbolHeight(dk(r))));
       row.forEach(() => at.push(y0 + lift));
-      y0 += lift + h + 10 + (row.some(r => sendsTo(r)) ? 14 : 0);
+      y0 += lift + h + 10 + (row.some(r => sendsTo(r)) ? 14 : 0) + Math.max(0, ...row.map(room));
       n = m;
     }
     groups.push({ source, items, ys: at });
@@ -1653,6 +1664,36 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
     });
   });
 
+  // The synchro-check samples coming in: up into the relay from below, each
+  // with what it is — or, with no relay on the feeder, into the breaker.
+  if (branch.samplesIn?.length) {
+    const rel = sampleRelay(branch);
+    let at: { x: number; y: number; w: number } | null = null;
+    groups.forEach(g => g.items.forEach((k, n) => {
+      if (branch.instruments[k] === rel) at = { x: ix, y: g.ys[n], w: symbolRight(dk(rel!)) };
+    }));
+    const hit = at as { x: number; y: number; w: number } | null;
+    if (hit) {
+      const bottom = hit.y + symbolHeight(dk(rel!));
+      branch.samplesIn.forEach((t, j) => {
+        const vx = hit.x + hit.w - 4 - j * 11;
+        const ly = bottom + 8 + j * 11;
+        out.push(line(vx, ly, vx, bottom + 7, 1, '4 3'), arrowUp(vx, bottom));
+        out.push(line(vx, ly, ix + hit.w + 34, ly, 1, '4 3'));
+        out.push(`<text x="${ix + hit.w + 38}" y="${ly + 3}" font-size="7.5" fill="#111">${esc(t.toUpperCase())}</text>`);
+      });
+    } else if (branch.series.length) {
+      // Into the breaker's side, from the left.
+      const by = ys[0] + HALF;
+      branch.samplesIn.forEach((t, j) => {
+        const ly = by - 6 + j * 11;
+        const ex = x - symbolLeft(dk(branch.series[0])) - 2;
+        out.push(line(ex - 40, ly, ex - 7, ly, 1, '4 3'), arrowRight(ex, ly));
+        out.push(`<text x="${ex - 44}" y="${ly + 3}" font-size="7.5" text-anchor="end" fill="#111">${esc(t.toUpperCase())}</text>`);
+      });
+    }
+  }
+
   // The synchro-check sample off the VT's secondary, its own MCB, out to the
   // coupling's relay — under everything hung on the column.
   if (branch.synchro && vtAt >= 0) {
@@ -1743,6 +1784,9 @@ export interface MvCellOptions {
   /** An incomer on a board with a coupling: its VT sends a voltage sample to
    *  the coupling's synchro-check relay — this is where it goes. */
   synchro?: string;
+  /** Voltage samples coming in for synchro-check, into the relay (the
+   *  breaker when there is none). */
+  samplesIn?: string[];
 }
 
 export const mvOptionsOf = (template?: TemplateLike): MvCellOptions => ({
@@ -2508,8 +2552,16 @@ function drawMvCellLines(
   // out to the left of everything on the cell, and each status drops from it
   // to the foot of the cell with its text along it — the bundle of dashed
   // lines down the left of the office's SIMOPRIME sheets.
-  const swSignals = (sw?.statuses ?? [])
-    .map((t, k) => ({ text: t.trim(), up: sw?.sld?.statusDirs?.[k] === 'up' })).filter(sg => sg.text);
+  // Whether the cell has a relay to take the synchro-check samples; with
+  // none, they come up into the breaker.
+  const hasRelay = instruments.some(i => i.id === 'protection-relay' || i.id === 'earth-fault-relay')
+    || answers.relayMode === 'functions'
+    || (ct ? coresOf(answers, false, false, ct).some(c => c.purpose === 'protection') : false);
+  const swSignals = [
+    ...(sw?.statuses ?? [])
+      .map((t, k) => ({ text: t.trim(), up: sw?.sld?.statusDirs?.[k] === 'up' })).filter(sg => sg.text),
+    ...(hasRelay ? [] : (opts.samplesIn ?? []).map(t => ({ text: t, up: true }))),
+  ];
   const swStatuses = swSignals.map(sg => sg.text);
   const swStatusUp = swSignals.map(sg => sg.up);
   if (sw && switchY >= 0 && swStatuses.length) {
@@ -2865,7 +2917,9 @@ function drawMvCellLines(
     // runs down to the foot of the cell with its text along it. The first
     // goes furthest out and the later ones turn lower and nearer in, so no
     // two of them cross.
-    const signals = signalsOf(item);
+    // The synchro-check samples come in from below, arrows up into it.
+    const signals = [...signalsOf(item),
+      ...(item === (relay ?? item) ? (opts.samplesIn ?? []).map(t => ({ text: t, up: true })) : [])];
     signals.forEach((t, k) => {
       const sx_ = Math.max(relayBox.cx + 8, relayBox.right - 6 - k * 7);
       const turn = relayBox.bottom + 6 + k * 6;
@@ -3234,10 +3288,28 @@ function drawSheet(o: {
     })()
     : '';
   const synchroOf = (l: DeviceTableRow) => (synchroTo && roleOf(l) === 'incoming' ? synchroTo : undefined);
+  // What comes in for synchro-check: an incomer takes the other bus's
+  // voltage, the coupling takes each incomer's.
+  const allRows = o.equipment.devices ?? [];
+  const busOf = (l: DeviceTableRow) => String(l.busSection ?? '').trim().toUpperCase();
+  const samplesOf = (l: DeviceTableRow): string[] | undefined => {
+    if (!couplingRow) return undefined;
+    const role = roleOf(l);
+    if (role === 'incoming') {
+      const other = allRows.map(busOf).find(b => b && b !== busOf(l));
+      return [`VOLTAGE SAMPLE FROM BUS ${other || 'B'}`];
+    }
+    if (role === 'coupling') {
+      const inc = allRows.filter(r => roleOf(r) === 'incoming');
+      return inc.map((r, k) => `VOLTAGE SAMPLE FROM ${
+        String(r.description ?? '').trim().toUpperCase() || `INCOMING ${busOf(r) || String.fromCharCode(65 + k)}`}`);
+    }
+    return undefined;
+  };
   const mvOf = (line_: DeviceTableRow, page: number) => {
     const template = line_.templateId ? o.templates.get(line_.templateId) : undefined;
     const chain = chainFor(line_, o.templates, o.order, page, o.symbols, o.equipment.type);
-    const opts = { ...mvOptionsOf(template), synchro: synchroOf(line_) };
+    const opts = { ...mvOptionsOf(template), synchro: synchroOf(line_), samplesIn: samplesOf(line_) };
     return { chain, opts, size: measureMvCell(chain, opts) };
   };
   const mvCells = isMv ? o.lines.map((line_, i) => mvOf(line_, o.firstIndex + i + 1)) : [];
@@ -3254,6 +3326,7 @@ function drawSheet(o: {
     const opts: MvCellOptions = {
       answers: template.singleLine, mechanical: template.mechanical,
       family: '', cellType: '', sub: '', lv: true, lvFamily, synchro: synchroOf(line_),
+      samplesIn: samplesOf(line_),
     };
     return {
       chain, opts, size: measureMvCell(chain, opts),
@@ -3267,6 +3340,7 @@ function drawSheet(o: {
     ...splitBranch(chainFor(
       line_, o.templates, o.order, o.firstIndex + i + 1, o.symbols, o.equipment.type)),
     synchro: synchroOf(line_),
+    samplesIn: samplesOf(line_),
   }));
   const supplyAll = o.supply
     ? splitBranch(chainFor(o.supply, o.templates, o.order, 0, o.symbols, o.equipment.type))
@@ -3381,10 +3455,18 @@ function drawSheet(o: {
 
   const chainTop = busY + 26;
   /** How far down a feeder's own drawing reaches below where it starts. */
+  /** A coupling or a riser: its line turns across under the cell into the
+   *  bar connection, so nothing it hangs beside it may reach that low. */
+  const barEnd = (i: number) => {
+    const r = roleOf(o.lines[i]);
+    return r === 'coupling' || r === 'riser'
+      || (isMv && ['coupling', 'riser'].includes(mvEndOf(mvCells[i].opts)));
+  };
   const heightOf = (i: number) => {
-    if (isMv) return mvCells[i].size.bottom;
+    if (isMv) return barEnd(i) ? Math.max(mvCells[i].size.bottom, mvCells[i].size.height - 30) : mvCells[i].size.bottom;
     const c = lvCells[i];
-    return c ? c.size.bottom + 2 * c.plug : branchHeight(branches[i]);
+    if (!c) return branchHeight(branches[i]);
+    return (barEnd(i) ? Math.max(c.size.bottom, c.size.height - 30) : c.size.bottom) + 2 * c.plug;
   };
   // **A sub-bus.** A dot in the feeder number says where a feeder hangs: L1.1,
   // L1.2 … are on a sub-busbar that L1 feeds, not on the main bus. L1 runs
@@ -3600,7 +3682,7 @@ function drawSheet(o: {
       // plug-in contact, the cell, the plug-in again, then the load.
       if (lv.phases) out.push(phaseTick(x, chainTop - 9, lv.phases));
       if (lv.plug) out.push(drawBlock('plug-in', x, chainTop));
-      const cell = drawMvCell(lv.chain, lv.opts, x, chainTop + lv.plug, kids.length ? subBusY(i) - 6 : loadY + 36);
+      const cell = drawMvCell(lv.chain, lv.opts, x, chainTop + lv.plug, kids.length ? subBusY(i) - 6 : barEnd(i) ? loadY + 4 : loadY + 36);
       out.push(cell.svg);
       let b = Math.max(cell.bottom, chainTop + lv.plug);
       if (lv.plug) { out.push(drawBlock('plug-in', x, b)); b += lv.plug; }
@@ -3609,7 +3691,7 @@ function drawSheet(o: {
       return;
     }
     const drawn = isMv
-      ? drawMvCell(mvCells[i].chain, mvCells[i].opts, x, chainTop, kids.length ? subBusY(i) - 6 : loadY + 36)
+      ? drawMvCell(mvCells[i].chain, mvCells[i].opts, x, chainTop, kids.length ? subBusY(i) - 6 : barEnd(i) ? loadY + 4 : loadY + 36)
       : drawBranch(branches[i], x, chainTop);
     out.push(drawn.svg);
     if (kids.length) { subBus(drawn.bottom); return; }

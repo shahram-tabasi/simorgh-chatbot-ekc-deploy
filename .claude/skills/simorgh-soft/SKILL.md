@@ -316,6 +316,13 @@ incomer when the board has a coupling (`synchroOf`, text from the coupling
 row's description) — the synchro-check sample: its own MCB off the VT's
 secondary and an arrow "VOLTAGE SAMPLE FOR SYNCHRO CHECK RELAY TO COUPLING …"
 (`synchroSample`; `Branch.synchro`, `MvCellOptions.synchro`).
+The receiving side (`samplesOf` → `samplesIn`): an incomer's relay takes
+"VOLTAGE SAMPLE FROM BUS <other section>", the coupling's relay one per
+incomer ("…FROM <incomer's description>"), arrows up into the relay (branch:
+under it, `sampleRelay`; cell: the relay's signals with `up: true`); with no
+relay, into the breaker (cell: the breaker's signal lanes). A coupling/riser
+cell's height counts what hangs under its line (`barEnd`), and its signals
+stop above the bar connection.
 
 **Each part answers for itself** (`part.sld`, asked in `PartQuestionsDialog`
 when the part is entered and from its edit button in the parts list). A later
