@@ -561,6 +561,14 @@ neutral part (relay, meter) is kept under MV unless it names an LV family.
 Codes and short words match at a word start only ("3AH" ≠ "23Ah"). The route
 runs count, page and (10-min cached) brand list in parallel; the dialog sends
 one debounced search per change and drops late answers (`lastAsked`).
+Product groups: the offer dialog also has EPLAN's own product groups
+(tblPart.productgroup, names in `EPLAN_GROUPS` from EPLAN's XML export docs:
+6 protection devices, 13 transformers, 23 power switchgear…), a ticked list
+(`GroupSelect`) fed by `GET /api/eplan-parts/groups` (counts, 10-min cache, SQL
+and Access), sent as `productGroups` (`productgroup IN (…)`). A `DeviceKind`'s
+`groups` is its default (CT/PT/CBCT → 13, breakers → 6+23, contactors → 2+23);
+a kind without groups searches every group. "MV"/"LV" as whole words in a
+description count as MV/LV proof.
 Create Template's dialog is unchanged.
 **Labels**: `utils/officeLabels.ts` is the office LABEL sheet (Q, QW for a
 SIMOPRIME-WORLD truck cell, K, F1, F30…, FB, FA, B1–20 CT, B21–40 VT,

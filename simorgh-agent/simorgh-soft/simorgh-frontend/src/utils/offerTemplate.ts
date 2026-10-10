@@ -11,20 +11,26 @@
 
 import type { OfferTemplatePart } from '../types/project';
 
-export interface DeviceKind { label: string; words: string[] }
+/**
+ * A kind of device: the words its parts say, and the EPLAN product groups it
+ * is filed under (tblPart.productgroup, as EPLAN's parts tree shows them).
+ * No groups: the kind is found in every group, so nothing is left out.
+ */
+export interface DeviceKind { label: string; words: string[]; groups?: number[] }
 
 const BREAKER: DeviceKind = {
   label: 'breakers',
   words: ['circuit breaker', 'circuit-breaker', 'leistungsschalter', 'mccb', 'acb', 'vcb', 'vacuum',
     'breaker', '3va', '3wa', '3wl', '3vl', '3ah', '3ae', '3rv'],
+  groups: [6, 23],
 };
 const KINDS: [RegExp, DeviceKind][] = [
   [/^(CB ORDER|VCB OR VC\/FUSE|BREAKER TYPE)$/i, BREAKER],
-  [/CONTACTOR/i, { label: 'contactors', words: ['contactor', 'schütz', 'schutz', '3rt', '3tf', '3tl'] }],
+  [/CONTACTOR/i, { label: 'contactors', words: ['contactor', 'schütz', 'schutz', '3rt', '3tf', '3tl'], groups: [2, 23] }],
   [/OVER ?LOAD/i, { label: 'overload relays', words: ['overload', 'thermal', '3ru', '3rb', '3ua'] }],
-  [/CORE ?BALANCE/i, { label: 'core-balance CTs', words: ['core balance', 'core-balance', 'summation', 'ring type', 'residual current transformer'] }],
-  [/^CT RATING$/i, { label: 'current transformers', words: ['current transformer', 'stromwandler', '4nc'] }],
-  [/^PT RATING$/i, { label: 'voltage transformers', words: ['voltage transformer', 'potential transformer', 'spannungswandler', '4mr', '4mt'] }],
+  [/CORE ?BALANCE/i, { label: 'core-balance CTs', words: ['core balance', 'core-balance', 'corebalance', 'summation', 'ring type', 'residual current transformer', 'cbct'], groups: [13] }],
+  [/^CT RATING$/i, { label: 'current transformers', words: ['current transformer', 'stromwandler', '4nc'], groups: [13] }],
+  [/^PT RATING$/i, { label: 'voltage transformers', words: ['voltage transformer', 'potential transformer', 'spannungswandler', '4mr', '4mt'], groups: [13] }],
   [/^AMMETER$/i, { label: 'ammeters', words: ['ammeter', 'amperemeter', 'current meter'] }],
   [/^VOLTMETER$/i, { label: 'voltmeters', words: ['voltmeter', 'voltage meter'] }],
   [/AMMETER SELECTOR|VOLTMETER SELECTOR|SELECTOR/i, { label: 'selector switches', words: ['selector', 'umschalter', 'wahlschalter'] }],
@@ -37,6 +43,20 @@ const KINDS: [RegExp, DeviceKind][] = [
   [/SURGE/i, { label: 'surge arresters', words: ['arrester', 'surge', 'spd', 'überspannung'] }],
   [/VOLTAGE INDICATOR/i, { label: 'voltage indicators', words: ['voltage indicat', 'capacitive', 'capdis', 'voltage detect'] }],
 ];
+
+/** EPLAN's electrical product groups (tblPart.productgroup), by number. */
+export const EPLAN_GROUPS: Record<number, string> = {
+  0: 'Undefined', 1: 'General', 2: 'Relays, contactors', 3: 'Terminals', 4: 'Plugs', 5: 'Converters',
+  6: 'Protection devices', 7: 'Semiconductors', 8: 'Signal devices', 9: 'Motors',
+  10: 'Measuring instruments, test devices', 11: 'Resistors', 12: 'Sensor, switch, and pushbutton',
+  13: 'Transformers', 14: 'Modulators', 15: 'Electrically-operated mechanical devices',
+  16: 'Electrical engineering - special items', 17: 'Miscellaneous', 18: 'Capacitors', 19: 'Logic items',
+  20: 'Voltage source and generator', 21: 'Inductors', 22: 'Amplifiers, controllers', 23: 'Power switchgear',
+  24: 'Terminators, filters', 25: 'Transmission paths', 26: 'PLC', 29: 'Cables', 30: 'Power units and plants',
+  47: 'Accessories', 49: 'Housing', 53: 'Cable ducts', 54: 'Busbars', 55: 'Enclosure', 101: 'Mounting panels',
+  114: 'Accessories', 115: 'Signal devices',
+};
+export const groupName = (g: number): string => EPLAN_GROUPS[g] ?? `Group ${g}`;
 
 /** Every kind there is, for the catalogue's category list. */
 export const DEVICE_KINDS: DeviceKind[] = KINDS.map(([, k]) => k)

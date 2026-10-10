@@ -8,7 +8,7 @@ import { PartCell } from './PartCell';
 import { TemplateGraphicEditor } from '../SimorghDraw/TemplateGraphicEditor';
 import { EplanSymbolMap, mvCellType, mvFamily, symbolForPart } from '../../utils/eplanSingleLine';
 import { officeLabel } from '../../utils/officeLabels';
-import { DEVICE_KINDS, STRICT_VOLTAGE_KINDS } from '../../utils/offerTemplate';
+import { DEVICE_KINDS, STRICT_VOLTAGE_KINDS, groupName } from '../../utils/offerTemplate';
 import { stripLocaleTags } from '../../utils/tierEquipmentMatrix';
 import { PartQuestionsDialog } from './PartQuestionsDialog';
 import { TemplateSingleLine, TemplateMechanical, PartSingleLine } from '../../types/project';
@@ -114,7 +114,7 @@ interface PartSelectionDialogProps {
    * template's voltage, as the defaults of the category and voltage lists.
    * Absent (Create Template), the dialog is as it always was.
    */
-  kind?: { label: string; words: string[] } | null;
+  kind?: { label: string; words: string[]; groups?: number[] } | null;
   voltage?: 'LV' | 'MV';
 }
 
@@ -158,6 +158,62 @@ const SearchSelect: React.FC<{
   );
 };
 
+/** EPLAN's product groups the database holds, with how many parts each —
+ *  asked once a session (the server keeps it ten minutes too). */
+let groupList: Promise<{ group: number; count: number }[]> | null = null;
+const loadGroups = () => {
+  groupList ??= fetch(`${(import.meta as { env?: Record<string, string> }).env?.VITE_API_URL || ''}/api/eplan-parts/groups`)
+    .then(r => r.json())
+    .then(r => (r.success ? r.groups as { group: number; count: number }[] : []))
+    .catch(() => { groupList = null; return []; });
+  return groupList;
+};
+
+/** EPLAN's product groups as a list to tick — none ticked is every group. */
+const GroupSelect: React.FC<{
+  value: number[]; options: { group: number; count: number }[]; onChange: (v: number[]) => void; className?: string;
+}> = ({ value, options, onChange, className }) => {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const box = React.useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [open]);
+  const sorted = [...options].sort((a, b) => groupName(a.group).localeCompare(groupName(b.group)));
+  const shown = sorted.filter(o => groupName(o.group).toLowerCase().includes(q.trim().toLowerCase()));
+  const toggle = (g: number) => onChange(value.includes(g) ? value.filter(x => x !== g) : [...value, g]);
+  const text = value.length === 0 ? 'All product groups' : value.map(groupName).join(', ');
+  return (
+    <div ref={box} className={`relative ${className ?? ''}`}>
+      <button type="button" onClick={() => setOpen(o => !o)} title={text}
+        className="w-full py-2 px-3 border border-gray-300 rounded-lg bg-white text-start text-sm truncate focus:outline-none focus:ring-2 focus:ring-blue-500">
+        {text} <span className="float-right text-gray-500">▾</span>
+      </button>
+      {open && (
+        <div className="absolute z-10 mt-1 w-full min-w-[18rem] bg-white border border-gray-300 rounded-lg shadow-lg">
+          <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search…"
+            className="w-full px-3 py-2 text-sm border-b border-gray-200 rounded-t-lg focus:outline-none" />
+          <div className="max-h-72 overflow-y-auto text-sm">
+            <button type="button" onClick={() => onChange([])}
+              className={`block w-full text-start px-3 py-1.5 hover:bg-gray-100 ${value.length === 0 ? 'font-semibold text-blue-700' : 'text-gray-800'}`}>All product groups</button>
+            {shown.map(o => (
+              <label key={o.group} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-100 cursor-pointer text-gray-800">
+                <input type="checkbox" checked={value.includes(o.group)} onChange={() => toggle(o.group)} />
+                <span className="flex-1">{groupName(o.group)}</span>
+                <span className="text-gray-500 text-xs">{o.count.toLocaleString()}</span>
+              </label>
+            ))}
+            {shown.length === 0 && <p className="px-3 py-2 text-gray-500">Nothing matches.</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // دیالوگ انتخاب پارت از SQL Server - با صفحه‌بندی کامل
 export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
   isOpen,
@@ -174,6 +230,18 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
   const [kindLabel, setKindLabel] = useState(kind?.label ?? '');
   const [volt, setVolt] = useState<'' | 'LV' | 'MV'>(voltage ?? '');
   const kindWords = offerMode ? DEVICE_KINDS.find(k => k.label === kindLabel)?.words : undefined;
+  // EPLAN's product groups, as its parts tree files them: the kind's own by
+  // default (transformers for a CT), any others ticked by hand.
+  const [groups, setGroups] = useState<number[]>(kind?.groups ?? []);
+  const [groupOptions, setGroupOptions] = useState<{ group: number; count: number }[]>([]);
+  const chooseKind = (label: string) => {
+    setKindLabel(label);
+    setGroups(DEVICE_KINDS.find(k => k.label === label)?.groups ?? []);
+  };
+  useEffect(() => {
+    if (isOpen && offerMode) loadGroups().then(setGroupOptions);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
   const [parts, setParts] = useState<any[]>([]);
   const [selectedPart, setSelectedPart] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -196,7 +264,7 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
 
   // Each opening starts from the header's own kind and the template's voltage.
   useEffect(() => {
-    if (isOpen) { setKindLabel(kind?.label ?? ''); setVolt(voltage ?? ''); }
+    if (isOpen) { setKindLabel(kind?.label ?? ''); setGroups(kind?.groups ?? []); setVolt(voltage ?? ''); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, kind?.label, voltage]);
 
@@ -211,7 +279,7 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
     }, 120);
     return () => window.clearTimeout(wait);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, kindLabel, volt, selectedManufacturer]);
+  }, [isOpen, kindLabel, volt, selectedManufacturer, groups.join(',')]);
 
   // Only the latest search is shown: an earlier one that answers late is dropped.
   const lastAsked = React.useRef(0);
@@ -228,6 +296,7 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
           searchTerm: searchTerm || undefined,
           manufacturer: selectedManufacturer || undefined,
           ...(kindWords ? { kindWords } : {}),
+          ...(offerMode && groups.length ? { productGroups: groups } : {}),
           ...(offerMode && volt ? { voltage: volt, strict: STRICT_VOLTAGE_KINDS.includes(kindLabel) } : {}),
           page: page,
           pageSize: PAGE_SIZE
@@ -347,8 +416,9 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
                   <option value="LV">LV</option>
                   <option value="MV">MV</option>
                 </select>
-                <SearchSelect className="w-52" value={kindLabel} allLabel="All equipment"
-                  options={DEVICE_KINDS.map(k => k.label)} onChange={setKindLabel} />
+                <GroupSelect className="w-52" value={groups} options={groupOptions} onChange={setGroups} />
+                <SearchSelect className="w-48" value={kindLabel} allLabel="All equipment"
+                  options={DEVICE_KINDS.map(k => k.label)} onChange={chooseKind} />
                 <SearchSelect className="w-48" value={selectedManufacturer} allLabel="All Manufacturers"
                   options={manufacturers} onChange={setSelectedManufacturer} />
               </>

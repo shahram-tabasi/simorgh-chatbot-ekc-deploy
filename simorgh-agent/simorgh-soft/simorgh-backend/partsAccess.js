@@ -82,9 +82,11 @@ function filterParts(rows, search, man, kindWords = [], volt = {}) {
   const kinds = (Array.isArray(kindWords) ? kindWords : [])
     .map(w => text(w).trim().toLowerCase()).filter(Boolean);
   const voltage = ['MV', 'LV'].includes(volt.voltage) ? volt.voltage : '';
+  const groups = (Array.isArray(volt.productGroups) ? volt.productGroups : []).map(Number).filter(Number.isInteger);
   return rows.filter(r => {
     if (maker && text(r.manufacturer) !== maker) return false;
     if (needle && !SEARCH_FIELDS.some(f => text(r[f]).toLowerCase().includes(needle))) return false;
+    if (groups.length && !groups.includes(Number(r.productgroup ?? 0) || 0)) return false;
     if (!kinds.length && !voltage) return true;
     const t = matchText(r);
     return (!kinds.length || kinds.some(k => hasWord(t, k))) && voltageOk(t, voltage, volt.strict === true);
@@ -109,10 +111,10 @@ export function registerAccessPartsRoutes(app, transformPartToFrontend) {
 
   app.post('/api/eplan-parts', onlyInAccessMode((req, res) => {
     const { rows, manufacturers } = loadAccessParts();
-    const { searchTerm = '', manufacturer = '', page = 1, pageSize = 100, kindWords = [], voltage = '', strict = false } = req.body || {};
+    const { searchTerm = '', manufacturer = '', page = 1, pageSize = 100, kindWords = [], voltage = '', strict = false, productGroups = [] } = req.body || {};
     const pageNum = Math.max(1, parseInt(page) || 1);
     const size = Math.min(500, Math.max(1, parseInt(pageSize) || 100));
-    const hits = filterParts(rows, searchTerm, manufacturer, kindWords, { voltage, strict });
+    const hits = filterParts(rows, searchTerm, manufacturer, kindWords, { voltage, strict, productGroups });
     res.json({
       success: true,
       data: hits.slice((pageNum - 1) * size, pageNum * size).map(transformPartToFrontend),
@@ -122,6 +124,17 @@ export function registerAccessPartsRoutes(app, transformPartToFrontend) {
       pageSize: size,
       totalPages: Math.ceil(hits.length / size) || 1,
     });
+  }));
+
+  // How many parts each EPLAN product group holds — see the SQL Server route.
+  app.get('/api/eplan-parts/groups', onlyInAccessMode((req, res) => {
+    const { rows } = loadAccessParts();
+    const count = new Map();
+    for (const r of rows) {
+      const g = Number(r.productgroup ?? 0) || 0;
+      count.set(g, (count.get(g) ?? 0) + 1);
+    }
+    res.json({ success: true, groups: [...count].map(([group, n]) => ({ group, count: n })) });
   }));
 
   // The description (note) of parts by number — see the SQL Server route.

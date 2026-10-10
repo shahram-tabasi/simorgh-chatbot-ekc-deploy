@@ -735,6 +735,32 @@ app.post('/api/eplan-parts/notes', async (req, res) => {
   }
 });
 
+// How many parts each EPLAN product group holds, kept for ten minutes — the
+// offer catalogue's group list shows only the groups the database has.
+let groupCache = { at: 0, list: [] };
+app.get('/api/eplan-parts/groups', async (req, res) => {
+  try {
+    if (!groupCache.list.length || Date.now() - groupCache.at > 10 * 60 * 1000) {
+      const sqlDb = await connectToSqlServer();
+      const r = await sqlDb.request().query(
+        'SELECT productgroup AS g, COUNT(*) AS n FROM tblPart WITH (NOLOCK) GROUP BY productgroup');
+      groupCache = {
+        at: Date.now(),
+        list: r.recordset.map(x => ({ group: Number(x.g ?? 0) || 0, count: x.n }))
+          .reduce((acc, x) => {
+            const same = acc.find(y => y.group === x.group);
+            if (same) same.count += x.count; else acc.push(x);
+            return acc;
+          }, []),
+      };
+    }
+    res.json({ success: true, groups: groupCache.list });
+  } catch (err) {
+    console.error('❌ /api/eplan-parts/groups:', err.message);
+    res.status(500).json({ success: false, error: err.message, groups: [] });
+  }
+});
+
 // The brands in tblPart, kept for ten minutes — every first page asks.
 let manCache = { at: 0, list: [] };
 async function sqlManufacturers(sqlDb) {
@@ -776,6 +802,10 @@ app.post('/api/eplan-parts', async (req, res) => {
       .map(w => String(w ?? '').trim()).filter(Boolean).slice(0, 60);
     const voltage = ['MV', 'LV'].includes(req.body?.voltage) ? req.body.voltage : '';
     const strict = req.body?.strict === true;
+    // EPLAN's own product groups (tblPart.productgroup: 6 protection devices,
+    // 13 transformers, 23 power switchgear …), as EPLAN's parts tree shows them.
+    const productGroups = (Array.isArray(req.body?.productGroups) ? req.body.productGroups : [])
+      .map(Number).filter(n => Number.isInteger(n) && n >= 0 && n < 1000).slice(0, 40);
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSizeNum = Math.min(500, Math.max(1, parseInt(pageSize) || 100));
     const offset = (pageNum - 1) * pageSizeNum;
@@ -807,6 +837,8 @@ app.post('/api/eplan-parts', async (req, res) => {
       where.push(`manufacturer = @man`);
       params.man = manufacturer;
     }
+
+    if (productGroups.length) where.push(`productgroup IN (${productGroups.join(', ')})`);
 
     // Kind and voltage — matched in one text per row (partsMatch.js).
     const matchWhere = sqlFilter({ kindWords, voltage, strict }, params);

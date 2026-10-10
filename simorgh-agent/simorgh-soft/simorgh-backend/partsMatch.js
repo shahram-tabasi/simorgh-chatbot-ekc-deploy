@@ -10,7 +10,7 @@
 //   * a longer word is matched anywhere, so German compounds still count
 //     ("Kompaktleistungsschalter").
 //
-// MV is what says so: the Siemens MV families (3AE, 3AH, 3TL, 4MR…), "medium
+// MV is what says so: the word "MV", the Siemens MV families (3AE, 3AH, 3TL, 4MR…), "medium
 // voltage", or a rating above 1 kV (12 kV, 3.6kV, 17.5 kV — never kVA, and
 // never 0.4 kV or 0,6/1 kV). LV is everything that is not MV.
 //
@@ -31,6 +31,13 @@ const LV_FAMILIES = [
 
 /** Matched at the start of a word: a family code, or a short word. */
 const atWordStart = w => /\d/.test(w) || w.length <= 4;
+
+// "MV" and "LV" as words of their own, as EPLAN's parts say it — "MV Current
+// Transformer", "Corebalance CT (MV)" — never the start of "MVA" or "MVAr".
+const MV_WHOLE = ['mv'];
+const LV_WHOLE = ['lv'];
+const hasWhole = (t, w) => new RegExp(`[^0-9a-z]${w}[^0-9a-z]`).test(t);
+const likeWhole = w => `%[^0-9a-z]${w}[^0-9a-z]%`;
 
 /** The text a part is matched in: type number and descriptions, lower case,
  *  with a space at each end so a word at the edge has a neighbour too. */
@@ -54,8 +61,8 @@ export function hasMvRating(t) {
   return false;
 }
 
-export const isMv = t => hasMvRating(t) || MV_FAMILIES.some(w => hasWord(t, w));
-export const isLvFamily = t => LV_FAMILIES.some(w => hasWord(t, w));
+export const isMv = t => hasMvRating(t) || MV_WHOLE.some(w => hasWhole(t, w)) || MV_FAMILIES.some(w => hasWord(t, w));
+export const isLvFamily = t => LV_WHOLE.some(w => hasWhole(t, w)) || LV_FAMILIES.some(w => hasWord(t, w));
 
 /** Is the part in this voltage? `strict`: a switching device, which must say MV. */
 export function voltageOk(t, voltage, strict) {
@@ -97,10 +104,10 @@ export function sqlFilter({ kindWords = [], voltage = '', strict = false }, para
   const kinds = kindWords.map(w => String(w ?? '').trim()).filter(Boolean);
   if (kinds.length) where.push(anyOf(kinds.map(likeOf)));
   if (voltage === 'MV' || voltage === 'LV') {
-    const mv = anyOf([...KV_LIKE, ...MV_FAMILIES.map(likeOf)]);
+    const mv = anyOf([...KV_LIKE, ...MV_WHOLE.map(likeWhole), ...MV_FAMILIES.map(likeOf)]);
     if (voltage === 'LV') where.push(`NOT ${mv}`);
     else if (strict) where.push(mv);
-    else where.push(`(${mv} OR NOT ${anyOf(LV_FAMILIES.map(likeOf))})`);
+    else where.push(`(${mv} OR NOT ${anyOf([...LV_WHOLE.map(likeWhole), ...LV_FAMILIES.map(likeOf)])})`);
   }
   return where;
 }
