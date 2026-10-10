@@ -1176,8 +1176,9 @@ const MainApp: React.FC = () => {
       component: <SendToEplanTab />
     },
     {
-      // At the end so every tab before it keeps its number — the assistant
-      // and the screens that jump between tabs go by number.
+      // Last in the list so every tab before it keeps its number — the
+      // assistant and the screens that jump between tabs go by number — and
+      // shown beside Create Template by TAB_ORDER.
       id: 8,
       title: `Offer Template`,
       fill: true,
@@ -1406,7 +1407,9 @@ const MainApp: React.FC = () => {
               canRaiseRevision={isTpmsMastered}
             />
             <div className="flex-1 min-w-0">
-              <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={requestTab} />
+              {/* Offer Template is shown beside Create Template, the template it
+                  is the offer version of; it keeps its own number (8). */}
+              <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={requestTab} order={TAB_ORDER} />
             </div>
           </div>
         </div>
@@ -1655,6 +1658,8 @@ const MainApp: React.FC = () => {
 };
 
 // Device Selection's position in the tab strip.
+/** The order the tabs are shown in; each keeps its index everywhere else. */
+const TAB_ORDER = [0, 1, 8, 2, 3, 4, 5, 6, 7];
 const DEVICE_SELECTION_TAB = 2;
 const SIMORGH_DRAW_TAB = 4;
 

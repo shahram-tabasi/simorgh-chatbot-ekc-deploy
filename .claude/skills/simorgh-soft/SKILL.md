@@ -515,8 +515,11 @@ office's list of new symbols. The server keeps each terminal's `dir`.
 
 
 
-**Offer Template tab** (`components/OfferTemplate/OfferTemplateTab.tsx`, last
-in the tab row — tab 8 — so no earlier tab's number moved): the offer version
+**Offer Template tab** (`components/OfferTemplate/OfferTemplateTab.tsx`): index
+8 in `tabs` — last, so no earlier tab's number moved (the assistant and the
+screens jump by number) — but *shown* third, beside Create Template, by
+`TAB_ORDER` in App.tsx (`TabNavigation`'s `order` prop: display order only,
+step circles count in display order). The offer version
 of each Create Template template, from the same tree. Headers are a side list
 (the tier's property headers without SPARE, plus custom ones) dragged into the
 page; each header gets general parts (description, optional part number /

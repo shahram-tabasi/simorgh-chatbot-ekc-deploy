@@ -9,6 +9,12 @@ interface TabNavigationProps {
   tabs: Tab[];
   activeTab: number;
   onTabChange: (tabId: number) => void;
+  /**
+   * The order the tabs are shown in, as indices into `tabs`. A tab keeps its
+   * index — the number the rest of the app goes to it by — wherever it is
+   * shown; absent, they are shown as they are listed.
+   */
+  order?: number[];
 }
 
 const SIZE = 40;
@@ -86,15 +92,18 @@ const StepCircle: React.FC<{ n: number; active: boolean; endPoint: EndPoint }> =
 export const TabNavigation: React.FC<TabNavigationProps> = ({
   tabs,
   activeTab,
-  onTabChange
+  onTabChange,
+  order,
 }) => {
+  const shown = (order && order.length === tabs.length ? order : tabs.map((_, i) => i))
+    .map(i => ({ tab: tabs[i], index: i }));
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const underlineRefs = useRef<(HTMLSpanElement | null)[]>([]);
   const [endPoints, setEndPoints] = useState<EndPoint[]>([]);
 
   useLayoutEffect(() => {
     const measure = () => {
-      setEndPoints(tabs.map((_, i) => {
+      setEndPoints(shown.map((_, i) => {
         const btn = buttonRefs.current[i];
         const underline = underlineRefs.current[i];
         if (!btn || !underline) return FALLBACK_END;
@@ -108,23 +117,23 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [tabs]);
+  }, [tabs, order]);
 
   return (
     <div className="flex items-center [justify-content:safe_center] py-4 overflow-x-auto">
-      {tabs.map((tab, index) => {
+      {shown.map(({ tab, index }, at) => {
         const isActive = index === activeTab;
-        const isLast = index === tabs.length - 1;
+        const isLast = at === shown.length - 1;
         const color = isActive ? 'var(--step-active)' : 'var(--step-idle)';
         return (
           <button
             key={tab.id}
-            ref={el => { buttonRefs.current[index] = el; }}
+            ref={el => { buttonRefs.current[at] = el; }}
             type="button"
             onClick={() => onTabChange(index)}
             className={`flex items-start shrink-0 bg-transparent border-0 p-0 cursor-pointer ${isLast ? '' : 'mr-3 xl:mr-4 min-[1800px]:mr-8'}`}
           >
-            <StepCircle n={index + 1} active={isActive} endPoint={endPoints[index] ?? FALLBACK_END} />
+            <StepCircle n={at + 1} active={isActive} endPoint={endPoints[at] ?? FALLBACK_END} />
             {/* Underline spans the FULL column width (from x=0, flush
                 against the circle) while the label text itself is
                 indented — so the wire visibly runs from the circle,
@@ -132,7 +141,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
             <span className="inline-flex flex-col items-stretch">
               <span className="text-sm xl:text-base font-bold whitespace-nowrap ml-2" style={{ color }}>{tab.title}</span>
               <span
-                ref={el => { underlineRefs.current[index] = el; }}
+                ref={el => { underlineRefs.current[at] = el; }}
                 className="h-[2px] w-full mt-2"
                 style={{ background: color }}
               />
