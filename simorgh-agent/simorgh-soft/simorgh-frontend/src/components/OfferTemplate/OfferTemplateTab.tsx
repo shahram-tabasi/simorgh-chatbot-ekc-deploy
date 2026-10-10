@@ -36,7 +36,7 @@ function headersFor(type: TemplateItem['type']): string[] {
   return list.filter(h => !/^SPARE\b/i.test(h));
 }
 
-export const OfferTemplateTab: React.FC = () => {
+export const OfferTemplateTab: React.FC<{ onComplete?: () => void }> = ({ onComplete }) => {
   const { projectData, patchProjectData, isCurrentRevisionEditable } = useProject();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [customHeader, setCustomHeader] = useState('');
@@ -172,7 +172,7 @@ export const OfferTemplateTab: React.FC = () => {
           className="w-1/5 border-0 border-r border-gray-200 rounded-none"
           bodyClassName="flex-1 overflow-y-auto"
         >
-          <TemplateTree bare projectData={projectData} onTemplateSelect={setSelectedId} selectedTemplateId={selectedId} />
+          <TemplateTree bare offerMode projectData={projectData} onTemplateSelect={setSelectedId} selectedTemplateId={selectedId} />
         </PanelFrame>
 
         <PanelFrame
@@ -369,6 +369,14 @@ export const OfferTemplateTab: React.FC = () => {
           )}
         </div>
       </div>
+
+      {onComplete && (
+        <div className="flex justify-end mt-4 shrink-0">
+          <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700" onClick={onComplete}>
+            Next
+          </button>
+        </div>
+      )}
 
       <PartSelectionDialog
         isOpen={picking != null}

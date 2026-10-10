@@ -5,6 +5,8 @@ import { TemplateTree } from './TemplateTree';
 import { PanelFrame } from '../shared/PanelFrame';
 import { TemplateProperties } from './TemplateProperties';
 import { TIERS } from '../../utils/tiers';
+import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
+import type { TemplateItem } from '../../types/project';
 
 interface TemplateCreationTabProps {
   onComplete: () => void;
@@ -226,8 +228,13 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
   onComplete,
   initialSelectedTemplate
 }) => {
-  const { projectData, holdLock, releaseLock } = useProject();
+  const {
+    projectData, holdLock, releaseLock, moveTemplate, setTemplateMechanical, setTemplateSingleLine,
+    patchProjectData, isCurrentRevisionEditable,
+  } = useProject();
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(initialSelectedTemplate ?? null);
+  /** A template the offer side made, opened here to be completed. */
+  const [completing, setCompleting] = useState<TemplateItem | null>(null);
 
   // The template open here is this person's while it is open: a colleague who
   // clicks it is told who has it, and is not let in until it is let go —
@@ -265,6 +272,8 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
 
   const handleTemplateSelect = (templateId: string) => {
     void openTemplate(templateId);
+    const t = TIERS.flatMap(type => projectData.templates?.[type] ?? []).find(x => x.id === templateId) ?? null;
+    askFor(t);
   };
 
   const getSelectedTemplateData = () => {
@@ -278,6 +287,25 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
   };
 
   const selectedTemplateData = getSelectedTemplateData();
+
+  // A template the offer side made has a name and no more: opened here, the
+  // technical side is asked for the rest straight away — the same wizard every
+  // template is made with, on this template, so it keeps its id and its offer.
+  const askFor = (t: TemplateItem | null) => {
+    if (t?.fromOffer && isCurrentRevisionEditable) setCompleting(t);
+  };
+  const finishFromOffer = (t: TemplateItem) => {
+    patchProjectData(prev => ({
+      templates: {
+        ...prev.templates,
+        [t.type]: (prev.templates?.[t.type] ?? []).map(x => {
+          if (x.id !== t.id) return x;
+          const { fromOffer: _done, offerFamily: _where, ...rest } = x;
+          return rest as TemplateItem;
+        }),
+      },
+    }));
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -316,6 +344,18 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
           />
         </PanelFrame>
         <div className="flex-1 min-w-0 min-h-0 p-4 overflow-hidden">
+          {selectedTemplateData?.fromOffer && (
+            <div className="mb-3 flex items-center justify-between gap-3 px-3 py-2 rounded border border-amber-200 bg-amber-50 text-sm text-amber-800">
+              <span>Made in Offer Template with a name only — its cell type, Simorgh Draw and the rest are completed here.</span>
+              <button
+                onClick={() => askFor(selectedTemplateData)}
+                disabled={!isCurrentRevisionEditable}
+                className="shrink-0 px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50 disabled:opacity-50"
+              >
+                Complete…
+              </button>
+            </div>
+          )}
           {selectedTemplateData ? (
             <TemplateProperties template={selectedTemplateData} />
           ) : (
@@ -325,6 +365,26 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
           )}
         </div>
       </div>
+
+      {completing && (
+        <HierarchicalTemplateWizard
+          tier={completing.type}
+          family={completing.offerFamily ?? null}
+          existing={(projectData.templates?.[completing.type] ?? []).filter(t => t.id !== completing.id)}
+          startFrom={completing}
+          pasteMode="edit"
+          onCancel={() => setCompleting(null)}
+          onSubmit={({ name, hierarchy, useSimorghDraw, mechanical, singleLine }) => {
+            // As the tree's own "Edit path & parameters": the same template,
+            // its id kept, so its offer version and its rows stay with it.
+            moveTemplate(completing.id, hierarchy, name, useSimorghDraw);
+            setTemplateMechanical(completing.id, mechanical);
+            if (useSimorghDraw) setTemplateSingleLine(completing.id, singleLine);
+            finishFromOffer(completing);
+            setCompleting(null);
+          }}
+        />
+      )}
 
       <div className="flex justify-end mt-4 shrink-0">
         <button

@@ -460,6 +460,15 @@ export interface TemplateItem {
    * rows only.
    */
   offerTemplate?: OfferTemplateSection[];
+  /**
+   * Made in the Offer Template tab with a name only: its cell type, its path
+   * and the rest are the technical side's to complete, and Create Template
+   * asks for them when the template is opened there. Cleared once completed.
+   */
+  fromOffer?: boolean;
+  /** The section it was made in on the offer side (OFW, FIX, SIMOPRIME-A4…),
+   *  so the tree files it there before it has a path. */
+  offerFamily?: string;
   /** What the offer counted for control equipment — see OfferControlPart. */
   offerControl?: OfferControlPart[];
   /** Optional hierarchical classification used by recommendations / AI tools. */

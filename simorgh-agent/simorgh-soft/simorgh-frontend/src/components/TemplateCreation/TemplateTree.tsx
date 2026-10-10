@@ -22,6 +22,12 @@ interface TemplateTreeProps {
    * every existing use looks exactly as it did.
    */
   bare?: boolean;
+  /**
+   * The Offer Template tab's tree: a template is made, renamed or copied with
+   * a name only — no cell type, no mechanical questions, no path. What it
+   * leaves out is the technical side's to complete in Create Template.
+   */
+  offerMode?: boolean;
 }
 
 interface ContextMenuState {
@@ -46,8 +52,10 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
   onTemplateSelect,
   selectedTemplateId,
   bare,
+  offerMode,
 }) => {
   const {
+    patchProjectData,
     addTemplate,
     deleteTemplate,
     setTemplateMechanical,
@@ -190,6 +198,14 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
             <span className={`mr-1 text-[9px] px-1 py-px rounded font-semibold ${TIER_PILL[template.type] ?? ''}`}>{template.type}</span>
           )}
           {template.name}
+          {template.fromOffer && (
+            <span
+              className="ml-1.5 text-[10px] px-1 py-px rounded bg-amber-50 border border-amber-200 text-amber-800"
+              title="Made in Offer Template — its cell type and technical details are completed in Create Template"
+            >
+              needs technical
+            </span>
+          )}
           {lockedBy('template', template.id) && (
             <span
               className="ml-1.5 text-[10px] px-1 py-px rounded bg-amber-100 text-amber-800"
@@ -601,7 +617,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           )}
           {/* Several picked: they are moved together, into one section of
               their group. */}
-          {manyTarget && (manyTarget.tier ? (
+          {!offerMode && manyTarget && (manyTarget.tier ? (
             (TEMPLATE_FAMILIES[manyTarget.tier] ?? []).length > 0 ? (
               (TEMPLATE_FAMILIES[manyTarget.tier] ?? []).map(family => (
                 <button
@@ -633,7 +649,7 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           {/* A template still waiting in BPMS is offered a place in its own
               group straight away — the same move as Cut and Paste, in one
               step. */}
-          {bpmsMoveTarget && (
+          {!offerMode && bpmsMoveTarget && (
             (TEMPLATE_FAMILIES[bpmsMoveTarget.type] ?? []).length > 0 ? (
               (TEMPLATE_FAMILIES[bpmsMoveTarget.type] ?? []).map(family => (
                 <button
@@ -659,21 +675,34 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           )}
           {contextMenu.templateId && (
             <>
-              <button
-                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
-                onClick={handleEditTemplate}
-                title="Change its Root, Switch, equipment kind, rated power and full-load current — the template keeps its parts and its id"
-              >
-                <PencilIcon className="w-4 h-4 mr-2" />
-                Edit path &amp; parameters…
-              </button>
-              <button
-                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
-                onClick={handleEditMechanical}
-              >
-                <WrenchIcon className="w-4 h-4 mr-2" />
-                Mechanical…
-              </button>
+              {offerMode ? (
+                <button
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                  onClick={handleEditTemplate}
+                  title="Its path, cell type and the rest are changed in Create Template"
+                >
+                  <PencilIcon className="w-4 h-4 mr-2" />
+                  Rename…
+                </button>
+              ) : (
+                <>
+                  <button
+                    className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                    onClick={handleEditTemplate}
+                    title="Change its Root, Switch, equipment kind, rated power and full-load current — the template keeps its parts and its id"
+                  >
+                    <PencilIcon className="w-4 h-4 mr-2" />
+                    Edit path &amp; parameters…
+                  </button>
+                  <button
+                    className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                    onClick={handleEditMechanical}
+                  >
+                    <WrenchIcon className="w-4 h-4 mr-2" />
+                    Mechanical…
+                  </button>
+                </>
+              )}
               <button
                 className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
                 onClick={() => handleClip('copy')}
@@ -681,14 +710,16 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
                 <CopyIcon className="w-4 h-4 mr-2" />
                 Copy
               </button>
-              <button
-                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
-                onClick={() => handleClip('cut')}
-                title="Take it to file somewhere else — it keeps its id, so the scope rows built on it stay attached"
-              >
-                <ScissorsIcon className="w-4 h-4 mr-2" />
-                Cut
-              </button>
+              {!offerMode && (
+                <button
+                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center"
+                  onClick={() => handleClip('cut')}
+                  title="Take it to file somewhere else — it keeps its id, so the scope rows built on it stay attached"
+                >
+                  <ScissorsIcon className="w-4 h-4 mr-2" />
+                  Cut
+                </button>
+              )}
               <button 
                 className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 flex items-center text-red-600" 
                 onClick={handleDeleteTemplate}
@@ -715,7 +746,44 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
         />
       )}
 
-      {wizard && (
+      {/* The offer side: a name, and nothing the technical side answers. */}
+      {wizard && offerMode && (
+        <OfferNameDialog
+          title={wizard.pasteMode === 'edit' ? `Rename — ${wizard.startFrom?.name ?? ''}`
+            : wizard.startFrom ? `Copy ${wizard.startFrom.name} into ${wizard.tier}${wizard.family ? ` / ${wizard.family}` : ''}`
+              : `New ${wizard.tier} template${wizard.family ? ` — ${wizard.family}` : ''}`}
+          initial={wizard.pasteMode === 'edit' ? wizard.startFrom?.name ?? ''
+            : wizard.startFrom ? `${wizard.startFrom.name} (copy)` : ''}
+          moving={wizard.pasteMode === 'move'}
+          onCancel={() => setWizard(null)}
+          onSubmit={name => {
+            const from = wizard.startFrom;
+            if (wizard.pasteMode === 'edit' && from) {
+              patchProjectData(prev => ({
+                templates: {
+                  ...prev.templates,
+                  [from.type]: (prev.templates?.[from.type] ?? []).map(t => (t.id === from.id ? { ...t, name } : t)),
+                },
+              }));
+            } else if (wizard.pasteMode !== 'move') {
+              // A copy filed where it came from keeps its path and its
+              // answers; anywhere else it is the technical side's to file.
+              const samePlace = Boolean(from && !from.fromOffer
+                && (familyOf(from.type, from.hierarchy)?.id ?? null) === (wizard.family ?? null));
+              addTemplate(wizard.tier, name, samePlace ? from!.hierarchy : undefined, from?.id,
+                samePlace ? from!.useSimorghDraw : undefined, undefined, undefined,
+                samePlace ? undefined : { fromOffer: true, ...(wizard.family ? { offerFamily: wizard.family } : {}) });
+              const open = new Set(expandedNodes);
+              open.add(wizard.tier);
+              if (wizard.family) open.add(`${wizard.tier}/${wizard.family}`);
+              setExpandedNodes(open);
+            }
+            setWizard(null);
+          }}
+        />
+      )}
+
+      {wizard && !offerMode && (
         <HierarchicalTemplateWizard
           tier={wizard.tier}
           family={wizard.family}
@@ -811,6 +879,56 @@ export const TemplateTree: React.FC<TemplateTreeProps> = ({
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+/** The offer side's whole template window: a name. */
+const OfferNameDialog: React.FC<{
+  title: string;
+  initial: string;
+  moving: boolean;
+  onCancel: () => void;
+  onSubmit: (name: string) => void;
+}> = ({ title, initial, moving, onCancel, onSubmit }) => {
+  const [name, setName] = useState(initial);
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[200]" onClick={onCancel}>
+      <form
+        className="bg-white rounded-lg shadow-2xl w-[440px] max-w-[95vw] p-5 space-y-3"
+        onClick={e => e.stopPropagation()}
+        onSubmit={e => { e.preventDefault(); if (name.trim() && !moving) onSubmit(name.trim()); }}
+      >
+        <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+        {moving ? (
+          <p className="text-sm text-gray-700">Templates are moved between sections in Create Template.</p>
+        ) : (
+          <>
+            <input
+              autoFocus
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="Template name…"
+              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-600">
+              Only a name here. Its cell type, Simorgh Draw and the rest are completed by the technical side in Create Template.
+            </p>
+          </>
+        )}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onCancel}
+            className="px-3 py-1.5 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50">
+            {moving ? 'Close' : 'Cancel'}
+          </button>
+          {!moving && (
+            <button type="submit" disabled={!name.trim()}
+              className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">
+              Save
+            </button>
+          )}
+        </div>
+      </form>
     </div>
   );
 };

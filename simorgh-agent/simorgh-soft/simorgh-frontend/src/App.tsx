@@ -1116,7 +1116,8 @@ const MainApp: React.FC = () => {
       title: `Create Template`,
       // Held to the window, so each of its panels scrolls on its own.
       fill: true,
-      component: <TemplateCreationTab onComplete={() => setActiveTab(2)} initialSelectedTemplate={navigatingToTemplateId} />
+      // Next goes to Offer Template, shown after it; Offer Template's Next to Scope Selection.
+      component: <TemplateCreationTab onComplete={() => setActiveTab(8)} initialSelectedTemplate={navigatingToTemplateId} />
     },
     {
       id: 2,
@@ -1182,7 +1183,7 @@ const MainApp: React.FC = () => {
       id: 8,
       title: `Offer Template`,
       fill: true,
-      component: <OfferTemplateTab />
+      component: <OfferTemplateTab onComplete={() => setActiveTab(DEVICE_SELECTION_TAB)} />
     }
   ];
 

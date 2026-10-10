@@ -26,6 +26,9 @@
 import { type Tier } from './tiers';
 
 interface HasPath { path?: string[] }
+/** A template made on the offer side has no path yet, only the section it
+ *  was made in. */
+interface Filed { hierarchy?: HasPath; offerFamily?: string }
 
 export interface TemplateFamily {
   id: string;
@@ -114,18 +117,20 @@ export function familyOf(
  * Anything the families do not claim comes back last, under no family, and
  * only when there is something — that one is a leftover rather than a place.
  */
-export function groupByFamily<T extends { hierarchy?: HasPath }>(
+export function groupByFamily<T extends Filed>(
   tier: Tier,
   templates: T[],
 ): { family: TemplateFamily | null; templates: T[] }[] {
   const families = TEMPLATE_FAMILIES[tier] ?? [];
   if (families.length === 0) return [{ family: null, templates }];
 
+  const famId = (t: T) => familyOf(tier, t.hierarchy)?.id
+    ?? (!t.hierarchy?.path?.length && t.offerFamily && families.some(f => f.id === t.offerFamily) ? t.offerFamily : undefined);
   const groups: { family: TemplateFamily | null; templates: T[] }[] = families.map(family => ({
     family,
-    templates: templates.filter(t => familyOf(tier, t.hierarchy)?.id === family.id),
+    templates: templates.filter(t => famId(t) === family.id),
   }));
-  const rest = templates.filter(t => !familyOf(tier, t.hierarchy));
+  const rest = templates.filter(t => !famId(t));
   if (rest.length > 0) groups.push({ family: null, templates: rest });
   return groups;
 }

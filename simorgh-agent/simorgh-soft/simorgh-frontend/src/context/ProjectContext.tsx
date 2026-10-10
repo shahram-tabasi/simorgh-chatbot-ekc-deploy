@@ -61,7 +61,7 @@ interface ProjectContextType {
    * on one panel went, and nothing should happen to the other nine.
    */
   restoreOneSwitchgear: (from: ProjectData, equipmentId: string) => void;
-  addTemplate: (type: Tier, name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean, mechanical?: TemplateMechanical, singleLine?: TemplateSingleLine) => void;
+  addTemplate: (type: Tier, name: string, hierarchy?: TemplateHierarchy, copyFromId?: string, useSimorghDraw?: boolean, mechanical?: TemplateMechanical, singleLine?: TemplateSingleLine, extra?: Partial<TemplateItem>) => void;
   updateTemplate: (templateId: string, properties: Record<string, string>) => void;
   /** The mechanical answers a template holds, replaced whole. */
   setTemplateMechanical: (templateId: string, mechanical: TemplateMechanical) => void;
@@ -776,6 +776,8 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
     useSimorghDraw?: boolean,
     mechanical?: TemplateMechanical,
     singleLine?: TemplateSingleLine,
+    /** Anything else the new template is made with — the offer side's mark. */
+    extra?: Partial<TemplateItem>,
   ) => {
     if (!guardEdit()) return;
     setProjectData(prev => {
@@ -822,6 +824,7 @@ export const ProjectProvider: React.FC<ProjectProviderProps> = ({ children, init
           : baseSingleLine ? { singleLine: baseSingleLine } : {}),
         ...(baseOffer ? { offerControl: baseOffer } : {}),
         ...(baseOfferTemplate ? { offerTemplate: baseOfferTemplate } : {}),
+        ...(extra ?? {}),
       };
       return {
         ...prev,

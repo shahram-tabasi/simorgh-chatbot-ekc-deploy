@@ -527,6 +527,14 @@ catalogue pick via the exported `PartSelectionDialog`, qty, note); headers and
 parts reorder by drag. Kept on `TemplateItem.offerTemplate`, beside the rows —
 never read by purchasing or Send to EPLAN; copied with a template. No
 mechanical, cell type or graphic.
+Its tree is `TemplateTree offerMode`: new / rename / copy open `OfferNameDialog`
+(a name only — never the HierarchicalTemplateWizard), Mechanical, Edit path,
+Cut and the moves are hidden. A template made there carries `fromOffer` and
+`offerFamily` (the section, so `groupByFamily` files it before it has a path)
+and shows "needs technical". Opened in Create Template, the wizard opens on it
+in `edit` mode (also from the banner's Complete…); on save `fromOffer` /
+`offerFamily` are dropped, the id kept. Next: Create Template → Offer Template
+(8) → Scope Selection. `addTemplate` takes an optional last `extra`.
 
 **Symbols live in three places** (`utils/cad/symbolBackup.ts`): the office
 library in Mongo (`/api/symbols`, new symbols and `redraw:` office redraws),
