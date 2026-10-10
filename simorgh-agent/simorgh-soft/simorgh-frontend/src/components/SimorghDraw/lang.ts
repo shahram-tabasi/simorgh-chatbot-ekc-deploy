@@ -158,6 +158,8 @@ export interface Strings {
   libImportMerge: string; libImportReplace: string;
   libImported: (added: number, updated: number) => string;
   libExported: (n: number) => string;
+  /** The DXF pack and the server's pack folder, counted. */
+  libBackupParts: (browser: number, server: number) => string;
   libNotALibrary: string;
   libNewGroup: string; libNewGroupName: string; libVariant: string;
   libVariantNote: string; libRedraw: string; libRedrawNote: string;
@@ -455,7 +457,7 @@ const EN: Strings = {
   libNeedsArt: 'It needs some geometry — choose a file or pick something on the sheet.',
   libOfficeOnly: 'Only symbols this office added can be changed here. The built-in ones stay as they are.',
   libExport: 'Export library',
-  libExportNote: 'Write the whole office library to a file — to keep, to restore from, or to carry to another site',
+  libExportNote: 'Write every symbol to one file — the office library, this browser\'s DXF pack and the server\'s pack folder — to keep, to restore from, or to carry to another server',
   libImportFile: 'Import library',
   libImportNote: 'Read an office library file back in',
   libImportAsk: n => `This file holds ${n} symbol${n === 1 ? '' : 's'}.`,
@@ -463,6 +465,7 @@ const EN: Strings = {
   libImportReplace: 'Replace the whole library with this file',
   libImported: (added, updated) => `${added} added, ${updated} replaced`,
   libExported: n => `${n} symbol${n === 1 ? '' : 's'} written to a file`,
+  libBackupParts: (b, sv) => `DXF pack: ${b} · server pack files: ${sv}`,
   libNotALibrary: 'That is not a Simorgh Draw library file.',
   libNewGroup: '＋ A new shelf…',
   libNewGroupName: 'What to call the new shelf',
@@ -828,7 +831,7 @@ const FA: Strings = {
   libNeedsArt: 'هندسه لازم دارد — یک فایل انتخاب کنید یا چیزی روی صفحه انتخاب کنید.',
   libOfficeOnly: 'فقط سیمبل‌هایی که خودِ شرکت اضافه کرده اینجا قابل تغییرند. سیمبل‌های داخلی دست‌نخورده می‌مانند.',
   libExport: 'خروجی کتابخانه',
-  libExportNote: 'کل کتابخانه‌ی شرکت را در یک فایل بنویس — برای نگهداری، برای برگرداندن، یا برای بردن به یک سایت دیگر',
+  libExportNote: 'همه‌ی سیمبل‌ها را در یک فایل بنویس — کتابخانه‌ی شرکت، پک DXF این مرورگر و پک سرور — برای نگهداری، برگرداندن، یا بردن به یک سرور دیگر',
   libImportFile: 'ورودی کتابخانه',
   libImportNote: 'یک فایل کتابخانه‌ی شرکت را بخوان',
   libImportAsk: n => `این فایل ${n} سیمبل دارد.`,
@@ -836,6 +839,7 @@ const FA: Strings = {
   libImportReplace: 'کل کتابخانه با این فایل جایگزین شود',
   libImported: (added, updated) => `${added} اضافه شد، ${updated} جایگزین شد`,
   libExported: n => `${n} سیمبل در فایل نوشته شد`,
+  libBackupParts: (b, sv) => `پک DXF: ${b} · فایل‌های پک سرور: ${sv}`,
   libNotALibrary: 'این فایل، فایل کتابخانه‌ی سیمرغ دراو نیست.',
   libNewGroup: '＋ قفسه‌ی جدید…',
   libNewGroupName: 'نام قفسه‌ی جدید',
@@ -1211,6 +1215,7 @@ const TR: Strings = {
   libImportReplace: 'Tüm kitaplık bu dosyayla değiştirilsin',
   libImported: (added, updated) => `${added} eklendi, ${updated} değiştirildi`,
   libExported: n => `${n} sembol dosyaya yazıldı`,
+  libBackupParts: (b, sv) => `DXF paketi: ${b} · sunucu paket dosyaları: ${sv}`,
   libNotALibrary: 'Bu bir Simorgh Draw kitaplık dosyası değil.',
   libNewGroup: '＋ Yeni bir raf…',
   libNewGroupName: 'Yeni rafın adı',

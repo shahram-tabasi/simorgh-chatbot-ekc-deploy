@@ -25,13 +25,14 @@ import {
   saveOfficeRedraw, forgetOfficeRedraw, officeRedraws,
 } from '../../utils/cad/officeSymbols';
 import {
-  LIBRARY_FORMAT, LibraryFile, OfficeSymbol, symbolLibraryService,
+  OfficeSymbol, symbolLibraryService,
 } from '../../services/projectService';
 import { downloadText } from '../../utils/download';
 import { SymbolMaker } from './SymbolMaker';
 import { DxfSymbolPack } from './DxfSymbolPack';
 import { SymbolGraphicEditor } from './SymbolGraphicEditor';
 import { DxfSymbol, loadDxfSymbols, saveDxfSymbols } from '../../utils/cad/dxfSymbols';
+import { SymbolBackup, readBackup, restoreBackup, writeBackup } from '../../utils/cad/symbolBackup';
 import { SymbolId } from '../../utils/iecSymbols';
 import { SymbolArtOverride } from '../../types/project';
 import { useSymbolVersion } from '../../utils/cad/useSymbols';
@@ -155,7 +156,7 @@ export const SymbolLibrary: React.FC<Props> = ({
   const [editing, setEditing] = useState<OfficeSymbol | null>(null);
   const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
   const libraryFile = useRef<HTMLInputElement>(null);
-  const [incoming, setIncoming] = useState<LibraryFile | null>(null);
+  const [incoming, setIncoming] = useState<SymbolBackup | null>(null);
   const [busy, setBusy] = useState(false);
 
   // The two things the old Symbols tab could do that this panel could not.
@@ -363,13 +364,17 @@ export const SymbolLibrary: React.FC<Props> = ({
   const exportLibrary = async () => {
     setBusy(true);
     try {
-      const written = await symbolLibraryService.exportAll();
+      // Everything: the office library, this browser's DXF pack and the
+      // server's pack folder — so the file carries every symbol to another
+      // server, not only the part that lives in its database.
+      const written = await writeBackup();
       downloadText(
-        `simorgh-library-${new Date().toISOString().slice(0, 10)}.json`,
+        `simorgh-symbols-${new Date().toISOString().slice(0, 10)}.json`,
         JSON.stringify(written, null, 2),
         'application/json',
       );
-      setNote(t.libExported(written.symbols.length));
+      setNote(`${t.libExported(written.library.symbols.length)} · ${
+        t.libBackupParts(written.browserPack.length, written.serverPack.length)}`);
     } catch (err) {
       setNote(err instanceof Error ? err.message : String(err));
     } finally {
@@ -748,8 +753,8 @@ export const SymbolLibrary: React.FC<Props> = ({
               e.target.value = '';
               if (!f) return;
               try {
-                const read = JSON.parse(await f.text()) as LibraryFile;
-                if (read?.format !== LIBRARY_FORMAT || !Array.isArray(read.symbols)) {
+                const read = readBackup(JSON.parse(await f.text()));
+                if (!read) {
                   setNote(t.libNotALibrary);
                   return;
                 }
@@ -1056,7 +1061,10 @@ export const SymbolLibrary: React.FC<Props> = ({
               <div>
                 <h4 className="text-sm font-semibold text-gray-900">{t.libImportFile}</h4>
                 <p className="text-[12px] text-gray-600 mt-1">
-                  {t.libImportAsk(incoming.symbols.length)}
+                  {t.libImportAsk(incoming.library.symbols.length)}
+                  {(incoming.browserPack.length > 0 || incoming.serverPack.length > 0) && (
+                    <> {t.libBackupParts(incoming.browserPack.length, incoming.serverPack.length)}</>
+                  )}
                   {incoming.exportedOn && (
                     <span className="text-gray-400"> · {incoming.exportedOn.slice(0, 10)}</span>
                   )}
@@ -1071,9 +1079,16 @@ export const SymbolLibrary: React.FC<Props> = ({
                       onClick={async () => {
                         setBusy(true);
                         try {
-                          const done = await symbolLibraryService.importAll(incoming, mode);
+                          const done = await restoreBackup(incoming, mode);
                           await loadOfficeSymbols(true);
-                          setNote(t.libImported(done.added, done.updated));
+                          // This browser's pack changed under the panel.
+                          setPack(loadDxfSymbols());
+                          setBeat(b => b + 1);
+                          setNote([
+                            done.library ? t.libImported(done.library.added, done.library.updated) : '',
+                            t.libBackupParts(done.browser, done.server.written),
+                            ...done.server.failed,
+                          ].filter(Boolean).join(' · '));
                           setIncoming(null);
                         } catch (err) {
                           setNote(err instanceof Error ? err.message : String(err));

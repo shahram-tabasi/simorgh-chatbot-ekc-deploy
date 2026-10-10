@@ -515,6 +515,16 @@ office's list of new symbols. The server keeps each terminal's `dir`.
 
 
 
+**Symbols live in three places** (`utils/cad/symbolBackup.ts`): the office
+library in Mongo (`/api/symbols`, new symbols and `redraw:` office redraws),
+the DXF pack in the browser's localStorage (`simorgh-draw:dxf-symbols` — per
+server address, so empty after a move to another server, and the built-in
+shapes come back), and the server's pack folder (`eplan-symbols/`, SVG/DXF).
+The Symbol Library's Export writes all three to one file
+(`simorgh-symbols-backup`); Import restores each to its place (older
+`simorgh-draw-library` files still read). "Symbols are old on the new server"
+= that file was not carried over.
+
 ## Working with this owner, and where the work stands
 
 Read this before anything else in a new context window. It is the thread of
