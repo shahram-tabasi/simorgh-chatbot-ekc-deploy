@@ -1147,7 +1147,19 @@ function layoutBranch(branch: Branch, top: number): BranchLayout {
     const start = Math.max(cursor, source == null ? top : srcY(source));
     const at: number[] = [];
     let y0 = start;
-    for (const k of items) { at.push(y0); y0 += instrStep(branch.instruments[k]); }
+    for (let n = 0; n < items.length;) {
+      const it = branch.instruments[items[n]];
+      if (!sideFed(dk(it))) { at.push(y0); y0 += instrStep(it); n++; continue; }
+      // A row of side-fed meters in series: one level, their labels above.
+      let m = n;
+      while (m < items.length && sideFed(dk(branch.instruments[items[m]]))) m++;
+      const row = items.slice(n, m).map(k => branch.instruments[k]);
+      const lift = Math.max(...row.map(r => labelLineCount(r, ROW_WRAP))) * TEXT.tag * 1.15 + 4;
+      const h = Math.max(CELL, ...row.map(r => symbolHeight(dk(r))));
+      row.forEach(() => at.push(y0 + lift));
+      y0 += lift + h + 10 + (row.some(r => sendsTo(r)) ? 14 : 0);
+      n = m;
+    }
     groups.push({ source, items, ys: at });
     // A gap before the next group: the chain above ends at its last device
     // (the ammeter), and the next is fed on its own lane, not joined to it.
@@ -1169,6 +1181,35 @@ const SHUNT_DX = 56;
 const INSTR_DX = 120;
 /** Room right of the instrument column: the symbol and its wrapped label. */
 const INSTR_ROOM = 140;
+/**
+ * A meter drawn by the office with its connection points on its sides — the
+ * current in at its left, out at its right. On a transformer's chain such
+ * devices stand in a row, each in series with the one before (CT → selector
+ * → ammeter), never tapped off a line beside them.
+ */
+function sideFed(id: SymbolId): boolean {
+  const o = symbolOverride(id);
+  if (!o?.art || !o.terminals?.length) return false;
+  const t1 = o.terminals.find(t => t.name === '1') ?? o.terminals[0];
+  if (t1.dir) return t1.dir === 'left' || t1.dir === 'right';
+  const w = o.width && o.width > 0 ? o.width : 1;
+  return o.terminals.length === 1 || t1.x <= w * 0.3 || t1.x >= w * 0.7;
+}
+/** How the labels over a row of side-fed meters are broken. */
+const ROW_WRAP = 16;
+/** How far the widest row of side-fed meters on a branch reaches. */
+const rowReach = (b: Branch): number => {
+  let best = 0;
+  let run = 0;
+  for (const it of b.instruments) {
+    const id = dk(it);
+    if (!sideFed(id)) { run = 0; continue; }
+    run += 14 + Math.max(symbolLeft(id) + symbolRight(id), labelWidth(it, TEXT.tag, ROW_WRAP) + 12);
+    best = Math.max(best, run);
+  }
+  return best;
+};
+
 /** How far down the column an instrument takes: its cell, or its label. */
 const instrStep = (item: ChainItem) =>
   Math.max(CELL, 17 + (labelLineCount(item, LV_WRAP) - 1) * TEXT.tag * 1.15 + 8)
@@ -1466,8 +1507,45 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
       if (Math.abs(a.x - b.x) >= 0.5) out.push(line(a.x, b.y, b.x, b.y));
     };
     let from: Pt = { x: lane, y: ty };
+    /** Where the label before ends, in a row: the next device clears it. */
+    let clear = -Infinity;
+    const rowItem = (n: number) => sideFed(dk(branch.instruments[group.items[n]]));
     group.items.forEach((k, n) => {
-      const id = dk(branch.instruments[k]);
+      const item = branch.instruments[k];
+      const id = dk(item);
+      if (rowItem(n)) {
+        // In series in a row: from the line before into its 1, out of its 2
+        // into the next — a side-fed meter is never tapped off a line.
+        const y = group.ys[n];
+        const off = pinOf(id, 0, 0, '1');
+        const tapY = y + HALF;
+        if (n === 0 || !rowItem(n - 1) || group.ys[n - 1] !== y) {
+          elbow(from, { x: ix, y: tapY });
+          from = { x: ix, y: tapY };
+          clear = -Infinity;
+        }
+        const mx = Math.max(from.x + 14 - off.x, clear + 10 + symbolLeft(id));
+        const my = tapY - off.y;
+        const p1 = pinOf(id, mx, my, '1');
+        out.push(line(from.x, tapY, p1.x, tapY, 1.1));
+        out.push(drawDevice(item, mx, my));
+        const up = (labelLineCount(item, ROW_WRAP) - 1) * TEXT.tag * 1.15;
+        const lbx = Math.max(mx - symbolLeft(id), p1.x) + 2;
+        out.push(simLabel(item, lbx, my - 5 - up, 'start', TEXT.tag, ROW_WRAP));
+        clear = lbx + labelWidth(item, TEXT.tag, ROW_WRAP);
+        const send = sendsTo(item);
+        if (send) {
+          const sx0 = mx + Math.min(symbolRight(id), 8);
+          const sy = my + symbolHeight(id) + 10;
+          out.push(line(sx0, my + symbolHeight(id), sx0, sy, 1, '4 3'));
+          out.push(line(sx0, sy, sx0 + 40, sy, 1, '4 3'), arrowRight(sx0 + 46, sy));
+          out.push(`<text x="${sx0 + 50}" y="${sy + 3}" font-size="7.5" fill="#111">${esc(send.toUpperCase())}</text>`);
+        }
+        const o = symbolOverride(id);
+        const has2 = !(o?.art && o.terminals?.length) || o.terminals.some(t => t.name === '2');
+        from = has2 ? { x: pinOf(id, mx, my, '2').x, y: tapY } : { x: mx + symbolRight(id), y: tapY };
+        return;
+      }
       const p1 = pinOf(id, ix, group.ys[n], '1');
       const p2 = pinOf(id, ix, group.ys[n], '2');
       // A library symbol already carries the conductor between its two points.
@@ -1476,6 +1554,7 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
     });
 
     group.items.forEach((k, n) => {
+      if (rowItem(n)) return;
       const item = branch.instruments[k];
       out.push(drawDevice(item, ix, group.ys[n]));
       out.push(deviceText(item, ix + Math.max(34, labelOffset(item)), group.ys[n] + 17, 14));
@@ -2444,7 +2523,11 @@ function drawMvCellLines(
    * last point it has to reach: never run on through a device that has no
    * way out at the bottom.
    */
-  const stack = (items: ChainItem[], y0: number, colX = ix, enter?: number): number => {
+  const stack = (items: ChainItem[], y0: number, colX = ix, enter?: number,
+    /** A transformer's chain — CT → selector → ammeter, VT → selector →
+     *  voltmeter: each device in series with the one before, the line in at
+     *  one side and out the other, never tapped off a line beside them. */
+    inSeries = false): number => {
     if (items.length === 0) return y0;
     let cursor: number | null = enter ?? null;
     const lineTo = (to: number) => {
@@ -2470,7 +2553,8 @@ function drawMvCellLines(
     const inTail = new Set<ChainItem>();
     items.forEach((item, k) => {
       const prev = items[k - 1];
-      if (!prev || item.placement !== 'series' || item.anchor !== prev || !singlePin(dk(item))) return;
+      if (!prev || !singlePin(dk(item))) return;
+      if (!inSeries && (item.placement !== 'series' || item.anchor !== prev)) return;
       const head = [...tails.entries()].find(([, t]) => t[t.length - 1] === prev)?.[0]
         ?? (singlePin(dk(prev)) && !inTail.has(prev) ? prev : undefined);
       if (!head) return;
@@ -2526,7 +2610,8 @@ function drawMvCellLines(
         const tapY = yy + lift + HALF;
         lineTo(tapY);
         cursor = tapY;
-        out.push(node({ x: colX, y: tapY }));
+        // In a chain the line turns into the row: a corner, not a junction.
+        if (!inSeries) out.push(node({ x: colX, y: tapY }));
         let from: Pt = { x: colX, y: tapY };
         let rowStep = 0;
         /** Where the label before ends: the next device stands clear of it. */
@@ -2753,7 +2838,7 @@ function drawMvCellLines(
           const top_ = side ? Math.max(ty, start.y - HALF) : ty;
           landY = side ? top_ + HALF : top_;
           if (meterTop < 0) meterTop = side ? top_ + HALF : top_;
-          next = stack(mine, top_, ix, landY) + 8;
+          next = stack(mine, top_, ix, landY, true) + 8;
           out.push(solidPath([start, { x: lane, y: start.y }, { x: lane, y: landY }, { x: ix, y: landY }]), node({ x: ix, y: landY }));
         } else {
           // No meter on the cell to take it: a short arrow straight out of
@@ -2868,7 +2953,7 @@ function drawMvCellLines(
     }
     reach(lane + 8, from.y);
   }
-  if (!ct && meters.length) { meterTop = singlePin(dk(meters[0])) ? ty + HALF : ty; ty = stack(meters, ty) + 8; }
+  if (!ct && meters.length) { meterTop = singlePin(dk(meters[0])) ? ty + HALF : ty; ty = stack(meters, ty, ix, undefined, true) + 8; }
 
   // Every other CT on the line has its cores too, each to what it is for:
   // protection up into the relay, measuring onto the meters' line, a remark
@@ -2923,7 +3008,7 @@ function drawMvCellLines(
     const vt = socketVt ?? loadVt ?? series.find(i => i.id === 'voltage-transformer');
     const vy = vt ? ys.get(vt) : undefined;
     const start = ty;
-    ty = stack(volts, ty, ix, ty) + 8;
+    ty = stack(volts, ty, ix, ty, true) + 8;
     if (vt && vy != null) {
       const fromX = vt === socketVt ? sx + 28 : x + 28;
       const fromY = vt === socketVt ? vy + CELL + 10 + HALF + 5 : vy + HALF + 5;
@@ -3128,13 +3213,40 @@ function drawSheet(o: {
     if (/incom|\bmain\b|supply|source|\bINC\b/i.test(t)) return 'incoming';
     return 'outgoing';
   };
-  // An incomer and a coupling carry more than a feeder — the CT and its
-  // auxiliary CT, the meters, the VT and its voltmeter, the relay — so their
-  // columns are wider than a feeder's, by the owner's rule.
-  const WIDE_ROLE = 1.45;
+  // Each column as wide as what is drawn in it — a plain feeder stays narrow,
+  // so the sheet is not strung out to the widest cell's width. An incomer and
+  // a coupling carry more than a feeder (the CT and its chain, the VT and its
+  // voltmeter, the relay) and get room beyond their own, by the owner's rule.
+  const WIDE_ROLE = 70;
+  /** Where the line runs in its own column: clear of what that feeder draws
+   *  to its left, not of the widest cell on the sheet. */
+  const dxOf = (i: number) => {
+    const b = branches[i];
+    const cell = isMv ? mvCells[i] : lvCells[i];
+    const own = Math.max(16, ...[...b.series, ...b.instruments].map(it => symbolLeft(dk(it))));
+    return cell
+      ? Math.max(34, own + 10, cell.size.left + 12)
+      : Math.max(b.shunts.length ? 130 : 34, own + 10);
+  };
+  const ownWidth = (i: number) => {
+    const b = branches[i];
+    const branchDx = dxOf(i);
+    const reachL = Math.max(24, ...b.series.map(it => labelOffset(it)));
+    const chars = Math.max(0, ...[...b.series, ...b.shunts, ...b.instruments]
+      .map(it => Math.max(...allLines(it, LV_WRAP).map(l => l.text.length))));
+    const cell = isMv ? mvCells[i] : lvCells[i];
+    return Math.max(
+      branchDx + reachL + Math.max(textWidth(CODE_CHARS, TEXT.codeSize), textWidth(chars, TEXT.tag)) + 18,
+      b.shunts.length || b.instruments.length ? branchDx + INSTR_DX + INSTR_ROOM : 0,
+      // A row of side-fed meters in series runs out to the right.
+      cell ? 0 : branchDx + INSTR_DX + 30 + rowReach(b),
+      cell ? branchDx + cell.size.right + 24 : 0,
+    );
+  };
   const colW = (i: number) => {
-    const r = o.lines[i] ? roleOf(o.lines[i]) : 'outgoing';
-    return r === 'incoming' || r === 'coupling' ? Math.round(colWidth * WIDE_ROLE) : colWidth;
+    if (!o.lines[i]) return colWidth;
+    const r = roleOf(o.lines[i]);
+    return Math.round(ownWidth(i) + (r === 'incoming' || r === 'coupling' ? WIDE_ROLE : 0));
   };
   const colLefts: number[] = [];
   {
@@ -3152,20 +3264,41 @@ function drawSheet(o: {
       : supplyBranch ? branchHeight(supplyBranch) : 0) + 26);
 
   const chainTop = busY + 26;
-  const body = isMv
-    ? Math.max(CELL, ...mvCells.map(c => c.size.bottom))
-    : Math.max(CELL, ...branches.map((b, i) => {
-      const c = lvCells[i];
-      return c ? c.size.bottom + 2 * c.plug : branchHeight(b);
-    }));
+  /** How far down a feeder's own drawing reaches below where it starts. */
+  const heightOf = (i: number) => {
+    if (isMv) return mvCells[i].size.bottom;
+    const c = lvCells[i];
+    return c ? c.size.bottom + 2 * c.plug : branchHeight(branches[i]);
+  };
+  // **A sub-bus.** A dot in the feeder number says where a feeder hangs: L1.1,
+  // L1.2 … are on a sub-busbar that L1 feeds, not on the main bus. L1 runs
+  // down into the sub-bus; its feeders hang from it, a tier lower.
+  const feederKey = (l?: DeviceTableRow) => String(l?.feederNo ?? '').trim().toUpperCase();
+  const parentOf = o.lines.map(l => {
+    const m = /^(.+)\.\d+$/.exec(feederKey(l));
+    if (!m) return -1;
+    return o.lines.findIndex(p => feederKey(p) === m[1]);
+  });
+  const childrenOf = (j: number) => o.lines.map((_, i) => i).filter(i => parentOf[i] === j);
+  const tops = new Map<number, number>();
+  const topOf = (i: number, depth = 0): number => {
+    if (tops.has(i)) return tops.get(i)!;
+    const j = parentOf[i];
+    const t = j < 0 || j === i || depth > 8 ? chainTop : subBusY(j, depth + 1) + 26;
+    tops.set(i, t);
+    return t;
+  };
+  /** Where a feeder's sub-bus runs, under the feeder's own drawing. */
+  const subBusY = (j: number, depth = 0) => topOf(j, depth) + heightOf(j) + 22;
+  const body = Math.max(CELL, ...o.lines.map((_, i) => topOf(i) - chainTop + heightOf(i)));
   const loadY = chainTop + body + 20;
   // An MV cell can reach below its own line — the magnet's line down to the
   // feeder it is interlocked with — and the table starts clear of that too.
   // A cable connection ends in its sealing end and the cable below it.
   const endRoom = mvCells.some(c => ['cable', 'cable-in'].includes(mvEndOf(c.opts))) ? CELL + 10 : 0;
   const tableTop = Math.max(loadY + CELL + 36 + endRoom,
-    ...mvCells.map(c => chainTop + c.size.height + 24),
-    ...lvAll.map(c => chainTop + c.size.height + 2 * c.plug + CELL + 36));
+    ...mvCells.map((c, i) => topOf(i) + c.size.height + 24),
+    ...lvCells.map((c, i) => (c ? topOf(i) + c.size.height + 2 * c.plug + CELL + 36 : 0)));
   const tableHeight = TABLE_ROWS.length * cardRowHeight;
   // The sheet is exactly as wide as the feeders on it: busbar and the block
   // underneath both end at the last column, never in mid-air.
@@ -3231,7 +3364,7 @@ function drawSheet(o: {
   });
   // The coupling splits the bar: the section it hangs from ends at its tap,
   // the next one starts at the riser's — nothing of either runs past them.
-  const tapX = (i: number) => colLeft(i) + branchDx;
+  const tapX = (i: number) => colLeft(i) + dxOf(i);
   const breaks: { end: number; start: number; label: string }[] = [];
   ends.forEach((end, i) => {
     const j = pairOf.get(i);
@@ -3322,10 +3455,28 @@ function drawSheet(o: {
   o.lines.forEach((line_, i) => {
     const x = tapX(i);
     const offBus = isMv && mvOffBus(mvCells[i].opts);
+    const chainTop = topOf(i);
+    const parent = parentOf[i];
+    const kids = childrenOf(i);
+    // From the main bus, or from the sub-bus of the feeder it hangs on.
+    const fromY = parent >= 0 && parent !== i ? subBusY(parent) : busY;
     if (!offBus) {
-      out.push(`<line x1="${x}" y1="${busY}" x2="${x}" y2="${chainTop}" stroke="#111" stroke-width="1.3"/>`);
-      out.push(`<circle cx="${x}" cy="${busY}" r="3" fill="#111"/>`);
+      out.push(`<line x1="${x}" y1="${fromY}" x2="${x}" y2="${chainTop}" stroke="#111" stroke-width="1.3"/>`);
+      out.push(`<circle cx="${x}" cy="${fromY}" r="3" fill="#111"/>`);
     }
+    // A feeder with a sub-bus runs down into it, and the sub-bus runs on
+    // under every feeder that hangs from it.
+    const subBus = (from: number) => {
+      const sy = subBusY(i);
+      const xs = [x, ...kids.map(tapX)];
+      const x1 = Math.min(...xs) - 10;
+      const x2 = Math.max(...xs) + 10;
+      out.push(`<line x1="${x}" y1="${from}" x2="${x}" y2="${sy}" stroke="#111" stroke-width="1.3"/>`);
+      out.push(`<line data-layer="BUS" x1="${x1}" y1="${sy}" x2="${x2}" y2="${sy}" stroke="#111" stroke-width="2.4"/>`);
+      out.push(`<circle cx="${x}" cy="${sy}" r="3" fill="#111"/>`);
+      out.push(`<text x="${x1}" y="${sy + 12}" font-size="8.5" font-weight="600" fill="#111">${
+        esc(`SUB BUS ${String(line_.feederNo ?? '').trim()}`)}</text>`);
+    };
 
     const lv = lvCells[i];
     if (lv) {
@@ -3333,17 +3484,19 @@ function drawSheet(o: {
       // plug-in contact, the cell, the plug-in again, then the load.
       if (lv.phases) out.push(phaseTick(x, chainTop - 9, lv.phases));
       if (lv.plug) out.push(drawBlock('plug-in', x, chainTop));
-      const cell = drawMvCell(lv.chain, lv.opts, x, chainTop + lv.plug, loadY + 36);
+      const cell = drawMvCell(lv.chain, lv.opts, x, chainTop + lv.plug, kids.length ? subBusY(i) - 6 : loadY + 36);
       out.push(cell.svg);
       let b = Math.max(cell.bottom, chainTop + lv.plug);
       if (lv.plug) { out.push(drawBlock('plug-in', x, b)); b += lv.plug; }
+      if (kids.length) { subBus(b); return; }
       out.push(lvEnd(i, x, b, line_));
       return;
     }
     const drawn = isMv
-      ? drawMvCell(mvCells[i].chain, mvCells[i].opts, x, chainTop, loadY + 36)
+      ? drawMvCell(mvCells[i].chain, mvCells[i].opts, x, chainTop, kids.length ? subBusY(i) - 6 : loadY + 36)
       : drawBranch(branches[i], x, chainTop);
     out.push(drawn.svg);
+    if (kids.length) { subBus(drawn.bottom); return; }
     if (!isMv) {
       out.push(lvEnd(i, x, drawn.bottom, line_));
       return;

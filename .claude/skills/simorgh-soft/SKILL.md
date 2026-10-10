@@ -300,7 +300,15 @@ branch: `SHUNT_SRC` group source) feeding the voltage selector then the
 voltmeter on its own lane; a "CT" whose text reads as a VT ratio
 (`LOOKS_VT`) is drawn as the VT. Control devices (lamp, alarm, LCS, PTC, hour
 meter) hang on no transformer. Incoming and coupling columns are
-`WIDE_ROLE` (1.45×) wider than a feeder's.
+`WIDE_ROLE` (+70 units) wider than their own content; every column is sized
+by its own drawing (`ownWidth`, `dxOf`), not the sheet's widest cell.
+Side-fed office meters (`sideFed`) on a transformer's chain stand in a row in
+series — in at 1, out at 2 into the next (`stack(..., inSeries)` in the cell,
+the row layout in `layoutBranch`/`drawBranch`) — as the owner's EPLAN sheets
+draw CT → M → A.S → A.
+**Sub-bus:** a dot in the feeder number (L1.1, L1.2) means it hangs on a
+sub-busbar fed by L1 (`parentOf`, `topOf`, `subBusY` in `drawSheet`): L1 runs
+down into "SUB BUS L1", its feeders hang a tier lower.
 
 **Each part answers for itself** (`part.sld`, asked in `PartQuestionsDialog`
 when the part is entered and from its edit button in the parts list). A later
