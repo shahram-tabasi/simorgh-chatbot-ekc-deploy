@@ -309,6 +309,13 @@ draw CT → M → A.S → A.
 **Sub-bus:** a dot in the feeder number (L1.1, L1.2) means it hangs on a
 sub-busbar fed by L1 (`parentOf`, `topOf`, `subBusY` in `drawSheet`): L1 runs
 down into "SUB BUS L1", its feeders hang a tier lower.
+**VT:** its primary fuse between the line and the VT (branch: drawn in the
+shunt, `SHUNT_STEP + CELL`; cell: the existing HRC fuse), an MCB on its
+secondary before the voltage selector/voltmeter (`vtMcb`), and — on an
+incomer when the board has a coupling (`synchroOf`, text from the coupling
+row's description) — the synchro-check sample: its own MCB off the VT's
+secondary and an arrow "VOLTAGE SAMPLE FOR SYNCHRO CHECK RELAY TO COUPLING …"
+(`synchroSample`; `Branch.synchro`, `MvCellOptions.synchro`).
 
 **Each part answers for itself** (`part.sld`, asked in `PartQuestionsDialog`
 when the part is entered and from its edit button in the parts list). A later

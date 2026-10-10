@@ -984,6 +984,37 @@ const asVt = (i: ChainItem): ChainItem =>
 /** Where an instrument's own sample goes when its window says nothing. */
 const defaultSend = (i: ChainItem): string =>
   (isAuxCt(i) ? 'TO LCS' : i.id === 'transducer' ? 'TO LCS / PDCS' : '');
+/** The MCB on a VT's secondary: one before the voltmeters, one on the
+ *  synchro-check sample — as the office draws the VT's secondary. */
+const vtMcb = (): ChainItem =>
+  ({ id: 'mcb', tag: '-F', label: 'F', simTable: '', code: '', slot: '', accessories: [], accessoryCodes: [] });
+/** The synchro-check sample's text, in two lines. */
+const synchroLines = (to: string): [string, string] =>
+  ['VOLTAGE SAMPLE FOR SYNCHRO CHECK', `RELAY TO ${to}`];
+/**
+ * A voltage sample off the VT's secondary at `tap`: down its own lane at `lx`
+ * through its own MCB, and out to the right with what it is for.
+ * Returns the markup and how far down and right it reached.
+ */
+function synchroSample(tap: Pt, lx: number, downTo: number, outTo: number, to: string):
+  { svg: string; bottom: number; right: number } {
+  const out: string[] = [];
+  const mcb = vtMcb();
+  const my = Math.max(downTo, tap.y + 8);
+  const m1 = pinOf('mcb', lx, my, '1');
+  const m2 = pinOf('mcb', lx, my, '2');
+  const ay = m2.y + 10;
+  out.push(line(tap.x, tap.y, lx, tap.y, 1.1), line(lx, tap.y, lx, m1.y, 1.1));
+  out.push(`<circle cx="${lx}" cy="${tap.y}" r="2.2" fill="#111"/>`);
+  out.push(drawDevice(mcb, lx, my));
+  out.push(`<text x="${lx - 7}" y="${my + HALF + 3}" font-size="8" text-anchor="end" fill="#111">F</text>`);
+  out.push(line(lx, m2.y, lx, ay, 1.1), line(lx, ay, outTo, ay, 1.1), arrowRight(outTo + 6, ay));
+  const [l1, l2] = synchroLines(to);
+  out.push(`<text x="${outTo + 10}" y="${ay - 2}" font-size="7.5" fill="#111">${esc(l1)}</text>`);
+  out.push(`<text x="${outTo + 10}" y="${ay + 8}" font-size="7.5" fill="#111">${esc(l2)}</text>`);
+  return { svg: out.join(''), bottom: ay + 12, right: outTo + 10 + Math.max(l1.length, l2.length) * 7.5 * 0.62 };
+}
+
 /** The source index a VT beside the line is given among the series indices. */
 const SHUNT_SRC = 1000;
 
@@ -1012,6 +1043,9 @@ interface Branch {
    *  comes into the test block beside the CT, so both reach the relay through
    *  it — and where there is no test block, straight into the relay. */
   alsoFed: (number | null)[];
+  /** An incomer on a board with a coupling: where its VT's synchro-check
+   *  sample goes. */
+  synchro?: string;
 }
 
 function splitBranch(chain_: ChainItem[]): Branch {
@@ -1099,6 +1133,8 @@ interface BranchLayout {
   groups: InstrumentGroup[];
   /** The lowest point anything on the branch reaches. */
   bottom: number;
+  /** Where the VT's synchro-check sample comes down, under the groups. */
+  syncY: number;
 }
 
 // A shunt needs its own cell and the earth under it.
@@ -1111,7 +1147,9 @@ function layoutBranch(branch: Branch, top: number): BranchLayout {
   // the cell — switch, earth switch, CT, divider, arrester, core balance.
   const ys: number[] = [];
   const shuntYs: number[] = new Array(branch.shunts.length).fill(top);
-  const step = (item: ChainItem) => (item.id === 'magnet' ? CELL + 4 : SHUNT_STEP);
+  // The VT stands under its primary fuse, so it takes a cell more.
+  const step = (item: ChainItem) => (item.id === 'magnet' ? CELL + 4
+    : item.id === 'voltage-transformer' ? SHUNT_STEP + CELL : SHUNT_STEP);
   let y = top;
 
   const placeShunts = (after: number) => {
@@ -1144,7 +1182,10 @@ function layoutBranch(branch: Branch, top: number): BranchLayout {
     const items = branch.instruments
       .map((_, k) => k).filter(k => branch.fedBy[k] === source);
     if (items.length === 0) continue;
-    const start = Math.max(cursor, source == null ? top : srcY(source));
+    // Off a VT: under its fuse, and room on the lane for the secondary's MCB.
+    const start = source != null && source >= SHUNT_SRC
+      ? Math.max(cursor, srcY(source) + CELL) + symbolHeight('mcb') + 14
+      : Math.max(cursor, source == null ? top : srcY(source));
     const at: number[] = [];
     let y0 = start;
     for (let n = 0; n < items.length;) {
@@ -1168,7 +1209,9 @@ function layoutBranch(branch: Branch, top: number): BranchLayout {
 
   return {
     ys, seriesBottom, shuntYs, groups,
-    bottom: Math.max(seriesBottom, cursor),
+    bottom: Math.max(seriesBottom, cursor
+      + (branch.synchro && branch.shunts.some(sh => sh.id === 'voltage-transformer') ? symbolHeight('mcb') + 44 : 0)),
+    syncY: cursor,
   };
 }
 
@@ -1418,7 +1461,7 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
   const out: string[] = [];
   const ix = x + INSTR_DX;
   const sx = x - SHUNT_DX;
-  const { ys, seriesBottom, shuntYs, groups } = layoutBranch(branch, top);
+  const { ys, seriesBottom, shuntYs, groups, syncY } = layoutBranch(branch, top);
   const srcY = (s: number) => (s >= SHUNT_SRC ? shuntYs[s - SHUNT_SRC] : ys[s]);
 
   // A device whose connection leaves at the middle of its cell has its own
@@ -1474,10 +1517,25 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
       out.push(line(sx, y, x, y, 1.2));
       out.push(`<circle cx="${x}" cy="${y}" r="2.4" fill="#111"/>`);
     }
+    if (item.id === 'voltage-transformer') {
+      // Its primary fuse first, then the VT under it, then the earth.
+      const fuse = synth('fuse', 'F');
+      out.push(drawDevice(fuse, sx, y));
+      out.push(`<text x="${sx - 10}" y="${y + HALF + 3}" font-size="8" text-anchor="end" fill="#111">F</text>`);
+      out.push(drawDevice(item, sx, y + CELL));
+      out.push(earth(sx, y + 2 * CELL + 8));
+      out.push(deviceText(item, sx - 24, y + CELL + 14, 11, 'end'));
+      return;
+    }
     out.push(drawDevice(item, sx, y));
     if (item.id !== 'magnet' && item.id !== 'earthing-switch') out.push(earth(sx, y + CELL + 8));
     out.push(deviceText(item, sx - 24, y + 14, 11, 'end'));
   });
+  /** Where a VT beside the line puts out its secondary: its right side,
+   *  level with its middle — under its fuse. */
+  const vtAt = branch.shunts.findIndex(sh => sh.id === 'voltage-transformer');
+  const vtSecondary = (k: number): Pt =>
+    ({ x: sx + symbolRight(dk(branch.shunts[k])) - 6, y: shuntYs[k] + CELL + CELL / 2 });
 
   // The instruments beside the line, group by group: the transformer's
   // connection out to the column, and the instruments strung on it.
@@ -1485,7 +1543,8 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
     const first = group.ys[0];
     const ty = group.source == null
       ? (controlFrom == null ? first + CELL / 2 : ys[controlFrom] + CELL / 2)
-      : srcY(group.source) + CELL / 2;
+      : group.source >= SHUNT_SRC ? vtSecondary(group.source - SHUNT_SRC).y
+        : srcY(group.source) + CELL / 2;
 
     // The VT stands beside the line on the left: its secondary comes out of
     // it and across to the column.
@@ -1495,7 +1554,7 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
     // column, never down the CT chain's line through its meters.
     const lane = gi > 0 && first > ty + 1 ? ix - 20 - (gi - 1) * 6 : ix;
     out.push(fromVt
-      ? secondary(sx + symbolRight(dk(branch.shunts[group.source! - SHUNT_SRC])) - 6, ty, lane, branch.shunts[group.source! - SHUNT_SRC])
+      ? secondary(vtSecondary(group.source! - SHUNT_SRC).x, ty, lane, branch.shunts[group.source! - SHUNT_SRC])
       : secondary(x, ty, lane, group.source == null ? null : branch.series[group.source]));
     // From the transformer's line to each instrument's own connection point,
     // and on from one instrument's 2 to the next one's 1 — never a line run
@@ -1507,6 +1566,15 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
       if (Math.abs(a.x - b.x) >= 0.5) out.push(line(a.x, b.y, b.x, b.y));
     };
     let from: Pt = { x: lane, y: ty };
+    if (fromVt) {
+      // The secondary's MCB on the lane, just before the voltmeters — below
+      // the CT's chain, so it stands clear of that column.
+      const my = Math.max(ty + 6, first - symbolHeight('mcb') - 6);
+      out.push(line(lane, ty, lane, pinOf('mcb', lane, my, '1').y, 1.1));
+      out.push(drawDevice(vtMcb(), lane, my));
+      out.push(`<text x="${lane + symbolRight('mcb') + 3}" y="${my + HALF + 3}" font-size="8" fill="#111">F</text>`);
+      from = pinOf('mcb', lane, my, '2');
+    }
     /** Where the label before ends, in a row: the next device clears it. */
     let clear = -Infinity;
     const rowItem = (n: number) => sideFed(dk(branch.instruments[group.items[n]]));
@@ -1585,6 +1653,17 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
     });
   });
 
+  // The synchro-check sample off the VT's secondary, its own MCB, out to the
+  // coupling's relay — under everything hung on the column.
+  if (branch.synchro && vtAt >= 0) {
+    const vs = vtSecondary(vtAt);
+    const vtGroup = groups.findIndex(g => g.source === SHUNT_SRC + vtAt);
+    const lane = vtGroup > 0 ? ix - 20 - (vtGroup - 1) * 6 : ix;
+    const lx = lane - symbolLeft('mcb') - 10;
+    if (vtGroup < 0) out.push(secondary(vs.x, vs.y, lx, branch.shunts[vtAt]));
+    out.push(synchroSample({ x: lx, y: vs.y }, lx, syncY + 4, ix + 10, branch.synchro).svg);
+  }
+
   return { svg: out.join('\n'), bottom: seriesBottom };
 }
 
@@ -1661,6 +1740,9 @@ export interface MvCellOptions {
   /** LV: OFW (in a drawer — the breaker is fixed in it) or FIX (the
    *  breaker withdrawable). */
   lvFamily?: string;
+  /** An incomer on a board with a coupling: its VT sends a voltage sample to
+   *  the coupling's synchro-check relay — this is where it goes. */
+  synchro?: string;
 }
 
 export const mvOptionsOf = (template?: TemplateLike): MvCellOptions => ({
@@ -3003,18 +3085,37 @@ function drawMvCellLines(
     });
   });
 
-  // The voltage instruments, off the VT when there is one.
+  // The voltage instruments, off the VT when there is one: out of its
+  // secondary through its MCB, on to the voltage selector and the voltmeter.
+  const vtSrc = socketVt ?? loadVt ?? series.find(i => i.id === 'voltage-transformer');
+  const vtY = vtSrc ? ys.get(vtSrc) : undefined;
+  const vtOut: Pt | null = vtSrc && vtY != null
+    ? { x: vtSrc === socketVt ? sx + 28 : x + 28, y: vtSrc === socketVt ? vtY + CELL + 10 + HALF + 5 : vtY + HALF + 5 }
+    : null;
   if (volts.length) {
-    const vt = socketVt ?? loadVt ?? series.find(i => i.id === 'voltage-transformer');
-    const vy = vt ? ys.get(vt) : undefined;
-    const start = ty;
-    ty = stack(volts, ty, ix, ty, true) + 8;
-    if (vt && vy != null) {
-      const fromX = vt === socketVt ? sx + 28 : x + 28;
-      const fromY = vt === socketVt ? vy + CELL + 10 + HALF + 5 : vy + HALF + 5;
-      const lane = x + MV_CELL.laneDx - MV_CELL.laneStep;
-      out.push(solidPath([{ x: fromX, y: fromY }, { x: lane, y: fromY }, { x: lane, y: start }, { x: ix, y: start }]), node({ x: ix, y: start }));
+    const lane = x + MV_CELL.laneDx - MV_CELL.laneStep;
+    const mcbH = symbolHeight('mcb');
+    const start = vtOut ? Math.max(ty, vtOut.y + mcbH + 16) : ty;
+    ty = stack(volts, start, ix, start, true) + 8;
+    if (vtOut) {
+      const my = vtOut.y + 4;
+      const m1 = pinOf('mcb', lane, my, '1');
+      const m2 = pinOf('mcb', lane, my, '2');
+      out.push(solidPath([vtOut, { x: lane, y: vtOut.y }, m1]));
+      out.push(drawDevice(vtMcb(), lane, my));
+      out.push(`<text x="${lane + symbolRight('mcb') + 3}" y="${my + HALF + 3}" font-size="8" fill="#111">F</text>`);
+      out.push(solidPath([m2, { x: lane, y: start }, { x: ix, y: start }]), node({ x: ix, y: start }));
     }
+  }
+  // The synchro-check sample: its own MCB off the VT's secondary, out to the
+  // coupling's relay.
+  if (opts.synchro && vtOut) {
+    const lane2 = x + MV_CELL.laneDx - MV_CELL.laneStep * 2;
+    if (!volts.length) out.push(solidPath([vtOut, { x: lane2, y: vtOut.y }]));
+    const sync = synchroSample({ x: lane2, y: vtOut.y }, lane2, Math.max(ty, vtOut.y + 12), ix + 10, opts.synchro);
+    out.push(sync.svg);
+    reach(sync.right, sync.bottom);
+    ty = sync.bottom + 6;
   }
 
   // Everything else — the alarm window, lamps, the LCS — on the relay's
@@ -3116,10 +3217,27 @@ function drawSheet(o: {
   // A medium-voltage board is drawn cell by cell (`drawMvCell`), each with the
   // answers its own template holds.
   const isMv = LAYOUT_OF[o.equipment.type] === 'MV';
+  const roleOf = (l: DeviceTableRow): 'incoming' | 'coupling' | 'riser' | 'outgoing' => {
+    const t = `${l.wiringType ?? ''} ${l.description ?? ''} ${l.templateName ?? ''} ${l.tag ?? ''} ${l.feederNo ?? ''}`;
+    if (/riser/i.test(t)) return 'riser';
+    if (/coupl|bus.?sec|\btie\b|\bB\.?T\b|sectionali/i.test(t)) return 'coupling';
+    if (/incom|\bmain\b|supply|source|\bINC\b/i.test(t)) return 'incoming';
+    return 'outgoing';
+  };
+  // An incomer's VT sends a voltage sample to the coupling's synchro-check
+  // relay, when the board has a coupling: named as the coupling is.
+  const couplingRow = (o.equipment.devices ?? []).find(l => roleOf(l) === 'coupling');
+  const synchroTo = couplingRow
+    ? (() => {
+      const d = String(couplingRow.description ?? '').trim().toUpperCase();
+      return d ? (/COUPL/.test(d) ? d : `COUPLING ${d}`) : 'COUPLING';
+    })()
+    : '';
+  const synchroOf = (l: DeviceTableRow) => (synchroTo && roleOf(l) === 'incoming' ? synchroTo : undefined);
   const mvOf = (line_: DeviceTableRow, page: number) => {
     const template = line_.templateId ? o.templates.get(line_.templateId) : undefined;
     const chain = chainFor(line_, o.templates, o.order, page, o.symbols, o.equipment.type);
-    const opts = mvOptionsOf(template);
+    const opts = { ...mvOptionsOf(template), synchro: synchroOf(line_) };
     return { chain, opts, size: measureMvCell(chain, opts) };
   };
   const mvCells = isMv ? o.lines.map((line_, i) => mvOf(line_, o.firstIndex + i + 1)) : [];
@@ -3135,7 +3253,7 @@ function drawSheet(o: {
     const chain = chainFor(line_, o.templates, o.order, page, o.symbols, o.equipment.type);
     const opts: MvCellOptions = {
       answers: template.singleLine, mechanical: template.mechanical,
-      family: '', cellType: '', sub: '', lv: true, lvFamily,
+      family: '', cellType: '', sub: '', lv: true, lvFamily, synchro: synchroOf(line_),
     };
     return {
       chain, opts, size: measureMvCell(chain, opts),
@@ -3145,9 +3263,11 @@ function drawSheet(o: {
   const lvCells = o.lines.map((line_, i) => lvCellOf(line_, o.firstIndex + i + 1));
   const lvAll = lvCells.filter((c): c is NonNullable<typeof c> => c != null);
 
-  const branches = o.lines.map((line_, i) =>
-    splitBranch(chainFor(
-      line_, o.templates, o.order, o.firstIndex + i + 1, o.symbols, o.equipment.type)));
+  const branches = o.lines.map((line_, i) => ({
+    ...splitBranch(chainFor(
+      line_, o.templates, o.order, o.firstIndex + i + 1, o.symbols, o.equipment.type)),
+    synchro: synchroOf(line_),
+  }));
   const supplyAll = o.supply
     ? splitBranch(chainFor(o.supply, o.templates, o.order, 0, o.symbols, o.equipment.type))
     : null;
@@ -3206,13 +3326,6 @@ function drawSheet(o: {
     ...mvAll.map(c => branchDx + c.size.right + 24),
   );
 
-  const roleOf = (l: DeviceTableRow): 'incoming' | 'coupling' | 'riser' | 'outgoing' => {
-    const t = `${l.wiringType ?? ''} ${l.description ?? ''} ${l.templateName ?? ''} ${l.tag ?? ''} ${l.feederNo ?? ''}`;
-    if (/riser/i.test(t)) return 'riser';
-    if (/coupl|bus.?sec|\btie\b|\bB\.?T\b|sectionali/i.test(t)) return 'coupling';
-    if (/incom|\bmain\b|supply|source|\bINC\b/i.test(t)) return 'incoming';
-    return 'outgoing';
-  };
   // Each column as wide as what is drawn in it — a plain feeder stays narrow,
   // so the sheet is not strung out to the widest cell's width. An incomer and
   // a coupling carry more than a feeder (the CT and its chain, the VT and its
@@ -3226,7 +3339,10 @@ function drawSheet(o: {
     const own = Math.max(16, ...[...b.series, ...b.instruments].map(it => symbolLeft(dk(it))));
     return cell
       ? Math.max(34, own + 10, cell.size.left + 12)
-      : Math.max(b.shunts.length ? 130 : 34, own + 10);
+      // What stands left of the line — the shunts and their labels, written
+      // to their left — stays inside the column.
+      : Math.max(b.shunts.length ? 130 : 34, own + 10,
+        ...b.shunts.map(sh => SHUNT_DX + 24 + labelWidth(sh, TEXT.tag, LV_WRAP) + 8));
   };
   const ownWidth = (i: number) => {
     const b = branches[i];
