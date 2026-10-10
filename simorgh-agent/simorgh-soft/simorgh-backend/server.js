@@ -749,6 +749,11 @@ app.post('/api/eplan-parts', async (req, res) => {
     const sqlDb = await connectToSqlServer();
 
     const { searchTerm = '', manufacturer = '', page = 1, pageSize = 100 } = req.body;
+    // The kind of device asked for (the Offer Template's headers): words any
+    // one of which a part's type number or descriptions must hold. Absent,
+    // nothing is narrowed — every other caller is answered as before.
+    const kindWords = (Array.isArray(req.body?.kindWords) ? req.body.kindWords : [])
+      .map(w => String(w ?? '').trim()).filter(Boolean).slice(0, 20);
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSizeNum = Math.min(500, Math.max(1, parseInt(pageSize) || 100));
     const offset = (pageNum - 1) * pageSizeNum;
@@ -779,6 +784,15 @@ app.post('/api/eplan-parts', async (req, res) => {
     if (manufacturer) {
       where.push(`manufacturer = @man`);
       params.man = manufacturer;
+    }
+
+    // Kind filter — parameterised like the rest, one parameter per word.
+    if (kindWords.length) {
+      const any = kindWords.map((w, i) => {
+        params[`kind${i}`] = `%${w}%`;
+        return `(typenr LIKE @kind${i} OR description1 LIKE @kind${i} OR description2 LIKE @kind${i} OR description3 LIKE @kind${i})`;
+      });
+      where.push(`(${any.join(' OR ')})`);
     }
 
     const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";

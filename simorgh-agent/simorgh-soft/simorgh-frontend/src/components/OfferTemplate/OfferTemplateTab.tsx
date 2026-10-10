@@ -1,11 +1,15 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   GripVerticalIcon, PlusIcon, SearchIcon, Trash2Icon, ChevronUpIcon, ChevronDownIcon,
+  CopyIcon, ClipboardPasteIcon, ReplaceIcon,
 } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext';
 import { PanelFrame } from '../shared/PanelFrame';
 import { TemplateTree } from '../TemplateCreation/TemplateTree';
-import { PartSelectionDialog } from '../TemplateCreation/TemplateProperties';
+import { PartSelectionDialog, templateSectionClip } from '../TemplateCreation/TemplateProperties';
+import {
+  kindOfHeader, offerClip, onOfferClip, setOfferClip, shareTemplate, sharedTemplate, simTableOf,
+} from '../../utils/offerTemplate';
 import type { OfferTemplatePart, OfferTemplateSection, TemplateItem } from '../../types/project';
 import { LAYOUT_OF, TIERS } from '../../utils/tiers';
 import {
@@ -38,7 +42,11 @@ function headersFor(type: TemplateItem['type']): string[] {
 
 export const OfferTemplateTab: React.FC<{ onComplete?: () => void }> = ({ onComplete }) => {
   const { projectData, patchProjectData, isCurrentRevisionEditable } = useProject();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The template open in Create Template is the one open here, and back.
+  const [selectedId, setSelectedIdState] = useState<string | null>(sharedTemplate);
+  const setSelectedId = (id: string | null) => { shareTemplate(id); setSelectedIdState(id); };
+  const [clip, setClip] = useState(offerClip);
+  useEffect(() => onOfferClip(() => setClip(offerClip())), []);
   const [customHeader, setCustomHeader] = useState('');
   const [customHeaders, setCustomHeaders] = useState<string[]>([]);
   const [picking, setPicking] = useState<{ section: string; part?: string } | null>(null);
@@ -128,14 +136,46 @@ export const OfferTemplateTab: React.FC<{ onComplete?: () => void }> = ({ onComp
 
   const onPicked = (part: any) => {
     if (!picking) return;
+    // The description is the part's SIM-TABLE, as Create Template writes
+    // it; the EKC NUMBER is its type number.
     const fill: Partial<OfferTemplatePart> = {
-      partNumber: String(part?.PartNumber ?? '').trim(),
-      description: stripLocaleTags(part?.Designation1) || String(part?.PartNumber ?? ''),
+      partNumber: String(part?.TypeNumber ?? '').trim(),
+      description: simTableOf(part) || stripLocaleTags(part?.Designation1) || String(part?.PartNumber ?? ''),
       fullData: part,
     };
     if (picking.part) setPart(picking.section, picking.part, fill);
     else addPart(picking.section, fill);
     setPicking(null);
+  };
+
+  // ── Copy, paste, replace ────────────────────────────────────────────────
+  const fresh = (p: OfferTemplatePart): OfferTemplatePart =>
+    ({ ...JSON.parse(JSON.stringify(p)), id: `part-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}` });
+  /** What there is to paste: a part or a header copied here, or a section
+   *  copied in Create Template, read as offer parts. */
+  const pasteable = (): { from: string; parts: OfferTemplatePart[] } | null => {
+    if (clip) return clip;
+    const tc = templateSectionClip();
+    if (!tc || !tc.parts.length) return null;
+    return {
+      from: `${tc.label} in ${tc.templateName}`,
+      parts: tc.parts.map((p: any) => ({
+        id: '', description: p.simTableOverride || simTableOf(p.fullData) || p.partNumber || '',
+        partNumber: String(p.fullData?.TypeNumber ?? '').trim(), quantity: Number(p.quantity) || 1,
+        ...(p.fullData ? { fullData: p.fullData } : {}),
+      })),
+    };
+  };
+  const paste = (sid: string) => {
+    const c = pasteable();
+    if (!c) return;
+    save(sections.map(s => (s.id === sid ? { ...s, parts: [...s.parts, ...c.parts.map(fresh)] } : s)));
+  };
+  const replaceWithClip = (sid: string, pid: string) => {
+    const c = pasteable();
+    if (!c || !c.parts.length) return;
+    const { id: _id, ...with_ } = fresh(c.parts[0]);
+    setPart(sid, pid, with_);
   };
 
   /** What a drop on a section (or before one) does, by what was dragged. */
@@ -271,6 +311,13 @@ export const OfferTemplateTab: React.FC<{ onComplete?: () => void }> = ({ onComp
                       disabled={!canEdit || si === 0} onClick={() => shift(s.id, -1)}><ChevronUpIcon className="w-4 h-4" /></button>
                     <button className="p-1 rounded text-gray-500 hover:bg-gray-100 disabled:opacity-50" title="Move down"
                       disabled={!canEdit || si === sections.length - 1} onClick={() => shift(s.id, 1)}><ChevronDownIcon className="w-4 h-4" /></button>
+                    <button className="p-1 rounded text-gray-500 hover:bg-gray-100 disabled:opacity-50" title={`Copy the parts of ${s.header}`}
+                      disabled={s.parts.length === 0} onClick={() => setOfferClip({ from: `${s.header} in ${template.name}`, parts: s.parts })}>
+                      <CopyIcon className="w-4 h-4" /></button>
+                    <button className="p-1 rounded text-gray-500 hover:bg-gray-100 disabled:opacity-50"
+                      title={pasteable() ? `Paste ${pasteable()!.parts.length} part(s) — ${pasteable()!.from}` : 'Nothing copied'}
+                      disabled={!canEdit || !pasteable()} onClick={() => paste(s.id)}>
+                      <ClipboardPasteIcon className="w-4 h-4" /></button>
                     <button className="p-1 rounded text-gray-500 hover:bg-gray-100 disabled:opacity-50" title="Remove this header and its parts"
                       disabled={!canEdit} onClick={() => save(sections.filter(x => x.id !== s.id))}><Trash2Icon className="w-4 h-4" /></button>
                   </div>
@@ -282,10 +329,10 @@ export const OfferTemplateTab: React.FC<{ onComplete?: () => void }> = ({ onComp
                           <tr>
                             <th className="w-6" />
                             <th className="text-start font-medium px-1 py-1">Description</th>
-                            <th className="text-start font-medium px-1 py-1 w-[22%]">Part number (optional)</th>
+                            <th className="text-start font-medium px-1 py-1 w-[22%]">EKC NUMBER</th>
                             <th className="text-start font-medium px-1 py-1 w-[4.5rem]">Qty</th>
                             <th className="text-start font-medium px-1 py-1 w-[20%]">Note</th>
-                            <th className="w-16" />
+                            <th className="w-28" />
                           </tr>
                         </thead>
                         <tbody>
@@ -308,7 +355,7 @@ export const OfferTemplateTab: React.FC<{ onComplete?: () => void }> = ({ onComp
                               </td>
                               <td className="px-1 py-0.5">
                                 <input className={`${input} w-full`} value={p.description} disabled={!canEdit}
-                                  placeholder="e.g. MCCB 400 A 3P"
+                                  placeholder="SIM-TABLE, or e.g. MCCB 400 A 3P"
                                   onChange={e => setPart(s.id, p.id, { description: e.target.value })} />
                               </td>
                               <td className="px-1 py-0.5">
@@ -324,9 +371,18 @@ export const OfferTemplateTab: React.FC<{ onComplete?: () => void }> = ({ onComp
                                   onChange={e => setPart(s.id, p.id, { note: e.target.value })} />
                               </td>
                               <td className="px-1 text-right whitespace-nowrap">
-                                <button className="p-1 rounded text-gray-500 hover:bg-gray-100 disabled:opacity-50" title="Pick a part from the catalogue"
+                                <button className="p-1 rounded text-gray-500 hover:bg-gray-100 disabled:opacity-50" title="Replace from the catalogue"
                                   disabled={!canEdit} onClick={() => setPicking({ section: s.id, part: p.id })}>
                                   <SearchIcon className="w-4 h-4" />
+                                </button>
+                                <button className="p-1 rounded text-gray-500 hover:bg-gray-100 disabled:opacity-50" title="Copy this part"
+                                  onClick={() => setOfferClip({ from: p.description || p.partNumber || 'part', parts: [p] })}>
+                                  <CopyIcon className="w-4 h-4" />
+                                </button>
+                                <button className="p-1 rounded text-gray-500 hover:bg-gray-100 disabled:opacity-50"
+                                  title={pasteable() ? `Replace with the copied part — ${pasteable()!.from}` : 'Nothing copied'}
+                                  disabled={!canEdit || !pasteable()} onClick={() => replaceWithClip(s.id, p.id)}>
+                                  <ReplaceIcon className="w-4 h-4" />
                                 </button>
                                 <button className="p-1 rounded text-gray-500 hover:bg-gray-100 disabled:opacity-50" title="Remove"
                                   disabled={!canEdit}
@@ -345,9 +401,17 @@ export const OfferTemplateTab: React.FC<{ onComplete?: () => void }> = ({ onComp
                         <PlusIcon className="w-4 h-4" /> Add part
                       </button>
                       <button disabled={!canEdit} onClick={() => setPicking({ section: s.id })}
-                        className="flex items-center gap-1.5 px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50 disabled:opacity-50">
+                        className="flex items-center gap-1.5 px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50 disabled:opacity-50"
+                        title={kindOfHeader(s.header) ? `The catalogue, showing ${kindOfHeader(s.header)!.label} only` : 'The catalogue'}>
                         <SearchIcon className="w-4 h-4" /> From catalogue
                       </button>
+                      {pasteable() && (
+                        <button disabled={!canEdit} onClick={() => paste(s.id)}
+                          className="flex items-center gap-1.5 px-3 py-1 border border-gray-300 bg-white text-gray-700 rounded text-sm hover:bg-gray-50 disabled:opacity-50"
+                          title={`Paste — ${pasteable()!.from}`}>
+                          <ClipboardPasteIcon className="w-4 h-4" /> Paste {pasteable()!.parts.length}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -384,6 +448,7 @@ export const OfferTemplateTab: React.FC<{ onComplete?: () => void }> = ({ onComp
         onSelect={onPicked}
         propertyName={sections.find(s => s.id === picking?.section)?.header ?? ''}
         currentPart={null}
+        kind={kindOfHeader(sections.find(s => s.id === picking?.section)?.header ?? '')}
       />
     </div>
   );

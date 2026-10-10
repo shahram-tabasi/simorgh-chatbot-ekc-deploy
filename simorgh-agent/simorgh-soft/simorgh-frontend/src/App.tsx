@@ -1105,7 +1105,7 @@ const MainApp: React.FC = () => {
       title: `Project Definition`,
       component: (
         <ProjectDefinitionTab
-          onComplete={() => setActiveTab(1)}
+          onComplete={() => setActiveTab(8)}
           requestedSubTab={projDefSubTab}
           requestedDeviceId={navigatingToDeviceId}
         />
@@ -1116,8 +1116,9 @@ const MainApp: React.FC = () => {
       title: `Create Template`,
       // Held to the window, so each of its panels scrolls on its own.
       fill: true,
-      // Next goes to Offer Template, shown after it; Offer Template's Next to Scope Selection.
-      component: <TemplateCreationTab onComplete={() => setActiveTab(8)} initialSelectedTemplate={navigatingToTemplateId} />
+      // The offer comes first: Project Definition → Offer Template →
+      // Create Template → Scope Selection.
+      component: <TemplateCreationTab onComplete={() => setActiveTab(DEVICE_SELECTION_TAB)} initialSelectedTemplate={navigatingToTemplateId} />
     },
     {
       id: 2,
@@ -1183,7 +1184,7 @@ const MainApp: React.FC = () => {
       id: 8,
       title: `Offer Template`,
       fill: true,
-      component: <OfferTemplateTab onComplete={() => setActiveTab(DEVICE_SELECTION_TAB)} />
+      component: <OfferTemplateTab onComplete={() => setActiveTab(1)} />
     }
   ];
 
@@ -1408,8 +1409,8 @@ const MainApp: React.FC = () => {
               canRaiseRevision={isTpmsMastered}
             />
             <div className="flex-1 min-w-0">
-              {/* Offer Template is shown beside Create Template, the template it
-                  is the offer version of; it keeps its own number (8). */}
+              {/* Offer Template is shown just before Create Template — the offer
+                  comes first; it keeps its own number (8). */}
               <TabNavigation tabs={tabs} activeTab={activeTab} onTabChange={requestTab} order={TAB_ORDER} />
             </div>
           </div>
@@ -1660,7 +1661,7 @@ const MainApp: React.FC = () => {
 
 // Device Selection's position in the tab strip.
 /** The order the tabs are shown in; each keeps its index everywhere else. */
-const TAB_ORDER = [0, 1, 8, 2, 3, 4, 5, 6, 7];
+const TAB_ORDER = [0, 8, 1, 2, 3, 4, 5, 6, 7];
 const DEVICE_SELECTION_TAB = 2;
 const SIMORGH_DRAW_TAB = 4;
 

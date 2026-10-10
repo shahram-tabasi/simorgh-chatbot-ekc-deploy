@@ -47,6 +47,8 @@ interface SectionClip {
   parts: PartInfo[];
 }
 let sectionClip: SectionClip | null = null;
+/** The section copied here, for the Offer Template to paste. */
+export const templateSectionClip = (): { label: string; templateName: string; parts: any[] } | null => sectionClip;
 
 interface TemplateItem {
   id: string;
@@ -105,6 +107,8 @@ interface PartSelectionDialogProps {
   onSelect: (part: any) => void;
   propertyName: string;
   currentPart?: PartInfo | null;
+  /** Only parts of this kind — the Offer Template's headers. Absent, all. */
+  kind?: { label: string; words: string[] } | null;
 }
 
 // دیالوگ انتخاب پارت از SQL Server - با صفحه‌بندی کامل
@@ -113,9 +117,13 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
   onClose,
   onSelect,
   propertyName,
-  currentPart
+  currentPart,
+  kind,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  /** The kind filter set aside, to see every part. */
+  const [allKinds, setAllKinds] = useState(false);
+  const kindWords = kind && !allKinds ? kind.words : undefined;
   const [parts, setParts] = useState<any[]>([]);
   const [selectedPart, setSelectedPart] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -133,9 +141,19 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
     if (isOpen) {
       setCurrentPage(1);
       setSelectedPart(null);
+      setAllKinds(false);
       fetchParts(1);
     }
   }, [isOpen]);
+
+  // The kind filter set aside or back: page 1 again.
+  useEffect(() => {
+    if (isOpen && kind) {
+      setCurrentPage(1);
+      fetchParts(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allKinds]);
 
   // Reload when manufacturer changes (reset to page 1)
   useEffect(() => {
@@ -156,6 +174,7 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
         body: JSON.stringify({
           searchTerm: searchTerm || undefined,
           manufacturer: selectedManufacturer || undefined,
+          ...(kindWords ? { kindWords } : {}),
           page: page,
           pageSize: PAGE_SIZE
         })
@@ -297,6 +316,14 @@ export const PartSelectionDialog: React.FC<PartSelectionDialogProps> = ({
             </button>
           </div>
           <div className="mt-2 flex items-center gap-3 flex-wrap">
+            {kind && (
+              <span className="text-xs text-gray-700 bg-gray-100 border border-gray-200 rounded-full px-2 py-0.5 flex items-center gap-2">
+                {allKinds ? 'All parts' : `Only ${kind.label}`}
+                <button className="text-blue-700 hover:underline" onClick={() => setAllKinds(v => !v)}>
+                  {allKinds ? `Only ${kind.label}` : 'Show all'}
+                </button>
+              </span>
+            )}
             {selectedManufacturer && (
               <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-sm flex items-center gap-1">
                 {selectedManufacturer}
@@ -908,6 +935,43 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     }));
   };
 
+  // ── What the offer said for each row ────────────────────────────────────
+  // The Offer Template comes first: its parts for a header are shown under
+  // the row of that name, to be taken in — a catalogue part straight away, a
+  // part described only in words through the search, in this row's kind.
+  const offerFor = (property: string, label: string) => {
+    const keys = [property, label].map(k => k.trim().toUpperCase());
+    return ((liveTemplate as { offerTemplate?: { header: string; parts: any[] }[] }).offerTemplate ?? [])
+      .filter(s => keys.includes(String(s.header ?? '').trim().toUpperCase()))
+      .flatMap(s => s.parts);
+  };
+  const offerHint = (property: string, label: string, enabled: boolean) => {
+    const parts = offerFor(property, label);
+    if (parts.length === 0) return null;
+    return (
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-xs text-gray-600">
+        <span className="font-medium">Offer:</span>
+        {parts.map((op, i) => (
+          <span key={op.id ?? i} className="inline-flex items-center gap-1 border border-gray-200 bg-gray-50 rounded px-1.5 py-0.5">
+            <span className="text-gray-800">{op.quantity}× {op.description || op.partNumber || '—'}</span>
+            {op.partNumber && <span className="font-mono text-gray-500">{op.partNumber}</span>}
+            {enabled && isCurrentRevisionEditable && (
+              <button
+                className="text-blue-700 hover:underline"
+                title={op.fullData ? 'Put this part in the row' : 'Find this part in the catalogue for this row'}
+                onClick={() => (op.fullData
+                  ? handlePartSelect(op.fullData, { propertyName: property, partIndex: null })
+                  : handleOpenPartDialog(property))}
+              >
+                use
+              </button>
+            )}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
   const handleOpenPartDialog = (propertyName: string, currentPart?: PartInfo, partIndex?: number) => {
     setDialogState({
       isOpen: true,
@@ -917,8 +981,8 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
     });
   };
 
-  const handlePartSelect = (part: any) => {
-    const { propertyName, partIndex } = dialogState;
+  const handlePartSelect = (part: any, target: { propertyName: string; partIndex: number | null } = dialogState) => {
+    const { propertyName, partIndex } = target;
     if (propertyName === OFFER_SLOT) {
       saveOffer([...offerParts, {
         partNumber: part.PartNumber, label: part.Designation1 || '', quantity: 1, fullData: part,
@@ -1259,6 +1323,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                         {propNameCell}
                       </td>
                       <td className="px-4 py-2 border-b" colSpan={6}>
+                        {offerHint(property, displayLabel, isEnabled)}
                         {isEnabled ? (
                           <button
                             onClick={() => handleOpenPartDialog(property)}
@@ -1392,6 +1457,7 @@ export const TemplateProperties: React.FC<TemplatePropertiesProps> = ({
                   {parts.length > 0 && (
                     <tr className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                       <td className="px-4 py-2 border-b" colSpan={6}>
+                        {offerHint(property, displayLabel, isEnabled)}
                         <button
                           onClick={() => handleOpenPartDialog(property)}
                           className="flex items-center text-blue-600 hover:text-blue-800 text-sm"

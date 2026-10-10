@@ -74,12 +74,17 @@ export function loadAccessParts(file = process.env.PARTS_ACCESS_FILE) {
 }
 
 // SQL Server's LIKE '%x%' under the default collation: anywhere, any case.
-function filterParts(rows, search, man) {
+function filterParts(rows, search, man, kindWords = []) {
   const needle = text(search).trim().toLowerCase();
   const maker = text(man);
+  const kinds = (Array.isArray(kindWords) ? kindWords : [])
+    .map(w => text(w).trim().toLowerCase()).filter(Boolean);
+  const kindOf = r => ['typenr', 'description1', 'description2', 'description3']
+    .map(f => text(r[f]).toLowerCase()).join(' ');
   return rows.filter(r =>
     (!maker || text(r.manufacturer) === maker)
-    && (!needle || SEARCH_FIELDS.some(f => text(r[f]).toLowerCase().includes(needle))));
+    && (!needle || SEARCH_FIELDS.some(f => text(r[f]).toLowerCase().includes(needle)))
+    && (!kinds.length || kinds.some(k => kindOf(r).includes(k))));
 }
 
 /**
@@ -100,10 +105,10 @@ export function registerAccessPartsRoutes(app, transformPartToFrontend) {
 
   app.post('/api/eplan-parts', onlyInAccessMode((req, res) => {
     const { rows, manufacturers } = loadAccessParts();
-    const { searchTerm = '', manufacturer = '', page = 1, pageSize = 100 } = req.body || {};
+    const { searchTerm = '', manufacturer = '', page = 1, pageSize = 100, kindWords = [] } = req.body || {};
     const pageNum = Math.max(1, parseInt(page) || 1);
     const size = Math.min(500, Math.max(1, parseInt(pageSize) || 100));
-    const hits = filterParts(rows, searchTerm, manufacturer);
+    const hits = filterParts(rows, searchTerm, manufacturer, kindWords);
     res.json({
       success: true,
       data: hits.slice((pageNum - 1) * size, pageNum * size).map(transformPartToFrontend),

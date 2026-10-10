@@ -533,8 +533,19 @@ Cut and the moves are hidden. A template made there carries `fromOffer` and
 `offerFamily` (the section, so `groupByFamily` files it before it has a path)
 and shows "needs technical". Opened in Create Template, the wizard opens on it
 in `edit` mode (also from the banner's Complete…); on save `fromOffer` /
-`offerFamily` are dropped, the id kept. Next: Create Template → Offer Template
-(8) → Scope Selection. `addTemplate` takes an optional last `extra`.
+`offerFamily` are dropped, the id kept. **The offer comes first**: shown
+order 0, 8, 1, 2…; Next: Project Definition → Offer (8) → Create Template (1)
+→ Scope Selection. `addTemplate` takes an optional last `extra`.
+`utils/offerTemplate.ts`: the template open in either tab (`sharedTemplate`),
+the offer clipboard (copy part/header, paste, replace; a Create Template
+section clip `templateSectionClip` pastes too), `simTableOf` (Description =
+SIM-TABLE; the EKC NUMBER column = TypeNumber, kept in `partNumber`), and
+`kindOfHeader` — keyword lists per header sent as `kindWords` to
+`/api/eplan-parts` (SQL and Access both filter typenr/description1-3), so a
+header's catalogue shows its own kind; `PartSelectionDialog`'s `kind` prop
+(absent in Create Template = unchanged). Create Template rows show the offer's
+parts of the same header with "use" (`offerHint`, `handlePartSelect(part,
+target)`).
 
 **Symbols live in three places** (`utils/cad/symbolBackup.ts`): the office
 library in Mongo (`/api/symbols`, new symbols and `redraw:` office redraws),

@@ -7,6 +7,7 @@ import { TemplateProperties } from './TemplateProperties';
 import { TIERS } from '../../utils/tiers';
 import { HierarchicalTemplateWizard } from './HierarchicalTemplateWizard';
 import type { TemplateItem } from '../../types/project';
+import { shareTemplate, sharedTemplate } from '../../utils/offerTemplate';
 
 interface TemplateCreationTabProps {
   onComplete: () => void;
@@ -232,7 +233,9 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
     projectData, holdLock, releaseLock, moveTemplate, setTemplateMechanical, setTemplateSingleLine,
     patchProjectData, isCurrentRevisionEditable,
   } = useProject();
-  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(initialSelectedTemplate ?? null);
+  // The template open in Offer Template is the one opened here, and back.
+  const [selectedTemplate, setSelectedTemplateState] = useState<string | null>(initialSelectedTemplate ?? null);
+  const setSelectedTemplate = (id: string | null) => { if (id) shareTemplate(id); setSelectedTemplateState(id); };
   /** A template the offer side made, opened here to be completed. */
   const [completing, setCompleting] = useState<TemplateItem | null>(null);
 
@@ -257,7 +260,14 @@ export const TemplateCreationTab: React.FC<TemplateCreationTabProps> = ({
     if (initialSelectedTemplate) {
       setSelectedTemplate(null);
       void openTemplate(initialSelectedTemplate);
+    } else {
+      // Arriving from Offer Template: open what was open there.
+      const shared = sharedTemplate();
+      if (shared && TIERS.some(type => (projectData?.templates?.[type] ?? []).some(t => t.id === shared))) {
+        void openTemplate(shared);
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSelectedTemplate, openTemplate]);
 
   if (!projectData) {
