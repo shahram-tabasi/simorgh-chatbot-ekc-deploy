@@ -289,6 +289,18 @@ LV arrow up, `lvEnd`); a coupling joins the riser beside it, or with none
 rises in its own column (`ownRiser`) to the next section; the bus section ends at the coupling's tap and the next starts at the riser (nothing between them, owner's rule)
 there — MV and LV alike. The placeholder supply arrow is drawn only when no
 row of the switchgear is an incomer.
+Secondary side, the owner's rule (both `drawBranch` and `drawMvCell`):
+the CT has one line on to the next device — the relay on the protection
+core; on the measuring core the auxiliary CT (`isAuxCt`, its sample TO LCS)
+or else the transducer (TO LCS / PDCS, `defaultSend`), the multimeter and
+other meters, the ampere selector, and the ammeter last, a dead end (a serial
+link after it may come later). `INSTRUMENT_RANK`/`rankOf` hold that order.
+The VT is never on the CT's line: it is a shunt beside the line (old LV
+branch: `SHUNT_SRC` group source) feeding the voltage selector then the
+voltmeter on its own lane; a "CT" whose text reads as a VT ratio
+(`LOOKS_VT`) is drawn as the VT. Control devices (lamp, alarm, LCS, PTC, hour
+meter) hang on no transformer. Incoming and coupling columns are
+`WIDE_ROLE` (1.45×) wider than a feeder's.
 
 **Each part answers for itself** (`part.sld`, asked in `PartQuestionsDialog`
 when the part is entered and from its edit button in the parts list). A later

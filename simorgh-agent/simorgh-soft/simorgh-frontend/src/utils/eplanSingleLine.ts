@@ -431,6 +431,11 @@ export function symbolForPart(
 
   const fromFunction = kindFromFunction(eplan?.functionDefinition);
   const described = partDescription(part);
+  // An auxiliary CT says "auxiliary", but it is a CT of its own on the
+  // measuring chain, not an accessory of the device above it.
+  if (AUX_CT.test(`${stripLocaleTags(part?.label) || ''} ${eplan?.functionDefinition ?? ''} ${described} ${named}`)) {
+    return { id: 'current-transformer', from: 'description', eplan };
+  }
   // The section a part was loaded into says what it is: a contactor loaded in
   // CONTACTOR. ORDER is a contactor, even when its description lists its
   // auxiliary contacts. EPLAN or the description only refine it within the
@@ -931,23 +936,56 @@ const powerRank = (id: SymbolId) => POWER_RANK[id] ?? 45;
 // with the earth under them, never in the power path.
 const SHUNT_RANK: Partial<Record<SymbolId, number>> = {
   'earthing-switch': 40, magnet: 41,
+  // The VT stands beside the line, parallel with the CT, never on its line.
+  'voltage-transformer': 51,
   'capacitive-divider': 60, 'surge-arrester': 65, 'surge-limiter': 66,
 };
 const isShunt = (id: SymbolId) => SHUNT_RANK[id] != null;
 
-// The order the instruments hang down the secondary column: the test block
-// first — everything reaches the relay through it — then the current
-// instruments, the relays, the voltage instruments, and the alarm window on
-// the end of the relay.
+// The order the instruments hang down the secondary column, by the owner's
+// rule: the test block first — everything reaches the relay through it — and
+// the relay; then the measuring chain, one line from the CT on through each
+// device into the next: the auxiliary CT (its sample to the LCS) or, where
+// there is none, the transducer (its sample to the LCS or PDCS), the
+// multimeter and the other meters, the ampere selector, and the ammeter — the
+// dead end of the chain. The voltage instruments hang on the VT, never on
+// the CT: the voltage selector, then the voltmeter. Control devices last.
 const INSTRUMENT_RANK: Partial<Record<SymbolId, number>> = {
   'test-block': 0,
-  ammeter: 1, 'ampere-selector': 2, multimeter: 3, 'watt-meter': 4, 'var-meter': 5,
-  'power-factor-meter': 6, 'kwh-meter': 7, 'kvarh-meter': 8, transducer: 9,
-  'protection-relay': 11, 'earth-fault-relay': 12,
-  voltmeter: 13, 'voltage-selector': 14, 'frequency-meter': 15, 'hour-meter': 16,
-  'alarm-annunciator': 17, lamp: 18, ptc: 19, lcs: 20,
+  'protection-relay': 1, 'earth-fault-relay': 2,
+  transducer: 4, multimeter: 5, 'watt-meter': 6, 'var-meter': 7,
+  'power-factor-meter': 8, 'kwh-meter': 9, 'kvarh-meter': 10,
+  'ampere-selector': 11, ammeter: 12,
+  'frequency-meter': 13, 'voltage-selector': 14, voltmeter: 15,
+  'hour-meter': 16, 'alarm-annunciator': 17, lamp: 18, ptc: 19, lcs: 20,
 };
 const isInstrument = (id: SymbolId) => INSTRUMENT_RANK[id] != null;
+
+/** An auxiliary (interposing) CT: on the CT's measuring chain, not the line. */
+const AUX_CT = /aux(?:iliary)?\.?[\s-]*(?:current[\s-]*)?(?:transformer|c\.?\s?t\b)|interposing|کمکی/i;
+const itemText = (i: ChainItem) =>
+  [i.label, i.tag, i.slot, i.code, i.simTable, ...(i.accessories ?? [])].join(' ');
+const isAuxCt = (i: ChainItem) => i.id === 'current-transformer' && AUX_CT.test(itemText(i));
+/** Where an instrument hangs on the secondary side. */
+const rankOf = (i: ChainItem) => (isAuxCt(i) ? 3 : INSTRUMENT_RANK[i.id] ?? 99);
+/** The voltage side: fed from the VT, never from the CT. */
+const ON_VT: SymbolId[] = ['voltmeter', 'voltage-selector', 'frequency-meter'];
+/** Control devices: not on a transformer at all. */
+const CONTROL_IDS: SymbolId[] = ['hour-meter', 'alarm-annunciator', 'lamp', 'ptc', 'lcs'];
+/**
+ * A VT filed where a CT is expected reads as one by its ratio — "400/1.73 /
+ * 110/1.73 V" — and is drawn as the VT it is: beside the line, never on the
+ * CT's line.
+ */
+const LOOKS_VT = /\d\s*\/\s*(?:√\s*3|1\.73)|\/\s*\d+(?:\.\d+)?\s*V\b|\b(?:VT|PT)\b|voltage.?transformer|potential.?transformer/i;
+const asVt = (i: ChainItem): ChainItem =>
+  (i.id === 'current-transformer' && !i.chosen && !isAuxCt(i) && LOOKS_VT.test(itemText(i))
+    ? { ...i, id: 'voltage-transformer' } : i);
+/** Where an instrument's own sample goes when its window says nothing. */
+const defaultSend = (i: ChainItem): string =>
+  (isAuxCt(i) ? 'TO LCS' : i.id === 'transducer' ? 'TO LCS / PDCS' : '');
+/** The source index a VT beside the line is given among the series indices. */
+const SHUNT_SRC = 1000;
 
 /** How many cores a transformer has: `300/5A x3`, `3 core`, `3C`. */
 export function coreCount(item: ChainItem): number {
@@ -976,14 +1014,15 @@ interface Branch {
   alsoFed: (number | null)[];
 }
 
-function splitBranch(chain: ChainItem[]): Branch {
+function splitBranch(chain_: ChainItem[]): Branch {
+  const chain = chain_.map(asVt);
   // The power path, in the order a cell is drawn rather than the order the
   // template filed its slots.
   // A part's window can say on the line or beside it; unanswered, its kind
   // decides, as it always did.
-  const instrumentHere = (i: ChainItem) => i.placement !== 'series' && isInstrument(i.id);
-  const shuntHere = (i: ChainItem) =>
-    (i.placement === 'parallel' ? !isInstrument(i.id) : i.placement === 'series' ? false : isShunt(i.id));
+  const instrumentHere = (i: ChainItem) => (i.placement !== 'series' && isInstrument(i.id)) || isAuxCt(i);
+  const shuntHere = (i: ChainItem) => i.id === 'voltage-transformer'
+    || (i.placement === 'parallel' ? !isInstrument(i.id) : i.placement === 'series' ? false : isShunt(i.id));
   const series = chain.filter(i => !instrumentHere(i) && !shuntHere(i))
     .map((item, index) => ({ item, index }))
     .sort((a, b) => powerRank(a.item.id) - powerRank(b.item.id) || a.index - b.index)
@@ -1000,12 +1039,13 @@ function splitBranch(chain: ChainItem[]): Branch {
   });
 
   const instruments = chain.filter(instrumentHere)
-    .sort((a, b) => (INSTRUMENT_RANK[a.id] ?? 99) - (INSTRUMENT_RANK[b.id] ?? 99));
+    .sort((a, b) => rankOf(a) - rankOf(b));
 
   const at = (id: SymbolId) => series.findIndex(s => s.id === id);
   const ct = at('current-transformer');
   const cbct = at('core-balance-ct');
-  const vt = at('voltage-transformer');
+  const vtShunt = shunts.findIndex(s => s.id === 'voltage-transformer');
+  const vt = vtShunt >= 0 ? SHUNT_SRC + vtShunt : -1;
   const any = [ct, cbct, vt].find(n => n >= 0) ?? -1;
   const xd = instruments.findIndex(i => i.id === 'test-block');
 
@@ -1013,7 +1053,9 @@ function splitBranch(chain: ChainItem[]): Branch {
     let source: number;
     // With a test block on the feeder everything reaches the relay through it,
     // so the whole column hangs on the one connection out of the CT.
-    if (xd >= 0) source = ct >= 0 ? ct : (cbct >= 0 ? cbct : vt);
+    if (ON_VT.includes(item.id) && vt >= 0) source = vt;
+    else if (CONTROL_IDS.includes(item.id)) return null;
+    else if (xd >= 0) source = ct >= 0 ? ct : (cbct >= 0 ? cbct : vt);
     else if (item.id === 'earth-fault-relay') source = cbct >= 0 ? cbct : ct;
     else if (item.id === 'voltmeter' || item.id === 'voltage-selector' || item.id === 'frequency-meter')
       source = vt >= 0 ? vt : ct;
@@ -1088,12 +1130,13 @@ function layoutBranch(branch: Branch, top: number): BranchLayout {
     placeShunts(index);
   });
   const seriesBottom = y;
+  const srcY = (s: number) => (s >= SHUNT_SRC ? shuntYs[s - SHUNT_SRC] : ys[s]);
 
   // One group per feeding device, in the order those devices sit on the line;
   // control wiring (nothing feeds it) comes last.
   const order: (number | null)[] = [];
   branch.fedBy.forEach(source => { if (!order.includes(source)) order.push(source); });
-  order.sort((a, b) => (a == null ? 1e6 : ys[a]) - (b == null ? 1e6 : ys[b]));
+  order.sort((a, b) => (a == null ? 1e6 : srcY(a)) - (b == null ? 1e6 : srcY(b)));
 
   const groups: InstrumentGroup[] = [];
   let cursor = top;
@@ -1101,12 +1144,14 @@ function layoutBranch(branch: Branch, top: number): BranchLayout {
     const items = branch.instruments
       .map((_, k) => k).filter(k => branch.fedBy[k] === source);
     if (items.length === 0) continue;
-    const start = Math.max(cursor, source == null ? top : ys[source]);
+    const start = Math.max(cursor, source == null ? top : srcY(source));
     const at: number[] = [];
     let y0 = start;
     for (const k of items) { at.push(y0); y0 += instrStep(branch.instruments[k]); }
     groups.push({ source, items, ys: at });
-    cursor = y0;
+    // A gap before the next group: the chain above ends at its last device
+    // (the ammeter), and the next is fed on its own lane, not joined to it.
+    cursor = y0 + 14;
   }
 
   return {
@@ -1126,7 +1171,12 @@ const INSTR_DX = 120;
 const INSTR_ROOM = 140;
 /** How far down the column an instrument takes: its cell, or its label. */
 const instrStep = (item: ChainItem) =>
-  Math.max(CELL, 17 + (labelLineCount(item, LV_WRAP) - 1) * TEXT.tag * 1.15 + 8);
+  Math.max(CELL, 17 + (labelLineCount(item, LV_WRAP) - 1) * TEXT.tag * 1.15 + 8)
+  + (sendsTo(item) ? 14 : 0);
+/** Where an instrument sends its sample: its window's own words, else the
+ *  office's rule for an auxiliary CT or a transducer. */
+const sendsTo = (item: ChainItem): string =>
+  (isAuxCt(item) || item.id === 'transducer' ? signalList(item)[0]?.text || defaultSend(item) : '');
 
 /**
  * While an MV cell is drawn, every connecting line is recorded rather than
@@ -1328,11 +1378,12 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
   const ix = x + INSTR_DX;
   const sx = x - SHUNT_DX;
   const { ys, seriesBottom, shuntYs, groups } = layoutBranch(branch, top);
+  const srcY = (s: number) => (s >= SHUNT_SRC ? shuntYs[s - SHUNT_SRC] : ys[s]);
 
   // A device whose connection leaves at the middle of its cell has its own
   // text written above it, so the connection never runs through the text.
   const feeds = new Set<number>();
-  for (const g of groups) if (g.source != null) feeds.add(g.source);
+  for (const g of groups) if (g.source != null && g.source < SHUNT_SRC) feeds.add(g.source);
   branch.alsoFed.forEach(s => { if (s != null) feeds.add(s); });
   // With no transformer on the line, control wiring leaves from the first
   // device, so that one's text moves up too.
@@ -1389,13 +1440,22 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
 
   // The instruments beside the line, group by group: the transformer's
   // connection out to the column, and the instruments strung on it.
-  for (const group of groups) {
+  groups.forEach((group, gi) => {
     const first = group.ys[0];
     const ty = group.source == null
       ? (controlFrom == null ? first + CELL / 2 : ys[controlFrom] + CELL / 2)
-      : ys[group.source] + CELL / 2;
+      : srcY(group.source) + CELL / 2;
 
-    out.push(secondary(x, ty, ix, group.source == null ? null : branch.series[group.source]));
+    // The VT stands beside the line on the left: its secondary comes out of
+    // it and across to the column.
+    const fromVt = group.source != null && group.source >= SHUNT_SRC;
+    // A group that hangs lower in the column than the one above it — the VT's
+    // voltmeters under the CT's chain — comes down its own lane beside the
+    // column, never down the CT chain's line through its meters.
+    const lane = gi > 0 && first > ty + 1 ? ix - 20 - (gi - 1) * 6 : ix;
+    out.push(fromVt
+      ? secondary(sx + symbolRight(dk(branch.shunts[group.source! - SHUNT_SRC])) - 6, ty, lane, branch.shunts[group.source! - SHUNT_SRC])
+      : secondary(x, ty, lane, group.source == null ? null : branch.series[group.source]));
     // From the transformer's line to each instrument's own connection point,
     // and on from one instrument's 2 to the next one's 1 — never a line run
     // down the column through the symbols. A symbol drawn with its points on
@@ -1405,7 +1465,7 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
       if (Math.abs(a.y - b.y) >= 0.5) out.push(line(a.x, a.y, a.x, b.y));
       if (Math.abs(a.x - b.x) >= 0.5) out.push(line(a.x, b.y, b.x, b.y));
     };
-    let from: Pt = { x: ix, y: ty };
+    let from: Pt = { x: lane, y: ty };
     group.items.forEach((k, n) => {
       const id = dk(branch.instruments[k]);
       const p1 = pinOf(id, ix, group.ys[n], '1');
@@ -1419,6 +1479,16 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
       const item = branch.instruments[k];
       out.push(drawDevice(item, ix, group.ys[n]));
       out.push(deviceText(item, ix + Math.max(34, labelOffset(item)), group.ys[n] + 17, 14));
+      // Its sample out to the LCS / PDCS: a dashed line under its text, with
+      // the arrow and where it goes.
+      const send = sendsTo(item);
+      if (send) {
+        const sy = group.ys[n] + instrStep(item) - 8;
+        const sx0 = ix + Math.min(symbolRight(dk(item)), 10);
+        out.push(line(sx0, group.ys[n] + symbolHeight(dk(item)), sx0, sy, 1, '4 3'));
+        out.push(line(sx0, sy, sx0 + 40, sy, 1, '4 3'), arrowRight(sx0 + 46, sy));
+        out.push(`<text x="${sx0 + 50}" y="${sy + 3}" font-size="7.5" fill="#111">${esc(send.toUpperCase())}</text>`);
+      }
 
       // The second transformer feeding this instrument — the core-balance CT
       // into the test block — comes in on its own elbow beside the column, so
@@ -1434,7 +1504,7 @@ function drawBranch(branch: Branch, x: number, top: number): { svg: string; bott
         out.push(`<circle cx="${ix}" cy="${my}" r="2.4" fill="#111"/>`);
       }
     });
-  }
+  });
 
   return { svg: out.join('\n'), bottom: seriesBottom };
 }
@@ -1868,6 +1938,7 @@ function drawMvCellLines(
    *  every signal line (serial link, status, interlock) is run down to. */
   floorAt?: number,
 ): { svg: string; bottom: number; reachBottom: number; left: number; right: number } {
+  chain = chain.map(asVt);
   const answers = withPartAnswers(opts.answers ?? {}, chain);
   const mech = opts.mechanical ?? {};
   const kind = cellKind(opts.cellType, opts.sub);
@@ -1934,6 +2005,9 @@ function drawMvCellLines(
   if (orphanMagnet) magnet = undefined;
   take(i => i.id === 'key-interlock');   // drawn as the key on the key line
 
+  // The auxiliary CTs stand on the CT's measuring chain, not on the line.
+  const auxCts: ChainItem[] = [];
+  for (let a = take(isAuxCt); a; a = take(isAuxCt)) auxCts.push(a);
   const ct = take(i => i.id === 'current-transformer');
   const ptTruck = opts.family === 'SIMOPRIME' && answers.ptTruck === true;
   // The VT: tapped off the line beside the cell — on a socket when the
@@ -2202,8 +2276,10 @@ function drawMvCellLines(
         vy += CELL;
       }
       out.push(drawDevice(st.item, sx, vy));
-      out.push(simLabel(st.item, sx + 30, vy + 16, 'start', MV_LABEL.size, MV_LABEL.wrap));
-      reach(sx - 12, vy + CELL);
+      // On its left: its secondary leaves on the right, out to the voltmeters.
+      const vlx = sx - symbolLeft(dk(st.item)) - 6;
+      out.push(simLabel(st.item, vlx, vy + 16, 'end', MV_LABEL.size, MV_LABEL.wrap));
+      reach(vlx - labelWidth(st.item, MV_LABEL.size, MV_LABEL.wrap), vy + CELL);
     }
   }
 
@@ -2306,8 +2382,12 @@ function drawMvCellLines(
     ?? relays.find(r => r.relayRole !== 'auxiliary');
   const auxRelays = relays.filter(r => r !== relay);
   const testBlock = instruments.find(i => i.id === 'test-block');
-  const meters = instruments.filter(i => METER_IDS.includes(i.id));
-  const volts = instruments.filter(i => VOLTAGE_IDS.includes(i.id));
+  // The measuring chain in the owner's order: auxiliary CT or transducer,
+  // the meters, the ampere selector, and the ammeter at the end.
+  const meters = [...auxCts, ...instruments.filter(i => METER_IDS.includes(i.id))]
+    .map((item, k) => ({ item, k })).sort((a, b) => rankOf(a.item) - rankOf(b.item) || a.k - b.k).map(e => e.item);
+  const volts = instruments.filter(i => VOLTAGE_IDS.includes(i.id))
+    .map((item, k) => ({ item, k })).sort((a, b) => rankOf(a.item) - rankOf(b.item) || a.k - b.k).map(e => e.item);
   const others = instruments.filter(i =>
     !relays.includes(i) && i !== testBlock && !meters.includes(i) && !volts.includes(i));
   const ix = x + MV_CELL.instrDx;
@@ -2326,7 +2406,11 @@ function drawMvCellLines(
 
   /** A column of instruments hanging on one line at `ix`, from `y0`. */
   /** A device's serial link and status signals, as its window gives them. */
-  const signalsOf = (item: ChainItem) => signalList(item);
+  const signalsOf = (item: ChainItem) => {
+    const own = signalList(item);
+    const send = own.length ? '' : defaultSend(item);
+    return send ? [{ text: send, up: false }] : own;
+  };
   /**
    * The relay's and the meters' signals, collected and laid out together
    * once everything on the secondary side is drawn: each one leaves its
@@ -3037,6 +3121,27 @@ function drawSheet(o: {
     ...mvAll.map(c => branchDx + c.size.right + 24),
   );
 
+  const roleOf = (l: DeviceTableRow): 'incoming' | 'coupling' | 'riser' | 'outgoing' => {
+    const t = `${l.wiringType ?? ''} ${l.description ?? ''} ${l.templateName ?? ''} ${l.tag ?? ''} ${l.feederNo ?? ''}`;
+    if (/riser/i.test(t)) return 'riser';
+    if (/coupl|bus.?sec|\btie\b|\bB\.?T\b|sectionali/i.test(t)) return 'coupling';
+    if (/incom|\bmain\b|supply|source|\bINC\b/i.test(t)) return 'incoming';
+    return 'outgoing';
+  };
+  // An incomer and a coupling carry more than a feeder — the CT and its
+  // auxiliary CT, the meters, the VT and its voltmeter, the relay — so their
+  // columns are wider than a feeder's, by the owner's rule.
+  const WIDE_ROLE = 1.45;
+  const colW = (i: number) => {
+    const r = o.lines[i] ? roleOf(o.lines[i]) : 'outgoing';
+    return r === 'incoming' || r === 'coupling' ? Math.round(colWidth * WIDE_ROLE) : colWidth;
+  };
+  const colLefts: number[] = [];
+  {
+    let acc = 0;
+    o.lines.forEach((_, i) => { colLefts.push(acc); acc += colW(i); });
+    colLefts.push(acc);
+  }
   const supplyWidth = o.supply ? colWidth : 90;
   const bodyLeft = margin + supplyWidth;
   const supplyX = margin + branchDx;
@@ -3064,7 +3169,8 @@ function drawSheet(o: {
   const tableHeight = TABLE_ROWS.length * cardRowHeight;
   // The sheet is exactly as wide as the feeders on it: busbar and the block
   // underneath both end at the last column, never in mid-air.
-  const contentRight = bodyLeft + Math.max(1, o.lines.length) * colWidth;
+  const colLeft = (i: number) => bodyLeft + (colLefts[i] ?? i * colWidth);
+  const contentRight = o.lines.length ? colLeft(o.lines.length) : bodyLeft + colWidth;
   const width = contentRight + margin;
   const height = tableTop + tableHeight + 40;
 
@@ -3108,13 +3214,6 @@ function drawSheet(o: {
   // coupling is paired with the riser beside it on the sheet.
   // What each cell is on the board: the incomer fed from below, a coupling
   // and its riser joined underneath across the split busbar, or a feeder.
-  const roleOf = (l: DeviceTableRow): 'incoming' | 'coupling' | 'riser' | 'outgoing' => {
-    const t = `${l.wiringType ?? ''} ${l.description ?? ''} ${l.templateName ?? ''} ${l.tag ?? ''} ${l.feederNo ?? ''}`;
-    if (/riser/i.test(t)) return 'riser';
-    if (/coupl|bus.?sec|\btie\b|\bB\.?T\b|sectionali/i.test(t)) return 'coupling';
-    if (/incom|\bmain\b|supply|source|\bINC\b/i.test(t)) return 'incoming';
-    return 'outgoing';
-  };
   const ends: (MvEnd | 'incoming')[] = o.lines.map((l, i) => {
     const role = roleOf(l);
     if (isMv) {
@@ -3132,7 +3231,7 @@ function drawSheet(o: {
   });
   // The coupling splits the bar: the section it hangs from ends at its tap,
   // the next one starts at the riser's — nothing of either runs past them.
-  const tapX = (i: number) => bodyLeft + i * colWidth + branchDx;
+  const tapX = (i: number) => colLeft(i) + branchDx;
   const breaks: { end: number; start: number; label: string }[] = [];
   ends.forEach((end, i) => {
     const j = pairOf.get(i);
@@ -3147,7 +3246,7 @@ function drawSheet(o: {
   });
   // A coupling with no riser cell beside it rises at the right edge of its
   // own column to the next section.
-  const ownRiser = (i: number) => bodyLeft + (i + 1) * colWidth - 14;
+  const ownRiser = (i: number) => colLeft(i) + colW(i) - 14;
   ends.forEach((end, i) => {
     if (end !== 'coupling' || pairOf.has(i)) return;
     const next = o.lines[i + 1];
@@ -3194,7 +3293,7 @@ function drawSheet(o: {
       parts.push(`<line x1="${x}" y1="${from}" x2="${x}" y2="${barY}" stroke="#111" stroke-width="1.3"/>`);
       const j = pairOf.get(i);
       if (end === 'coupling') {
-        const rx = j != null ? bodyLeft + j * colWidth + branchDx : ownRiser(i);
+        const rx = j != null ? tapX(j) : ownRiser(i);
         parts.push(`<line x1="${x}" y1="${barY}" x2="${rx}" y2="${barY}" stroke="#111" stroke-width="2.2"/>`);
         if (j == null) {
           // Its own riser, up to the next section of the busbar.
@@ -3221,7 +3320,7 @@ function drawSheet(o: {
 
   // ── Outgoing feeders ──────────────────────────────────────────────────
   o.lines.forEach((line_, i) => {
-    const x = bodyLeft + i * colWidth + branchDx;
+    const x = tapX(i);
     const offBus = isMv && mvOffBus(mvCells[i].opts);
     if (!offBus) {
       out.push(`<line x1="${x}" y1="${busY}" x2="${x}" y2="${chainTop}" stroke="#111" stroke-width="1.3"/>`);
@@ -3263,18 +3362,18 @@ function drawSheet(o: {
 
   // ── The block under the drawing ───────────────────────────────────────
   out.push(`<rect x="${margin}" y="${tableTop}" width="${contentRight - margin}" height="${tableHeight}" fill="none" stroke="#111" stroke-width="1"/>`);
-  const tableChars = Math.max(8, Math.floor((colWidth - 12) / (9 * 0.52)));
+  const tableChars = (i: number) => Math.max(8, Math.floor((colW(i) - 12) / (9 * 0.52)));
   TABLE_ROWS.forEach((row, r) => {
     const ry = tableTop + r * cardRowHeight;
     if (r > 0) out.push(`<line x1="${margin}" y1="${ry}" x2="${contentRight}" y2="${ry}" stroke="#c9ced6" stroke-width="0.7"/>`);
     out.push(`<text x="${margin + 6}" y="${ry + 11}" font-size="9" font-weight="600" fill="#111">${esc(row.label)} :</text>`);
     o.lines.forEach((line_, i) => {
-      const cx = bodyLeft + i * colWidth + colWidth / 2;
+      const cx = colLeft(i) + colW(i) / 2;
       const value = row.value(line_);
       // Cut to the column it is written in. Thirty characters was right for a
       // 200-unit column and would run into its neighbours in a narrower one.
       out.push(`<text x="${cx}" y="${ry + 11}" font-size="9" text-anchor="middle" fill="#111">` +
-        `<title>${esc(value)}</title>${esc(clip(value, tableChars))}</text>`);
+        `<title>${esc(value)}</title>${esc(clip(value, tableChars(i)))}</text>`);
     });
   });
   // The column rules: the label column ends where the first feeder column
@@ -3282,7 +3381,7 @@ function drawSheet(o: {
   out.push(`<line x1="${bodyLeft}" y1="${tableTop}" x2="${bodyLeft}" y2="${tableTop + tableHeight}" stroke="#111" stroke-width="1"/>`);
   o.lines.forEach((_, i) => {
     if (i === 0) return;
-    const cx = bodyLeft + i * colWidth;
+    const cx = colLeft(i);
     out.push(`<line x1="${cx}" y1="${tableTop}" x2="${cx}" y2="${tableTop + tableHeight}" stroke="#c9ced6" stroke-width="0.7"/>`);
   });
 
