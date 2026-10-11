@@ -246,23 +246,6 @@ const EplanDraftTable: React.FC<{ records: EplanData[]; title: string }> = ({ re
   );
 };
 
-
-// Drawings already made for these revision names, kept on the techserver
-// under \\techserver\OE12065\Simorgh\SLD and \OLD: Create Project hands
-// them over — PDF and packed project — instead of drawing again.
-const READY_REVISIONS = new Set(['test-ai-52', 'test-ai-53', 'test-ai-54', 'test-ai-55']);
-const READY_DRAWINGS: Record<'sld' | 'old', EplanProject> = {
-  sld: { type: 'sld', displayName: 'Singleline Project', oenum: 'OE12065', path: 'Simorgh/SLD/ASLD.elk', fileName: 'ASLD', packed: true },
-  old: { type: 'old', displayName: 'Outline Project', oenum: 'OE12065', path: 'Simorgh/OLD/AOLD.elk', fileName: 'AOLD', packed: true },
-};
-function readyDrawings(revName: string, generation: string | null): EplanProject[] | null {
-  if (!READY_REVISIONS.has(revName.trim().toLowerCase())) return null;
-  if (generation === 'sld') return [READY_DRAWINGS.sld];
-  if (generation === 'old') return [READY_DRAWINGS.old];
-  if (generation === 'sldold') return [READY_DRAWINGS.sld, READY_DRAWINGS.old];
-  return null;
-}
-
 export const SendToEplanTab: React.FC = () => {
   const {
     projectData, currentRevision, revisions, saveProject,
@@ -402,12 +385,6 @@ export const SendToEplanTab: React.FC = () => {
     setShowSlides(true);
     setResult(null);
     try {
-      const ready = readyDrawings(revName, generationType);
-      if (ready) {
-        await new Promise(r => setTimeout(r, 30000));
-        setResult({ ok: true, text: `${records.length} record(s) sent — the project is ready.`, projects: ready });
-        return;
-      }
       // EPLAN draws the project as it is kept here, in Mongo — never a fresh
       // read of TPMS. Whatever has been typed is saved first, the project is
       // read back from Mongo, the records are built from that copy and
@@ -938,17 +915,15 @@ export const SendToEplanTab: React.FC = () => {
                             </a>
                             <a href={eplanApi.downloadUrl(project, 'zip')}
                               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-100">
-                              <DownloadIcon className="w-3.5 h-3.5" /> Project ({project.packed ? '.rar' : '.zip'})
+                              <DownloadIcon className="w-3.5 h-3.5" /> Project (.zip)
                             </a>
                           </span>
                         </div>
                       ))}
                     </div>
-                    {!result.projects.every(p => p.packed) && (
-                      <p className="text-[11px] text-slate-400 mt-2">
-                        The archive is the .elk and its .edb folder, zipped on the way through — it can take a while.
-                      </p>
-                    )}
+                    <p className="text-[11px] text-slate-400 mt-2">
+                      The archive is the .elk and its .edb folder, zipped on the way through — it can take a while.
+                    </p>
                   </div>
                 )}
 
