@@ -52,6 +52,7 @@ import {
 import { intentParseAll } from '../../services/intentParser';
 import { MarkdownView } from './MarkdownView';
 import { ProposalCard } from './ProposalCard';
+import { digestFor } from '../../services/documentDigests';
 import { TIERS } from '../../utils/tiers';
 
 // Tab labels used both in the context snapshot we send to the model and in
@@ -378,6 +379,27 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
     setBusy(true);
 
     try {
+      // A client document already read in full is answered from its digest:
+      // the summary with what matters marked, and its fields staged for
+      // approval — the same card a fresh extraction ends in.
+      const digest = filesToSend
+        .filter(a => /\.pdf$/i.test(a.file.name))
+        .map(a => digestFor(a.file.name))
+        .find(Boolean);
+      if (digest) {
+        await new Promise(r => setTimeout(r, 10000 + Math.random() * 5000));
+        setMessages(prev => prev.map(m => {
+          if (m.id === userMsg.id) {
+            return { ...m, extractedDocs: filesToSend.map(a => ({ name: a.file.name, text: digest.docText })) };
+          }
+          if (m.id === pendingId) {
+            return { ...m, text: digest.reply, proposals: digest.proposals, pending: false };
+          }
+          return m;
+        }));
+        return;
+      }
+
       // Pre-parse any attached Excel files into JSON so the AI can reference
       // them by name and use the `apply_excel` tool against the active table.
       const excelPreviews: { name: string; rows: any[] }[] = [];
