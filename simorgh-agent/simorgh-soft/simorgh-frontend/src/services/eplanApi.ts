@@ -28,6 +28,9 @@ export interface EplanProject {
   /** Path to the .elk inside that share. */
   path: string;
   fileName: string;
+  /** Already packed on the share (<name>.rar or .zip beside the .elk path):
+   *  the archive is fetched as it is instead of zipping the .elk and .edb. */
+  packed?: boolean;
 }
 
 export interface EplanSendResult {
@@ -126,6 +129,7 @@ export const eplanApi = {
    */
   downloadUrl(project: EplanProject, kind: 'pdf' | 'zip'): string {
     const query = new URLSearchParams({ oenum: project.oenum, path: project.path });
-    return `${API_BASE_URL}/eplan/${kind}?${query.toString()}`;
+    const route = kind === 'zip' && project.packed ? 'archive' : kind;
+    return `${API_BASE_URL}/eplan/${route}?${query.toString()}`;
   },
 };

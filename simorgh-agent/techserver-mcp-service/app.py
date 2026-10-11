@@ -784,6 +784,39 @@ async def eplan_zip(oenum: str = Query(...), path: str = Query(...),
     )
 
 
+@app.get("/eplan/archive")
+async def eplan_archive(oenum: str = Query(...), path: str = Query(...),
+                        x_api_key: Optional[str] = Header(default=None)):
+    """A project already packed beside its .elk — <name>.rar or <name>.zip —
+    handed over as it is, without the .elk itself having to be there."""
+    _require_eplan_key(x_api_key)
+    rel = _eplan_rel(path)
+    share = await _resolve_share(oenum)
+    stem = rel[: -len(".elk")]
+
+    tmpdir = tempfile.mkdtemp(prefix="eplanarc_")
+    try:
+        for ext, media in ((".rar", "application/vnd.rar"), (".zip", "application/zip")):
+            local = os.path.join(tmpdir, os.path.basename(stem) + ext)
+            try:
+                await _get_one(share, stem + ext, local)
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    continue
+                raise
+            return FileResponse(
+                local,
+                media_type=media,
+                filename=os.path.basename(local),
+                background=BackgroundTask(shutil.rmtree, tmpdir, ignore_errors=True),
+            )
+    except Exception:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    raise HTTPException(status_code=404, detail=f"no .rar or .zip beside {rel}")
+
+
 # ---------------------------------------------------------------------------
 # MCP surface
 # ---------------------------------------------------------------------------

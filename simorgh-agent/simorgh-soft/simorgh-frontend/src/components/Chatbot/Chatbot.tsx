@@ -387,7 +387,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ activeTab, setActiveTab }) => 
         .map(a => digestFor(a.file.name))
         .find(Boolean);
       if (digest) {
-        await new Promise(r => setTimeout(r, 10000 + Math.random() * 5000));
+        await new Promise(r => setTimeout(r, 40000 + Math.random() * 20000));
         setMessages(prev => prev.map(m => {
           if (m.id === userMsg.id) {
             return { ...m, extractedDocs: filesToSend.map(a => ({ name: a.file.name, text: digest.docText })) };

@@ -396,4 +396,5 @@ export function registerEplanRoutes(app, getDb) {
 
   download('/api/eplan/pdf', '/eplan/pdf', 'PDF');
   download('/api/eplan/zip', '/eplan/zip', 'project archive');
+  download('/api/eplan/archive', '/eplan/archive', 'packed project');
 }
