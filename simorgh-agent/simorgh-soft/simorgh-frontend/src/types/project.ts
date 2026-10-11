@@ -132,6 +132,23 @@ export interface TechSettings {
 // Core Project Data
 // ==============================
 
+/** A protection relay's order code kept with the project (Relay Code tab). */
+export interface RelayCodeRecord {
+  id: string;
+  /** Where it goes — a feeder, a panel, "Incomer 1". */
+  tag: string;
+  /** 7SX800, 7SJ85 … */
+  device: string;
+  code: string;
+  /** Built here from the catalogue table, or copied from Siemens' online
+   *  configurator. */
+  source: 'catalogue' | 'configurator';
+  /** The catalogue builder's choices, to open it again as it was. */
+  choices?: Record<string, string>;
+  note?: string;
+  savedAt: string;
+}
+
 export interface ProjectData {
   _id?: string;
   projectName: string;
@@ -177,6 +194,8 @@ export interface ProjectData {
   };
   // New technical settings structure
   techSettings?: TechSettings;
+  /** Protection relays' order codes (Project Definition → Relay Code). */
+  relayCodes?: RelayCodeRecord[];
   // One list per tier — see utils/tiers.ts. A project saved before GIS and
   // OTHER existed has no list for them; ProjectContext fills them in on load
   // (withAllTiers), and anything reading a snapshot directly reads `?? []`.

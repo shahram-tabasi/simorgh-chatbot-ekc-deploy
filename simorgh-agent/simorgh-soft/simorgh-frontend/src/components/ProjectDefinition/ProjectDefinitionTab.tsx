@@ -18,6 +18,7 @@ import { readSpecUpdateFromTpms, TpmsSpecUpdate } from '../../services/tpmsSync'
 import { type Tier, TIERS, TIER_LABEL, TIER_BADGE, TIER_PILL, emptyTiers } from '../../utils/tiers';
 import { TEMPLATE_FAMILIES } from '../../utils/templateFamilies';
 import { BreakerCodeTab } from './BreakerCodeTab';
+import { RelayCodeTab } from './RelayCodeTab';
 import { StockCompareTab } from './StockCompareTab';
 import {
   OFFICE_CHOICES, OFFICE_ALIASES, type FieldRule, type WorldSiteInfo,
@@ -118,7 +119,7 @@ const PropCheckbox: React.FC<PropCheckboxProps> = ({ propKey, label, checked, is
 // ──────────────────────────────────────────────────────────────
 // Constants
 // ──────────────────────────────────────────────────────────────
-type SubTab = 'project-data' | 'device-library' | 'breaker-code' | 'stock-compare';
+type SubTab = 'project-data' | 'device-library' | 'breaker-code' | 'relay-code' | 'stock-compare';
 
 const DEFAULT_TECH_SETTINGS: TechSettings = {
   general:          { altitudeAboveSeaLevel: '1000', designTemperature: '45' },
@@ -1403,6 +1404,7 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           { id: 'project-data'   as SubTab, label: '📋 Project Data' },
           { id: 'device-library' as SubTab, label: '📦 Scope Library' },
           { id: 'breaker-code'   as SubTab, label: '⚡ Breaker Code' },
+          { id: 'relay-code'     as SubTab, label: '🛡 Relay Code' },
           { id: 'stock-compare'  as SubTab, label: '🔁 Stock Compare' },
         ] as const).map(tab => (
           <button
@@ -1441,6 +1443,9 @@ export const ProjectDefinitionTab: React.FC<ProjectDefinitionTabProps> = ({
           })}
           onUpdate={updateLib}
         />
+      )}
+      {activeSubTab === 'relay-code' && (
+        <RelayCodeTab projectData={projectData} onChange={relayCodes => updateProjectData({ relayCodes })} />
       )}
       {activeSubTab === 'stock-compare' && <StockCompareTab projectData={projectData} />}
 

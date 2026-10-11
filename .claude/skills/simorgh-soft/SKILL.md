@@ -655,6 +655,13 @@ classes (`DeviceSelectionTab`, `SendToEplanTab` do this now).
 - *Breaker codes*: SION 3AE5 (`utils/sion3ae5/engine.ts`), 3AH3 (`ah3.ts`),
   SIMOPRIME World/A4/EK36 catalogues, stock conversion (`convert.ts`, tab
   "Stock Compare").
+- *Relay codes* (Project Definition → Relay Code, `RelayCodeTab.tsx`,
+  `ProjectData.relayCodes`): 7SX800 built from the SIPROTEC 5 Compact
+  catalogue Ed. 6 Table 5.1/1 (`utils/siprotec/sx800.ts`:
+  7SX8000-3[9][10]5[12]-1[14]A0). Modular SIPROTEC 5 product codes are made
+  only by Siemens' online configurator (server-side SAP knowledge base — the
+  rules never reach the browser); they are pasted in and kept, never
+  generated or scraped.
 
 **Open questions — ask before assuming otherwise.**
 - Confirmed by the owner: 1M = 50 mm (the catalogue's grid too), and the 2M
